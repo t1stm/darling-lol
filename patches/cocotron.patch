@@ -8185,7 +8185,7 @@ index 039d8c94..b518c961 100644
  #import <fontconfig/fontconfig.h>
  
 diff --git a/QuartzCore/CALayer.m b/QuartzCore/CALayer.m
-index 5dcac115..6dabf138 100644
+index 5dcac115..ea5d8421 100644
 --- a/QuartzCore/CALayer.m
 +++ b/QuartzCore/CALayer.m
 @@ -1,8 +1,243 @@
@@ -8554,7 +8554,7 @@ index 5dcac115..6dabf138 100644
      _transform = value;
  }
  
-@@ -236,6 +549,10 @@ NSString *const kCAContentsFormatGray8Uint = @"Gray8";
+@@ -236,6 +549,16 @@ NSString *const kCAContentsFormatGray8Uint = @"Gray8";
  }
  
  - (void) dealloc {
@@ -8562,10 +8562,16 @@ index 5dcac115..6dabf138 100644
 +        [child _setSuperLayer: nil];
 +        [child _setContext: nil];
 +    }
++    if (_backgroundColor) CGColorRelease(_backgroundColor);
++    if (_textureId && _context) [_context deleteTextureId: _textureId];
++    [_textureId release];
++    [_contents release];
++    [_contentsGravity release];
++    [_shadowPath release];
      [_sublayers release];
      [_animations release];
      [_minificationFilter release];
-@@ -258,6 +575,33 @@ NSString *const kCAContentsFormatGray8Uint = @"Gray8";
+@@ -258,6 +581,33 @@ NSString *const kCAContentsFormatGray8Uint = @"Gray8";
      [self setSublayers: [_sublayers arrayByAddingObject: layer]];
  }
  
@@ -8599,7 +8605,7 @@ index 5dcac115..6dabf138 100644
  - (void) replaceSublayer: (CALayer *) layer with: (CALayer *) other {
      NSMutableArray *layers = [_sublayers mutableCopy];
      NSUInteger index = [_sublayers indexOfObjectIdenticalTo: layer];
-@@ -298,9 +642,14 @@ NSString *const kCAContentsFormatGray8Uint = @"Gray8";
+@@ -298,9 +648,14 @@ NSString *const kCAContentsFormatGray8Uint = @"Gray8";
  }
  
  - (void) removeFromSuperlayer {
@@ -8615,7 +8621,7 @@ index 5dcac115..6dabf138 100644
  }
  
  - (void) setNeedsDisplay {
-@@ -319,6 +668,19 @@ NSString *const kCAContentsFormatGray8Uint = @"Gray8";
+@@ -319,6 +674,19 @@ NSString *const kCAContentsFormatGray8Uint = @"Gray8";
      [_context startTimerIfNeeded];
  }
  
@@ -8635,7 +8641,7 @@ index 5dcac115..6dabf138 100644
  - (CAAnimation *) animationForKey: (NSString *) key {
      return [_animations objectForKey: key];
  }
-@@ -364,4 +726,137 @@ NSString *const kCAContentsFormatGray8Uint = @"Gray8";
+@@ -364,4 +732,125 @@ NSString *const kCAContentsFormatGray8Uint = @"Gray8";
      _textureId = value;
  }
  
@@ -8657,18 +8663,6 @@ index 5dcac115..6dabf138 100644
 +        _backgroundColor = v ? CGColorRetain(v) : NULL;
 +        if (_context) [_context startTimerIfNeeded];
 +    }
-+}
-+
-+- (void) dealloc {
-+    if (_backgroundColor) CGColorRelease(_backgroundColor);
-+    if (_textureId && _context) [_context deleteTextureId: _textureId];
-+    [_textureId release];
-+    [_contents release];
-+    [_sublayers release];
-+    [_animations release];
-+    [_contentsGravity release];
-+    [_shadowPath release];
-+    [super dealloc];
 +}
 +
 +- (CGFloat) borderWidth { return _borderWidth; }
