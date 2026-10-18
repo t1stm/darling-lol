@@ -4561,7 +4561,7 @@ index bfe3839a..e8c8828f 100644
  - (void) frameChanged;
  - (void) setLastKnownCursorPosition: (CGPoint) point;
 diff --git a/AppKit/X11.backend/X11Window.m b/AppKit/X11.backend/X11Window.m
-index f4925b66..0296203b 100644
+index f4925b66..a6629130 100644
 --- a/AppKit/X11.backend/X11Window.m
 +++ b/AppKit/X11.backend/X11Window.m
 @@ -23,6 +23,7 @@
@@ -5390,7 +5390,22 @@ index f4925b66..0296203b 100644
      Atom wmState = XInternAtom(_display, "_NET_WM_STATE", FALSE);
      Atom hiddenState = XInternAtom(_display, "_NET_WM_STATE_HIDDEN", FALSE);
  
-@@ -615,6 +1213,12 @@ static NSData *makeWindowIcon() {
+@@ -595,12 +1193,9 @@ static NSData *makeWindowIcon() {
+ 
+         if ((error = CGLCreateContext(NULL, NULL, &_cglContext)) !=
+             kCGLNoError) {
+-            NSLog(@"CGLCreateContext failed at %s %d with error %d", __FILE__,
++            NSLog(@"CGLCreateContext failed at %s %d with error %d (non-fatal)", __FILE__,
+                   __LINE__, error);
+-
+-            [NSException raise: NSGenericException
+-                        format: @"Failed to create GL context, CGL error %d",
+-                                error];
++            return;
+         }
+         if ((error = CGLContextMakeCurrentAndAttachToWindow(
+                      _cglContext, _cglWindow)) != kCGLNoError)
+@@ -615,6 +1210,12 @@ static NSData *makeWindowIcon() {
  }
  
  - (void) openGLFlushBuffer {
@@ -5403,7 +5418,7 @@ index f4925b66..0296203b 100644
      CGLError error;
  
      CGLContextObj prevContext = CGLGetCurrentContext();
-@@ -652,7 +1256,7 @@ static NSData *makeWindowIcon() {
+@@ -652,7 +1253,7 @@ static NSData *makeWindowIcon() {
  }
  
  - (O2Rect) frame {
@@ -5412,7 +5427,7 @@ index f4925b66..0296203b 100644
  }
  
  static int ignoreBadWindow(Display *display, XErrorEvent *errorEvent) {
-@@ -666,6 +1270,7 @@ static int ignoreBadWindow(Display *display, XErrorEvent *errorEvent) {
+@@ -666,6 +1267,7 @@ static int ignoreBadWindow(Display *display, XErrorEvent *errorEvent) {
  }
  
  - (void) frameChanged {
@@ -5420,7 +5435,7 @@ index f4925b66..0296203b 100644
      XErrorHandler previousHandler = XSetErrorHandler(ignoreBadWindow);
      @try {
          Window root, parent;
-@@ -710,14 +1315,6 @@ static int ignoreBadWindow(Display *display, XErrorEvent *errorEvent) {
+@@ -710,14 +1312,6 @@ static int ignoreBadWindow(Display *display, XErrorEvent *errorEvent) {
      [_deviceDictionary addEntriesFromDictionary: entries];
  }
  
