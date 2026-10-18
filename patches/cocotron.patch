@@ -3128,7 +3128,7 @@ index 18189404..12cde429 100644
 +- (NSRect) frameForRootRect: (NSRect) rect;
  @end
 diff --git a/AppKit/X11.backend/X11Display.m b/AppKit/X11.backend/X11Display.m
-index 5ae29bf4..c0dda032 100644
+index 5ae29bf4..53fe86d2 100644
 --- a/AppKit/X11.backend/X11Display.m
 +++ b/AppKit/X11.backend/X11Display.m
 @@ -39,6 +39,7 @@
@@ -4174,8 +4174,8 @@ index 5ae29bf4..c0dda032 100644
 +                int clickX = ev->xbutton.x;
 +                int clickY = ev->xbutton.y;
 +                int winWidth = (int) winFrame.size.width;
-+                BOOL inDragZone = (clickY >= 0 && clickY < 48 && clickX >= 0 && clickX < (winWidth - 130));
-+                if ((inDragZone || [[window delegate] isMovableByWindowBackground]) &&
++                BOOL inDragZone = (clickY >= 0 && clickY < 32 && clickX >= 0 && clickX < (winWidth - 140));
++                if (inDragZone &&
 +                    [window beginWindowDragAtRootX: ev->xbutton.x_root rootY: ev->xbutton.y_root button: Button1]) {
 +                    break;
 +                }
