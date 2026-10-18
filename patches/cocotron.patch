@@ -5217,7 +5217,7 @@ index f4925b66..0296203b 100644
 +    static BOOL checkedShm;
 +    if (!checkedShm) {
 +        checkedShm = YES;
-+        const char *transportPath = getenv("RCLOL_XSHM_LIBRARY") ? getenv("RCLOL_XSHM_LIBRARY") : getenv("DARLING_XSHM_LIBRARY");
++        const char *transportPath = getenv("DARLING_XSHM_LIBRARY");
 +        const char *shmOption = getenv("RCLOL_XSHM");
 +        void *transport = (shmOption && shmOption[0] == '0') ? NULL :
 +            dlopen(transportPath ? transportPath : "/usr/lib/native/libDarlingXShm.dylib",
@@ -9051,7 +9051,7 @@ index 5dce8c56..ab9c757f 100644
  - (void) render {
 +    if (_cglWindow == NULL || _layer == nil)
 +        return;
-+    if((getenv("RCLOL_CA_SKIP_LOCAL_IOSURFACE_RENDER") || getenv("DARLING_CA_SKIP_LOCAL_IOSURFACE_RENDER")) &&
++    if(getenv("DARLING_CA_SKIP_LOCAL_IOSURFACE_RENDER") &&
 +       !hasMetalLayer(_layer) && !hasOtherVisibleContent(_layer) && hasFullWindowSurface(_layer,_frame.size))return;
      [self renderLayer: _layer];
  }
@@ -9110,7 +9110,7 @@ index 5dce8c56..ab9c757f 100644
  
  - (void) flush {
 -    CGLFlushDrawable(_glContext);
-+    if((getenv("RCLOL_CA_SKIP_LOCAL_IOSURFACE_RENDER") || getenv("DARLING_CA_SKIP_LOCAL_IOSURFACE_RENDER")) && _layer &&
++    if(getenv("DARLING_CA_SKIP_LOCAL_IOSURFACE_RENDER") && _layer &&
 +       !hasMetalLayer(_layer) && !hasOtherVisibleContent(_layer) && hasFullWindowSurface(_layer,_frame.size))return;
 +    if (_glContext != NULL && _cglWindow != NULL)
 +        CGLFlushDrawable(_glContext);
@@ -10287,7 +10287,7 @@ index 5f7998b9..b8968893 100644
 +    BOOL commitsImplicit = [stack count] == 1 && [stack lastObject] == implicitTransactionGroup;
 +    [self _commitImplicitTransaction];
 +    /* An implicit commit already publishes its completed frame. */
-+    if((!getenv("RCLOL_CA_PRESENT_AT_COMMIT") && !getenv("DARLING_CA_PRESENT_AT_COMMIT")) || !commitsImplicit)
++    if(!getenv("DARLING_CA_PRESENT_AT_COMMIT") || !commitsImplicit)
 +        DarlingCAPublishCommittedIOSurface();
  }
  

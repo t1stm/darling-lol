@@ -24,7 +24,7 @@ import json, os, sys
 record = {{"command": os.path.basename(sys.argv[0]), "args": sys.argv[1:]}}
 if record["command"] == "darling":
     record["flags"] = {{key: os.environ.get(key) for key in
-        ("RCLOL_APP_ARG3", "RCLOL_APP_ARG3_SLOT", "RCLOL_UX_ARG2", "RCLOL_UX_ARG2_SLOT", "RCLOL_UX_ARG1", "RCLOL_APP_ARGS", "RCLOL_APP_ARG2", "DYLD_INSERT_LIBRARIES", "DYLD_LIBRARY_PATH", "DYLD_FRAMEWORK_PATH", "DARLING_XSHM_LIBRARY", "RCLOL_XSHM_LIBRARY")}}
+        ("RCLOL_APP_ARG3", "RCLOL_APP_ARG3_SLOT", "RCLOL_UX_ARG2", "RCLOL_UX_ARG2_SLOT", "RCLOL_UX_ARG1", "RCLOL_APP_ARGS", "RCLOL_APP_ARG2", "DYLD_INSERT_LIBRARIES", "DYLD_LIBRARY_PATH", "DYLD_FRAMEWORK_PATH", "DARLING_XSHM_LIBRARY")}}
 with open({str(log)!r}, "a") as output:
     output.write(json.dumps(record) + "\\n")
 '''
@@ -76,9 +76,9 @@ with open({str(log)!r}, "a") as output:
         assert all(launch["flags"][key] is None for key in (
             "DYLD_INSERT_LIBRARIES", "RCLOL_APP_ARGS", "RCLOL_APP_ARG2", "RCLOL_UX_ARG1"
         )), "injection or former shim settings survived"
-        xshm_lib = launch["flags"].get("RCLOL_XSHM_LIBRARY") or launch["flags"].get("DARLING_XSHM_LIBRARY")
-        assert launch["flags"]["DYLD_LIBRARY_PATH"] and launch["flags"]["DYLD_FRAMEWORK_PATH"] and xshm_lib, "Runtime overrides lost"
-        assert launch["flags"].get("DARLING_XSHM_LIBRARY") is None, "DARLING_XSHM_LIBRARY leaked into environment"
+        assert all(launch["flags"][key] for key in (
+            "DYLD_LIBRARY_PATH", "DYLD_FRAMEWORK_PATH", "DARLING_XSHM_LIBRARY"
+        )), "Darling runtime overrides lost"
         assert "--launch-product=league_of_legends" in launch["args"], "product launch lost"
         assert "--app-root=/Applications/Riot Client.app" in launch["args"], "application root lost"
         assert "--log-dir=/Users/offline-check/Library/Logs/Riot Games/Riot Client" in launch["args"], "absolute log directory lost"
