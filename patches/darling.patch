@@ -3554,10 +3554,10 @@ index 299caa5b1..bdff6028c 100644
  
  __END_DECLS
 diff --git a/src/frameworks/CoreVideo/src/CVDisplayLink.mm b/src/frameworks/CoreVideo/src/CVDisplayLink.mm
-index 3e9cba226..99e0a5494 100644
+index 3e9cba226..73afbd5ae 100644
 --- a/src/frameworks/CoreVideo/src/CVDisplayLink.mm
 +++ b/src/frameworks/CoreVideo/src/CVDisplayLink.mm
-@@ -1,38 +1,887 @@
+@@ -1,38 +1,901 @@
  #include <CoreVideo/CVDisplayLink.h>
 +#include <stdint.h>
 +#include <string.h>
@@ -4049,6 +4049,16 @@ index 3e9cba226..99e0a5494 100644
 +	return result;
 +}
 +
++static uint32_t getTargetRefreshRate(void) {
++	static uint32_t sTargetRate = 0;
++	if (!sTargetRate) {
++		const char *hz = getenv("RCLOL_REFRESH_HZ");
++		int rate = hz ? atoi(hz) : 0;
++		sTargetRate = (rate > 0 && rate <= 1000) ? (uint32_t)rate : 60;
++	}
++	return sTargetRate;
++}
++
 +static void rendererBeginTimerF(CFRunLoopTimerRef timer, void *info) {
 +	(void)timer;
 +	(void)info;
@@ -4066,12 +4076,15 @@ index 3e9cba226..99e0a5494 100644
 +		denominator / 1000ULL;
 +	uint64_t sequence = ++state.sequence;
 +
++	uint32_t targetRate = getTargetRefreshRate();
++	uint64_t intervalUs = 1000000ULL / (uint64_t)targetRate;
++
 +	/* Chromium 108 release BeginFrameArgs: frame/deadline/interval,
 +	 * BeginFrameId, trace id, type and critical-path flag. */
 +	unsigned char args[128] = {};
 +	*(uint64_t *)(args + 0) = nowUs;
-+	*(uint64_t *)(args + 8) = nowUs + 16666ULL;
-+	*(uint64_t *)(args + 16) = 16666ULL;
++	*(uint64_t *)(args + 8) = nowUs + intervalUs;
++	*(uint64_t *)(args + 16) = intervalUs;
 +	*(uint64_t *)(args + 24) = 0xffffffffULL;
 +	*(uint64_t *)(args + 32) = sequence;
 +	*(int64_t *)(args + 40) = -1;
@@ -4093,8 +4106,9 @@ index 3e9cba226..99e0a5494 100644
 +}
 +
 +static void startRendererBeginTimer(void) {
++	uint32_t targetRate = getTargetRefreshRate();
 +	CFRunLoopTimerRef timer = CFRunLoopTimerCreate(NULL,
-+		CFAbsoluteTimeGetCurrent() + 2.0, 1.0 / 60.0, 0, 0,
++		CFAbsoluteTimeGetCurrent() + 2.0, 1.0 / (double)targetRate, 0, 0,
 +		rendererBeginTimerF, NULL);
 +	if (timer)
 +		CFRunLoopAddTimer(CFRunLoopGetMain(), timer, kCFRunLoopDefaultMode);
@@ -4316,15 +4330,16 @@ index 3e9cba226..99e0a5494 100644
 +		rec->ticks++;
 +		struct mach_timebase_info timebase;
 +		mach_timebase_info(&timebase);
-+		uint64_t periodNs = 1000000000ull / 60ull;
++		uint32_t targetRate = getTargetRefreshRate();
++		uint64_t periodNs = 1000000000ull / (uint64_t)targetRate;
 +		uint64_t periodMach = periodNs * timebase.denom / timebase.numer;
 +
 +		uint64_t hostTime = mach_absolute_time();
 +		CVTimeStamp now = {};
 +		now.version = 0;
 +		now.hostTime = hostTime;
-+		now.videoTime = hostTime / periodMach;
-+		now.videoTimeScale = 60;
++		now.videoTime = periodMach > 0 ? (hostTime / periodMach) : 0;
++		now.videoTimeScale = (int32_t)targetRate;
 +		now.videoRefreshPeriod = 1;
 +		now.flags = kCVTimeStampHostTimeValid | kCVTimeStampVideoTimeValid |
 +		    kCVTimeStampVideoRefreshPeriodValid;
@@ -4379,9 +4394,8 @@ index 3e9cba226..99e0a5494 100644
 +    if (__lolsys_syscall(1,(long)&deadline,0,0,0,0,228)<0) return NULL;
 +    static uint64_t cvIntervalNS = 0;
 +    if (!cvIntervalNS) {
-+        const char *hz = getenv("RCLOL_REFRESH_HZ");
-+        int rate = hz ? atoi(hz) : 0;
-+        cvIntervalNS = (rate > 0 && rate <= 1000) ? 1000000000ull / (uint64_t)rate : (1000000000ull / 60ull);
++        uint32_t rate = getTargetRefreshRate();
++        cvIntervalNS = 1000000000ull / (uint64_t)rate;
 +    }
 +    for (;;) {
 +        deadline.nsec += cvIntervalNS;
@@ -4453,7 +4467,7 @@ index 3e9cba226..99e0a5494 100644
  	*displayLinkOut = (CVDisplayLinkRef) self;
  	return kCVReturnSuccess;
  }
-@@ -41,35 +890,128 @@ CVReturn CVDisplayLinkStart(CVDisplayLinkRef displayLink)
+@@ -41,35 +904,128 @@ CVReturn CVDisplayLinkStart(CVDisplayLinkRef displayLink)
  {
  	if (!displayLink)
  		return kCVReturnInvalidArgument;
@@ -4593,7 +4607,7 @@ index 3e9cba226..99e0a5494 100644
  	return kCVReturnSuccess;
  }
  
-@@ -91,7 +1033,7 @@ CVReturn CVDisplayLinkSetCurrentCGDisplayFromOpenGLContext(CVDisplayLinkRef disp
+@@ -91,7 +1047,7 @@ CVReturn CVDisplayLinkSetCurrentCGDisplayFromOpenGLContext(CVDisplayLinkRef disp
  			CGDirectDisplayID displayID = [window.screen cgDirectDisplayID];
  			NSMutableDictionary* self = (NSMutableDictionary*) displayLink;
  
@@ -4602,7 +4616,7 @@ index 3e9cba226..99e0a5494 100644
  					forKey: kDirectDisplayArray];
  			return kCVReturnSuccess;
  		}
-@@ -117,14 +1059,31 @@ CVReturn CVDisplayLinkCreateWithCGDisplay(
+@@ -117,36 +1073,65 @@ CVReturn CVDisplayLinkCreateWithCGDisplay(
      CGDirectDisplayID displayID,
      CV_RETURNS_RETAINED_PARAMETER CVDisplayLinkRef CV_NULLABLE * CV_NONNULL displayLinkOut )
  {
@@ -4637,6 +4651,48 @@ index 3e9cba226..99e0a5494 100644
  	return kCVReturnSuccess;
  }
  
+ CVTime CVDisplayLinkGetNominalOutputVideoRefreshPeriod( CVDisplayLinkRef CV_NONNULL displayLink )
+ {
+ 	CVTime time = { 0, 0, kCVTimeIsIndefinite };
+-	CGDirectDisplayID displayId = CVDisplayLinkGetCurrentCGDisplay(displayLink);
+-	if (displayId == kCGNullDirectDisplay)
++	if (!displayLink)
+ 		return time;
+ 
+-	CGDisplayModeRef mode = CGDisplayCopyDisplayMode(displayId);
+-	if (!mode)
+-		return time;
++	double rate = 0.0;
++	const char *hz = getenv("RCLOL_REFRESH_HZ");
++	if (hz) {
++		double envRate = atof(hz);
++		if (envRate > 0.0 && envRate <= 1000.0)
++			rate = envRate;
++	}
++
++	if (rate < 1.0) {
++		CGDirectDisplayID displayId = CVDisplayLinkGetCurrentCGDisplay(displayLink);
++		if (displayId != kCGNullDirectDisplay) {
++			CGDisplayModeRef mode = CGDisplayCopyDisplayMode(displayId);
++			if (mode) {
++				rate = CGDisplayModeGetRefreshRate(mode);
++				CGDisplayModeRelease(mode);
++			}
++		}
++	}
+ 
+-	double rate = CGDisplayModeGetRefreshRate(mode);
+ 	if (rate < 1.0)
+ 		rate = 60.0;
+ 
+ 	time.flags = 0;
+ 	time.timeValue = 1.0;
+-	time.timeScale = rate;
++	time.timeScale = (int32_t)rate;
+ 
+-	CGDisplayModeRelease(mode);
+ 	return time;
+ }
 diff --git a/src/frameworks/CoreVideo/src/constants.c b/src/frameworks/CoreVideo/src/constants.c
 index 02f06704e..5d4fd4b2d 100644
 --- a/src/frameworks/CoreVideo/src/constants.c

@@ -19,3 +19,17 @@ link = shlex.split((folder / 'CMakeFiles/CoreGraphics.dir/link.txt').read_text()
 link[link.index('CMakeFiles/CoreGraphics.dir/CGDirectDisplay.m.o')] = str(obj)
 link[link.index('-o') + 1] = str(root / 'build/riot-CoreGraphics')
 subprocess.run(link, cwd=folder, check=True)
+built_binary = root / 'build/riot-CoreGraphics'
+destinations = [
+    Path.home() / '.darling/System/Library/Frameworks/CoreGraphics.framework/Versions/A/CoreGraphics',
+    Path.home() / '.darling/Users/fgeroldi/RuntimeFrameworks/CoreGraphics.framework/Versions/A/CoreGraphics',
+]
+for dst in destinations:
+    try:
+        dst.parent.mkdir(parents=True, exist_ok=True)
+        import shutil
+        shutil.copy2(built_binary, dst)
+        print(f'Installed CoreGraphics to {dst}')
+    except Exception as e:
+        print(f'Could not install to {dst}: {e}')
+print('Built isolated CoreGraphics compatibility override')

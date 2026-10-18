@@ -3184,7 +3184,7 @@ index 18189404..12cde429 100644
 +- (NSRect) frameForRootRect: (NSRect) rect;
  @end
 diff --git a/AppKit/X11.backend/X11Display.m b/AppKit/X11.backend/X11Display.m
-index 5ae29bf4..53fe86d2 100644
+index 5ae29bf4..f64d2802 100644
 --- a/AppKit/X11.backend/X11Display.m
 +++ b/AppKit/X11.backend/X11Display.m
 @@ -39,6 +39,7 @@
@@ -3753,7 +3753,88 @@ index 5ae29bf4..53fe86d2 100644
  }
  
  static NSDictionary *modeInfoToDictionary(const XRRModeInfo *mi, int depth) {
-@@ -536,12 +937,109 @@ static NSDictionary *modeInfoToDictionary(const XRRModeInfo *mi, int depth) {
+@@ -275,6 +676,13 @@ static NSDictionary *modeInfoToDictionary(const XRRModeInfo *mi, int depth) {
+         rate = (double) mi->dotClock /
+                ((double) mi->hTotal * (double) mi->vTotal);
+ 
++    const char *envHz = getenv("RCLOL_REFRESH_HZ");
++    if (envHz && (rate <= 60.0 || rate < 1.0)) {
++        double overrideRate = atof(envHz);
++        if (overrideRate > 0.0 && overrideRate <= 1000.0)
++            rate = overrideRate;
++    }
++
+     return @{
+         @"Width" : @(mi->width),
+         @"Height" : @(mi->height),
+@@ -290,10 +698,18 @@ static NSDictionary *modeInfoToDictionary(const XRRModeInfo *mi, int depth) {
+ 
+     if (!XRRQueryExtension(_display, &eventBase, &errorBase)) {
+         Screen *defaultScreen = XDefaultScreenOfDisplay(_display);
++        double rate = 60.0;
++        const char *envHz = getenv("RCLOL_REFRESH_HZ");
++        if (envHz) {
++            double overrideRate = atof(envHz);
++            if (overrideRate > 0.0 && overrideRate <= 1000.0)
++                rate = overrideRate;
++        }
+         return @[ @{
+             @"Width" : @(WidthOfScreen(defaultScreen)),
+             @"Height" : @(HeightOfScreen(defaultScreen)),
+-            @"Depth" : @(defaultDepth)
++            @"Depth" : @(defaultDepth),
++            @"RefreshRate" : @(rate)
+         } ];
+     } else {
+         XRRScreenResources *screen =
+@@ -352,7 +768,21 @@ static NSDictionary *modeInfoToDictionary(const XRRModeInfo *mi, int depth) {
+ 
+         if (screenIndex < 0 || screenIndex >= screen->noutput) {
+             XRRFreeScreenResources(screen);
+-            return dict;
++            const int defaultDepth = XDefaultDepthOfScreen(
++                    XDefaultScreenOfDisplay(_display));
++            double rate = 60.0;
++            const char *envHz = getenv("RCLOL_REFRESH_HZ");
++            if (envHz) {
++                double overrideRate = atof(envHz);
++                if (overrideRate > 0.0 && overrideRate <= 1000.0)
++                    rate = overrideRate;
++            }
++            return @{
++                @"Width" : @(DisplayWidth(_display, DefaultScreen(_display))),
++                @"Height" : @(DisplayHeight(_display, DefaultScreen(_display))),
++                @"Depth" : @(defaultDepth),
++                @"RefreshRate" : @(rate)
++            };
+         }
+ 
+         XRROutputInfo *oinfo = XRRGetOutputInfo(_display, screen,
+@@ -378,6 +808,23 @@ static NSDictionary *modeInfoToDictionary(const XRRModeInfo *mi, int depth) {
+         XRRFreeOutputInfo(oinfo);
+         XRRFreeScreenResources(screen);
+     }
++    if (![dict count]) {
++        const int defaultDepth = XDefaultDepthOfScreen(
++                XDefaultScreenOfDisplay(_display));
++        double rate = 60.0;
++        const char *envHz = getenv("RCLOL_REFRESH_HZ");
++        if (envHz) {
++            double overrideRate = atof(envHz);
++            if (overrideRate > 0.0 && overrideRate <= 1000.0)
++                rate = overrideRate;
++        }
++        dict = @{
++            @"Width" : @(DisplayWidth(_display, DefaultScreen(_display))),
++            @"Height" : @(DisplayHeight(_display, DefaultScreen(_display))),
++            @"Depth" : @(defaultDepth),
++            @"RefreshRate" : @(rate)
++        };
++    }
+     return dict;
+ }
+ 
+@@ -536,12 +983,109 @@ static NSDictionary *modeInfoToDictionary(const XRRModeInfo *mi, int depth) {
      return &layout->layout;
  }
  
@@ -3865,7 +3946,7 @@ index 5ae29bf4..53fe86d2 100644
  }
  
  - (NSPasteboard *) pasteboardWithName: (NSString *) name {
-@@ -675,6 +1173,15 @@ static NSDictionary *modeInfoToDictionary(const XRRModeInfo *mi, int depth) {
+@@ -675,6 +1219,15 @@ static NSDictionary *modeInfoToDictionary(const XRRModeInfo *mi, int depth) {
                                      blue: 0.60f
                                      alpha: 1.0f];
  
@@ -3881,7 +3962,7 @@ index 5ae29bf4..53fe86d2 100644
      NSLog(@"missing color for %@", colorName);
      return [NSColor redColor];
  }
-@@ -688,6 +1195,10 @@ static NSDictionary *modeInfoToDictionary(const XRRModeInfo *mi, int depth) {
+@@ -688,6 +1241,10 @@ static NSDictionary *modeInfoToDictionary(const XRRModeInfo *mi, int depth) {
  }
  
  - (void) hideCursor {
@@ -3892,7 +3973,7 @@ index 5ae29bf4..53fe86d2 100644
      if (!_blankCursor)
          _blankCursor = [[X11Cursor alloc] initBlank];
      [self setCursor: _blankCursor];
-@@ -695,6 +1206,10 @@ static NSDictionary *modeInfoToDictionary(const XRRModeInfo *mi, int depth) {
+@@ -695,6 +1252,10 @@ static NSDictionary *modeInfoToDictionary(const XRRModeInfo *mi, int depth) {
  
  - (void) unhideCursor {
      NSCursor *current = [NSCursor currentCursor];
@@ -3903,7 +3984,7 @@ index 5ae29bf4..53fe86d2 100644
      if (current != nil) {
          [current push];
          [current pop];
-@@ -747,12 +1262,28 @@ static NSDictionary *modeInfoToDictionary(const XRRModeInfo *mi, int depth) {
+@@ -747,12 +1308,28 @@ static NSDictionary *modeInfoToDictionary(const XRRModeInfo *mi, int depth) {
  
  - (void) setCursor: (id) cursor {
      CGWindow *window = [[NSApp keyWindow] platformWindow];
@@ -3937,7 +4018,7 @@ index 5ae29bf4..53fe86d2 100644
      }
  }
  
-@@ -921,15 +1452,22 @@ static NSDictionary *modeInfoToDictionary(const XRRModeInfo *mi, int depth) {
+@@ -921,15 +1498,22 @@ static NSDictionary *modeInfoToDictionary(const XRRModeInfo *mi, int depth) {
  }
  
  - (NSPoint) mouseLocation {
@@ -3969,7 +4050,7 @@ index 5ae29bf4..53fe86d2 100644
  }
  
  - (void) setWindow: (id) window forID: (XID) i {
-@@ -948,6 +1486,19 @@ static NSDictionary *modeInfoToDictionary(const XRRModeInfo *mi, int depth) {
+@@ -948,6 +1532,19 @@ static NSDictionary *modeInfoToDictionary(const XRRModeInfo *mi, int depth) {
          // retaining the window causes it to keep popping back up endlessly even after dismissing it
          if (lastFocusedWindow && [[lastFocusedWindow platformWindow] windowHandle] == i)
              lastFocusedWindow = nil;
@@ -3989,7 +4070,7 @@ index 5ae29bf4..53fe86d2 100644
      }
  }
  
-@@ -962,20 +1513,86 @@ static NSDictionary *modeInfoToDictionary(const XRRModeInfo *mi, int depth) {
+@@ -962,20 +1559,86 @@ static NSDictionary *modeInfoToDictionary(const XRRModeInfo *mi, int depth) {
  {
  #ifndef DARLING
      [[NSRunLoop currentRunLoop] addInputSource: _inputSource forMode: mode];
@@ -4081,7 +4162,7 @@ index 5ae29bf4..53fe86d2 100644
  }
  
  - (NSEventModifierFlags) modifierFlagsForState: (unsigned int) state {
-@@ -1010,17 +1627,101 @@ static NSDictionary *modeInfoToDictionary(const XRRModeInfo *mi, int depth) {
+@@ -1010,17 +1673,101 @@ static NSDictionary *modeInfoToDictionary(const XRRModeInfo *mi, int depth) {
      return result;
  }
  
@@ -4185,7 +4266,7 @@ index 5ae29bf4..53fe86d2 100644
          NSEventModifierFlags modifierFlags = [self modifierFlagsForState: ev->xkey.state];
          char buf[20] = {0};
          KeySym keySym;
-@@ -1030,7 +1731,11 @@ static NSDictionary *modeInfoToDictionary(const XRRModeInfo *mi, int depth) {
+@@ -1030,7 +1777,11 @@ static NSDictionary *modeInfoToDictionary(const XRRModeInfo *mi, int depth) {
              break;
  
          if (ev->type == KeyPress) {
@@ -4198,7 +4279,7 @@ index 5ae29bf4..53fe86d2 100644
              buf[strLen] = 0;
          } else {
              // Xutf8LookupString() may not be used with KeyRelease
-@@ -1038,6 +1743,18 @@ static NSDictionary *modeInfoToDictionary(const XRRModeInfo *mi, int depth) {
+@@ -1038,6 +1789,18 @@ static NSDictionary *modeInfoToDictionary(const XRRModeInfo *mi, int depth) {
              buf[strLen] = 0;
          }
  
@@ -4217,7 +4298,7 @@ index 5ae29bf4..53fe86d2 100644
          id str = [[NSString alloc] initWithCString: buf
                                            encoding: NSUTF8StringEncoding];
          NSPoint pos =
-@@ -1077,6 +1794,47 @@ static NSDictionary *modeInfoToDictionary(const XRRModeInfo *mi, int depth) {
+@@ -1077,6 +1840,47 @@ static NSDictionary *modeInfoToDictionary(const XRRModeInfo *mi, int depth) {
          break;
  
      case ButtonPress:;
@@ -4265,7 +4346,7 @@ index 5ae29bf4..53fe86d2 100644
          NSTimeInterval now = [[NSDate date] timeIntervalSinceReferenceDate];
  
          if (now - lastClickTimeStamp < [self doubleClickInterval]) {
-@@ -1086,8 +1844,8 @@ static NSDictionary *modeInfoToDictionary(const XRRModeInfo *mi, int depth) {
+@@ -1086,8 +1890,8 @@ static NSDictionary *modeInfoToDictionary(const XRRModeInfo *mi, int depth) {
          }
          lastClickTimeStamp = now;
  
@@ -4276,7 +4357,7 @@ index 5ae29bf4..53fe86d2 100644
  
          switch (ev->xbutton.button) {
          case Button1:
-@@ -1096,10 +1854,6 @@ static NSDictionary *modeInfoToDictionary(const XRRModeInfo *mi, int depth) {
+@@ -1096,10 +1900,6 @@ static NSDictionary *modeInfoToDictionary(const XRRModeInfo *mi, int depth) {
          case Button3:
              type = NSRightMouseDown;
              break;
@@ -4287,7 +4368,7 @@ index 5ae29bf4..53fe86d2 100644
          default:
              type = NSOtherMouseDown;
          }
-@@ -1113,14 +1867,22 @@ static NSDictionary *modeInfoToDictionary(const XRRModeInfo *mi, int depth) {
+@@ -1113,14 +1913,22 @@ static NSDictionary *modeInfoToDictionary(const XRRModeInfo *mi, int depth) {
                          clickCount: clickCount
                              deltaX: 0.0
                              deltaY: 0.0];
@@ -4314,7 +4395,7 @@ index 5ae29bf4..53fe86d2 100644
          CGFloat deltaY = 0.0;
  
          switch (ev->xbutton.button) {
-@@ -1130,14 +1892,6 @@ static NSDictionary *modeInfoToDictionary(const XRRModeInfo *mi, int depth) {
+@@ -1130,14 +1938,6 @@ static NSDictionary *modeInfoToDictionary(const XRRModeInfo *mi, int depth) {
          case Button3:
              type = NSRightMouseUp;
              break;
@@ -4329,7 +4410,7 @@ index 5ae29bf4..53fe86d2 100644
          default:
              type = NSOtherMouseUp;
          }
-@@ -1151,7 +1905,9 @@ static NSDictionary *modeInfoToDictionary(const XRRModeInfo *mi, int depth) {
+@@ -1151,7 +1951,9 @@ static NSDictionary *modeInfoToDictionary(const XRRModeInfo *mi, int depth) {
                          clickCount: clickCount
                              deltaX: 0.0
                              deltaY: deltaY];
@@ -4340,7 +4421,7 @@ index 5ae29bf4..53fe86d2 100644
          [self postEvent: event atStart: NO];
          break;
  
-@@ -1160,49 +1916,95 @@ static NSDictionary *modeInfoToDictionary(const XRRModeInfo *mi, int depth) {
+@@ -1160,49 +1962,95 @@ static NSDictionary *modeInfoToDictionary(const XRRModeInfo *mi, int depth) {
              // ev->xmotion.x, ev->xmotion.y, ev->xmotion.x_root,
              // ev->xmotion.y_root);
  
@@ -4462,7 +4543,7 @@ index 5ae29bf4..53fe86d2 100644
                      mouseEventWithType: type
                                location: pos
                           modifierFlags:
-@@ -1211,28 +2013,58 @@ static NSDictionary *modeInfoToDictionary(const XRRModeInfo *mi, int depth) {
+@@ -1211,28 +2059,58 @@ static NSDictionary *modeInfoToDictionary(const XRRModeInfo *mi, int depth) {
                              clickCount: 1
                                  deltaX: deltaX
                                  deltaY: deltaY];
@@ -4523,7 +4604,7 @@ index 5ae29bf4..53fe86d2 100644
          NSLog(@"FocusIn");
          if ([delegate attachedSheet]) {
              [[delegate attachedSheet] makeKeyAndOrderFront: delegate];
-@@ -1243,28 +2075,62 @@ static NSDictionary *modeInfoToDictionary(const XRRModeInfo *mi, int depth) {
+@@ -1243,28 +2121,62 @@ static NSDictionary *modeInfoToDictionary(const XRRModeInfo *mi, int depth) {
                                   checkForAppDeactivation: NO];
              lastFocusedWindow = nil;
          }
@@ -4588,7 +4669,7 @@ index 5ae29bf4..53fe86d2 100644
          O2Rect rect = NSMakeRect(ev->xexpose.x, ev->xexpose.y,
                                   ev->xexpose.width, ev->xexpose.height);
  
-@@ -1301,11 +2167,23 @@ static NSDictionary *modeInfoToDictionary(const XRRModeInfo *mi, int depth) {
+@@ -1301,11 +2213,23 @@ static NSDictionary *modeInfoToDictionary(const XRRModeInfo *mi, int depth) {
          break;
  
      case UnmapNotify:
@@ -4616,7 +4697,7 @@ index 5ae29bf4..53fe86d2 100644
          break;
  
      case MapRequest:
-@@ -1317,10 +2195,21 @@ static NSDictionary *modeInfoToDictionary(const XRRModeInfo *mi, int depth) {
+@@ -1317,10 +2241,21 @@ static NSDictionary *modeInfoToDictionary(const XRRModeInfo *mi, int depth) {
          break;
  
      case ConfigureNotify:
@@ -4638,7 +4719,7 @@ index 5ae29bf4..53fe86d2 100644
          break;
  
      case ConfigureRequest:
-@@ -1344,6 +2233,8 @@ static NSDictionary *modeInfoToDictionary(const XRRModeInfo *mi, int depth) {
+@@ -1344,6 +2279,8 @@ static NSDictionary *modeInfoToDictionary(const XRRModeInfo *mi, int depth) {
          break;
  
      case PropertyNotify:
@@ -4647,7 +4728,7 @@ index 5ae29bf4..53fe86d2 100644
          if ([window respondsToSelector: @selector(propertyNotify:)]) {
              [window propertyNotify: &ev->xproperty];
          }
-@@ -1372,6 +2263,10 @@ static NSDictionary *modeInfoToDictionary(const XRRModeInfo *mi, int depth) {
+@@ -1372,6 +2309,10 @@ static NSDictionary *modeInfoToDictionary(const XRRModeInfo *mi, int depth) {
          break;
  
      case ClientMessage:
@@ -4658,7 +4739,7 @@ index 5ae29bf4..53fe86d2 100644
          if (ev->xclient.format == 32 &&
              ev->xclient.data.l[0] ==
                      XInternAtom(_display, "WM_DELETE_WINDOW", False)) {
-@@ -1399,7 +2294,9 @@ static NSDictionary *modeInfoToDictionary(const XRRModeInfo *mi, int depth) {
+@@ -1399,7 +2340,9 @@ static NSDictionary *modeInfoToDictionary(const XRRModeInfo *mi, int depth) {
          break;
  
      default:
@@ -4669,7 +4750,7 @@ index 5ae29bf4..53fe86d2 100644
              [self _invalidateRRCache];
              break;
          }
-@@ -1433,6 +2330,10 @@ static NSDictionary *modeInfoToDictionary(const XRRModeInfo *mi, int depth) {
+@@ -1433,6 +2376,10 @@ static NSDictionary *modeInfoToDictionary(const XRRModeInfo *mi, int depth) {
      NSLog(@"Request code: %d:%d", errorEvent->request_code,
            errorEvent->minor_code);
      NSLog(@"Error code: %d", errorEvent->error_code);
@@ -4680,7 +4761,7 @@ index 5ae29bf4..53fe86d2 100644
      return 0;
  }
  
-@@ -1476,54 +2377,279 @@ void CGNativeBorderFrameWidthsForStyle(NSUInteger styleMask, CGFloat *top,
+@@ -1476,54 +2423,279 @@ void CGNativeBorderFrameWidthsForStyle(NSUInteger styleMask, CGFloat *top,
      return frame;
  }
  
@@ -4733,8 +4814,8 @@ index 5ae29bf4..53fe86d2 100644
 -                 position.x, position.y);
 -    XSync(_display, False);
 +    [self warpPointerToRootX: x y: y];
- }
- 
++}
++
 +/* Confinement preserves absolute motion and edge panning. Relative mode holds
 + * its own grab and is left alone while requested. */
 +- (void) updateMouseConfinementForWindow:(X11Window *)window {
@@ -4921,8 +5002,8 @@ index 5ae29bf4..53fe86d2 100644
 +    X11RelativeMouseEnd(&_relativeMouse);
 +    _relativeWindow = None;
 +    rclolPointerStamp = 0;
-+}
-+
+ }
+ 
 +/* CGAssociateMouseAndMouseCursorPosition(!doGrab). */
  - (void) grabMouse: (BOOL) doGrab {
 +    BOOL rclolRelativeBefore = _relativeMouse.active;
@@ -7081,7 +7162,7 @@ index db8869c8..6fea5107 100644
 +    CGContextSetTextPosition(c, savedPosition.x, savedPosition.y);
  }
 diff --git a/CoreGraphics/CGDirectDisplay.m b/CoreGraphics/CGDirectDisplay.m
-index e213b066..9dc3da02 100644
+index e213b066..c45d4503 100644
 --- a/CoreGraphics/CGDirectDisplay.m
 +++ b/CoreGraphics/CGDirectDisplay.m
 @@ -53,6 +53,29 @@ static NSDisplay *currentDisplay(void) {
@@ -7239,7 +7320,23 @@ index e213b066..9dc3da02 100644
  }
  
  CGDirectDisplayID CGDisplayMirrorsDisplay(CGDirectDisplayID display) {
-@@ -319,10 +344,15 @@ CFStringRef CGDisplayModeCopyPixelEncoding(CGDisplayModeRef mode) {
+@@ -298,7 +323,14 @@ size_t CGDisplayModeGetWidth(CGDisplayModeRef mode) {
+ 
+ double CGDisplayModeGetRefreshRate(CGDisplayModeRef mode) {
+     NSDictionary *dict = (NSDictionary *) mode;
+-    return [[dict valueForKey: @"RefreshRate"] doubleValue];
++    double rate = [[dict valueForKey: @"RefreshRate"] doubleValue];
++    const char *envHz = getenv("RCLOL_REFRESH_HZ");
++    if (envHz && (rate <= 60.0 || rate < 1.0)) {
++        double overrideRate = atof(envHz);
++        if (overrideRate > 0.0 && overrideRate <= 1000.0)
++            rate = overrideRate;
++    }
++    return rate;
+ }
+ 
+ CFStringRef CGDisplayModeCopyPixelEncoding(CGDisplayModeRef mode) {
+@@ -319,10 +351,15 @@ CFStringRef CGDisplayModeCopyPixelEncoding(CGDisplayModeRef mode) {
  CFArrayRef CGDisplayCopyAllDisplayModes(CGDirectDisplayID displayIndex,
                                          CFDictionaryRef options)
  {
@@ -7258,7 +7355,7 @@ index e213b066..9dc3da02 100644
  }
  
  CGError CGDisplaySetDisplayMode(CGDirectDisplayID displayId,
-@@ -341,11 +371,10 @@ static NSData *edidForDisplay(CGDirectDisplayID displayId) {
+@@ -341,11 +378,10 @@ static NSData *edidForDisplay(CGDirectDisplayID displayId) {
      if (!display)
          return nil;
  
@@ -7272,7 +7369,7 @@ index e213b066..9dc3da02 100644
      NSData *edid = [screen edid];
      if (edid && [edid length] >= 16)
          return edid;
-@@ -354,17 +383,33 @@ static NSData *edidForDisplay(CGDirectDisplayID displayId) {
+@@ -354,17 +390,33 @@ static NSData *edidForDisplay(CGDirectDisplayID displayId) {
  }
  
  CGSize CGDisplayScreenSize(CGDirectDisplayID display) {
@@ -7313,7 +7410,7 @@ index e213b066..9dc3da02 100644
  }
  
  uint32_t CGDisplaySerialNumber(CGDirectDisplayID displayId) {
-@@ -474,7 +519,9 @@ CGError CGAssociateMouseAndMouseCursorPosition(boolean_t connected) {
+@@ -474,7 +526,9 @@ CGError CGAssociateMouseAndMouseCursorPosition(boolean_t connected) {
      if (!display)
          return kCGErrorInvalidConnection;
  
@@ -7324,7 +7421,7 @@ index e213b066..9dc3da02 100644
      return kCGErrorSuccess;
  }
  
-@@ -500,3 +547,38 @@ CFDictionaryRef CGDisplayCurrentMode(CGDirectDisplayID display) {
+@@ -500,3 +554,38 @@ CFDictionaryRef CGDisplayCurrentMode(CGDirectDisplayID display) {
  size_t CGDisplayModeGetPixelWidth(CGDisplayModeRef mode) {
      return 0;
  }

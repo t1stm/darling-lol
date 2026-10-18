@@ -71,14 +71,72 @@ else
  fi
 fi
 # --- darling-lol perf: scheduling & driver latency hints ---
-# Refresh rate for display link, async presenter, and frame pacing: the primary monitor's
-# current mode (the first monitor without a primary); unset falls back to 60 Hz.
-if [ -z "${RCLOL_REFRESH_HZ-}" ] && command -v xrandr >/dev/null 2>&1; then
-  RCLOL_REFRESH_HZ=$(xrandr --current 2>/dev/null | awk '
-    / connected/ { primary = / primary / }
-    /\*/ { for (i = 2; i <= NF; i++) if ($i ~ /\*/) { rate = $i; sub(/[*+]+/, "", rate)
-            if (primary) { print int(rate + 0.5); found = 1; exit } else if (first == "") first = int(rate + 0.5) } }
-    END { if (!found && first != "") print first }')
+# Refresh rate for display link, async presenter, and frame pacing.
+# NOTE: Current implementation and testing specifically target KDE Plasma + Wayland
+# (KWin + Xwayland via kscreen-doctor / X11 WSI). GNOME + Wayland (Mutter) and other
+# compositors are not actively covered at this time and are left to upstream maintainers.
+# If RCLOL_REFRESH_HZ is already set in the environment, honor the override directly.
+if [ -z "${RCLOL_REFRESH_HZ-}" ]; then
+  if command -v kscreen-doctor >/dev/null 2>&1; then
+    RCLOL_REFRESH_HZ=$(python3 -c '
+import subprocess, re, sys, json
+# 1. Try kscreen-doctor -j (JSON mode)
+try:
+    res = subprocess.run(["kscreen-doctor", "-j"], capture_output=True, text=True, timeout=2)
+    if res.returncode == 0 and res.stdout.strip():
+        data = json.loads(res.stdout)
+        outputs = data.get("outputs", [])
+        outputs.sort(key=lambda o: (not o.get("enabled", False), not o.get("connected", False), o.get("priority", 999)))
+        for out in outputs:
+            if out.get("enabled") and out.get("connected"):
+                cur_id = str(out.get("currentModeId") or out.get("currentMode") or "")
+                for m in out.get("modes", []):
+                    if str(m.get("id")) == cur_id:
+                        rate = float(m.get("refreshRate", 0))
+                        if rate > 0:
+                            print(int(round(rate)))
+                            sys.exit(0)
+except Exception:
+    pass
+
+# 2. Try kscreen-doctor -o (human-readable mode)
+try:
+    res = subprocess.run(["kscreen-doctor", "-o"], capture_output=True, text=True, timeout=2)
+    if res.returncode == 0 and res.stdout.strip():
+        best = None
+        for chunk in res.stdout.split("Output:"):
+            if not chunk.strip():
+                continue
+            if "enabled" in chunk and "connected" in chunk:
+                m = re.search(r"@([0-9]+(?:\.[0-9]+)?)\*", chunk)
+                if m:
+                    rate = int(round(float(m.group(1))))
+                    if "priority 1" in chunk or "primary" in chunk:
+                        best = rate
+                        break
+                    elif best is None:
+                        best = rate
+        if best:
+            print(best)
+            sys.exit(0)
+except Exception:
+    pass
+sys.exit(1)
+' 2>/dev/null || true)
+  fi
+
+  if [ -z "${RCLOL_REFRESH_HZ-}" ] && command -v xrandr >/dev/null 2>&1; then
+    RCLOL_REFRESH_HZ=$(xrandr --current 2>/dev/null | awk '
+      / connected/ { primary = / primary / }
+      /\*/ { for (i = 2; i <= NF; i++) if ($i ~ /\*/) { rate = $i; sub(/[*+]+/, "", rate)
+              if (primary) { print int(rate + 0.5); found = 1; exit } else if (first == "") first = int(rate + 0.5) } }
+      END { if (!found && first != "") print first }')
+  fi
+
+  # Fallback to high-refresh default (165 Hz) if autodetection did not resolve a rate
+  if [ -z "${RCLOL_REFRESH_HZ-}" ]; then
+    RCLOL_REFRESH_HZ=165
+  fi
 fi
 if [ -n "${RCLOL_REFRESH_HZ-}" ]; then export RCLOL_REFRESH_HZ; fi
 # Vulkan WSI & Mesa optimizations
