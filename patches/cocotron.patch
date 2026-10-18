@@ -5893,7 +5893,7 @@ index 85bd5d6f..151bca57 100644
  
  void CGNativeBorderFrameWidthsForStyle(NSUInteger styleMask, CGFloat *top,
 diff --git a/AppKit/X11.backend/X11Window.m b/AppKit/X11.backend/X11Window.m
-index edb13427..a6cef4ef 100644
+index edb13427..707bcf7f 100644
 --- a/AppKit/X11.backend/X11Window.m
 +++ b/AppKit/X11.backend/X11Window.m
 @@ -18,12 +18,14 @@
@@ -6310,14 +6310,14 @@ index edb13427..a6cef4ef 100644
 +        long splash = (long) XInternAtom(_display, "_NET_WM_WINDOW_TYPE_SPLASH", False);
 +        XChangeProperty(_display, _window, typeProperty, XA_ATOM, 32, PropModeReplace,
 +                        (const unsigned char *) &splash, 1);
-+    }
+     }
 +    Atom stateProperty = XInternAtom(_display, "_NET_WM_STATE", False);
 +    Atom above = XInternAtom(_display, "_NET_WM_STATE_ABOVE", False);
 +    if (!windowPropertyHasAtom(_display, _window, stateProperty, above)) {
 +        long state = (long) above;
 +        XChangeProperty(_display, _window, stateProperty, XA_ATOM, 32, PropModeAppend,
 +                        (const unsigned char *) &state, 1);
-     }
++    }
 +}
 +
 +- (void) dealloc {
@@ -7303,28 +7303,30 @@ index edb13427..a6cef4ef 100644
      Atom wmState = XInternAtom(_display, "_NET_WM_STATE", FALSE);
      Atom hiddenState = XInternAtom(_display, "_NET_WM_STATE_HIDDEN", FALSE);
  
-@@ -852,8 +1357,10 @@ static BOOL windowManagerIsRunning(Display *display) {
+@@ -852,16 +1357,14 @@ static BOOL windowManagerIsRunning(Display *display) {
      if (_cglContext == NULL) {
          CGLError error;
  
 -        if ((error = CGLCreateContext(NULL, NULL, &_cglContext)) !=
 -            kCGLNoError) {
+-            NSLog(@"CGLCreateContext failed at %s %d with error %d", __FILE__,
 +        // An alpha surface needs a context from its own config.
 +        error = _hasAlpha ? CGLCreateContextForWindow(_cglWindow, &_cglContext)
 +                          : CGLCreateContext(NULL, NULL, &_cglContext);
 +        if (error != kCGLNoError) {
-             NSLog(@"CGLCreateContext failed at %s %d with error %d", __FILE__,
++            NSLog(@"CGLCreateContext failed at %s %d with error %d (non-fatal)", __FILE__,
                    __LINE__, error);
- 
-@@ -861,7 +1368,6 @@ static BOOL windowManagerIsRunning(Display *display) {
-                         format: @"Failed to create GL context, CGL error %d",
-                                 error];
+-
+-            [NSException raise: NSGenericException
+-                        format: @"Failed to create GL context, CGL error %d",
+-                                error];
++            return;
          }
 -        _cglWindow = CGLGetWindowForContext(_cglContext, (void *) _window);
          if ((error = CGLContextMakeCurrentAndAttachToWindow(
                       _cglContext, _cglWindow)) != kCGLNoError)
              NSLog(@"CGLContextMakeCurrentAndAttachToWindow failed with error "
-@@ -875,6 +1381,12 @@ static BOOL windowManagerIsRunning(Display *display) {
+@@ -875,6 +1378,12 @@ static BOOL windowManagerIsRunning(Display *display) {
  }
  
  - (void) openGLFlushBuffer {
@@ -7337,7 +7339,7 @@ index edb13427..a6cef4ef 100644
      CGLError error;
  
      CGLContextObj prevContext = CGLGetCurrentContext();
-@@ -903,39 +1415,16 @@ static BOOL windowManagerIsRunning(Display *display) {
+@@ -903,39 +1412,16 @@ static BOOL windowManagerIsRunning(Display *display) {
      [self openGLFlushBuffer];
  }
  
@@ -7380,7 +7382,7 @@ index edb13427..a6cef4ef 100644
  }
  
  static int ignoreBadWindow(Display *display, XErrorEvent *errorEvent) {
-@@ -949,6 +1438,7 @@ static int ignoreBadWindow(Display *display, XErrorEvent *errorEvent) {
+@@ -949,6 +1435,7 @@ static int ignoreBadWindow(Display *display, XErrorEvent *errorEvent) {
  }
  
  - (void) frameChanged {
@@ -7388,7 +7390,7 @@ index edb13427..a6cef4ef 100644
      XErrorHandler previousHandler = XSetErrorHandler(ignoreBadWindow);
      @try {
          Window root, parent;
-@@ -957,43 +1447,25 @@ static int ignoreBadWindow(Display *display, XErrorEvent *errorEvent) {
+@@ -957,43 +1444,25 @@ static int ignoreBadWindow(Display *display, XErrorEvent *errorEvent) {
          unsigned int w, h, d, b, nchild;
          Window *children;
          O2Rect rect = NSZeroRect;
@@ -7442,7 +7444,7 @@ index edb13427..a6cef4ef 100644
      } @finally {
          XSetErrorHandler(previousHandler);
      }
-@@ -1011,60 +1483,15 @@ static int ignoreBadWindow(Display *display, XErrorEvent *errorEvent) {
+@@ -1011,60 +1480,15 @@ static int ignoreBadWindow(Display *display, XErrorEvent *errorEvent) {
      [_deviceDictionary addEntriesFromDictionary: entries];
  }
  
