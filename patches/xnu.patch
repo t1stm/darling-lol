@@ -5607,6 +5607,39 @@ index 88658cb..83ce61c 100644
  	errno = err;
  	int *tsderrno = (int*)_os_tsd_get_direct(__TSD_ERRNO);
  	if (tsderrno) {
+diff --git a/libsyscall/mach/mach_init.c b/libsyscall/mach/mach_init.c
+index 8e63793..894f153 100644
+--- a/libsyscall/mach/mach_init.c
++++ b/libsyscall/mach/mach_init.c
+@@ -191,12 +191,6 @@ mach_init_doit(void)
+ 	// Initialize cached mach ports defined in mach_init.h
+ 	mach_task_self_ = task_self_trap();
+ 	_task_reply_port = mach_reply_port();
+-	if (bootstrap_port == MACH_PORT_NULL) {
+-		kern_return_t kr = task_get_special_port(mach_task_self_, TASK_BOOTSTRAP_PORT, &bootstrap_port);
+-		if (kr != KERN_SUCCESS) {
+-			bootstrap_port = MACH_PORT_NULL;
+-		}
+-	}
+ 
+ 	if (vm_kernel_page_shift == 0) {
+ #if defined(__x86_64__) || defined(__i386__)
+@@ -230,4 +224,15 @@ mach_init_doit(void)
+ 
+ 	_init_cpu_capabilities();
+ 	_pthread_set_self(0);
++
++	/* darling-lol: task_get_special_port is a MIG call, and MIG keeps its reply
++	 * port in TSD. In dyld, _pthread_set_self(0) above installs the TSD base;
++	 * before it, x86_64 reads TSD through a zero GS base and faults at 0x10
++	 * (__TSD_MIG_REPLY), so every guest process died in dyld. */
++	if (bootstrap_port == MACH_PORT_NULL) {
++		kern_return_t kr = task_get_special_port(mach_task_self_, TASK_BOOTSTRAP_PORT, &bootstrap_port);
++		if (kr != KERN_SUCCESS) {
++			bootstrap_port = MACH_PORT_NULL;
++		}
++	}
+ }
 diff --git a/libsyscall/os/tsd.h b/libsyscall/os/tsd.h
 index 8a895f1..abe4a33 100644
 --- a/libsyscall/os/tsd.h
