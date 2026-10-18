@@ -135,3 +135,112 @@ int main(void) {
     assert(sys_ptrace(XNU_PT_PTRACE_ME, 0, NULL, 0) == 0 && calls == 1);
 }
 ''')
+
+    def test_proc_pidinfo_listfds(self):
+        base = 'darling/src/libsystem_kernel/emulation/'
+        pi_source = self.patched('xnu', base + 'src/xnu_syscall/bsd/impl/misc/proc_info.c')
+        self.run_c('''
+#define _GNU_SOURCE
+#include <assert.h>
+#include <errno.h>
+#include <fcntl.h>
+#include <stdint.h>
+#include <stdbool.h>
+#include <stddef.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <unistd.h>
+#include <dirent.h>
+#include <sys/syscall.h>
+
+#define BSD_O_RDONLY 0
+#define BSD_O_DIRECTORY 0x100000
+#define PROX_FDTYPE_VNODE 1
+#define PROC_PIDLISTFDS 1
+#define isdigit(c) ((c) >= '0' && (c) <= '9')
+
+struct proc_fdinfo {
+    int32_t proc_fd;
+    uint32_t proc_fdtype;
+};
+
+struct bsd_dirent {
+    uint64_t d_ino;
+    uint64_t d_seekoff;
+    uint16_t d_reclen;
+    uint16_t d_namlen;
+    uint8_t d_type;
+    char d_name[1024];
+};
+
+static int sys_open_nocancel(const char *path, int flags, int mode) {
+    return open(path, O_RDONLY | O_DIRECTORY);
+}
+
+static int close_internal(int fd) {
+    return close(fd);
+}
+
+static long sys_getdirentries(int fd, char *buf, int nbytes, long *basep) {
+    struct linux_dirent64 {
+        uint64_t d_ino;
+        int64_t d_off;
+        unsigned short d_reclen;
+        unsigned char d_type;
+        char d_name[];
+    };
+    char kbuf[1024];
+    long nread = syscall(SYS_getdents64, fd, kbuf, sizeof(kbuf));
+    if (nread <= 0) return nread;
+    int pos = 0, outpos = 0;
+    while (pos < nread) {
+        struct linux_dirent64 *ld = (struct linux_dirent64*)(kbuf + pos);
+        struct bsd_dirent *bd = (struct bsd_dirent*)(buf + outpos);
+        bd->d_ino = ld->d_ino;
+        bd->d_seekoff = ld->d_off;
+        bd->d_reclen = sizeof(struct bsd_dirent);
+        bd->d_namlen = strlen(ld->d_name);
+        bd->d_type = ld->d_type;
+        strcpy(bd->d_name, ld->d_name);
+        outpos += bd->d_reclen;
+        pos += ld->d_reclen;
+    }
+    return outpos;
+}
+
+#define LINUX_SYSCALL0(nr) syscall(nr)
+#define __simple_sprintf sprintf
+#define __simple_atoi(s, end) atoi(s)
+
+
+''' + function(pi_source, '_proc_pidinfo_listfds') + '''
+int main(void) {
+    // 1. Test buffer discovery
+    long req_bytes = _proc_pidinfo_listfds(0, NULL, 0);
+    assert(req_bytes > 0);
+    assert(req_bytes % sizeof(struct proc_fdinfo) == 0);
+    int count = req_bytes / sizeof(struct proc_fdinfo);
+    assert(count >= 3); // stdin, stdout, stderr
+
+    // 2. Test buffer population
+    struct proc_fdinfo fds[64];
+    long filled_bytes = _proc_pidinfo_listfds(0, fds, sizeof(fds));
+    assert(filled_bytes == req_bytes);
+    for (int i = 0; i < count; ++i) {
+        assert(fds[i].proc_fd >= 0);
+        assert(fds[i].proc_fdtype == PROX_FDTYPE_VNODE);
+    }
+
+    // 3. Test partial buffer
+    long partial = _proc_pidinfo_listfds(0, fds, sizeof(struct proc_fdinfo));
+    assert(partial == sizeof(struct proc_fdinfo));
+    assert(fds[0].proc_fdtype == PROX_FDTYPE_VNODE);
+
+    // 4. Test non-existent pid
+    assert(_proc_pidinfo_listfds(9999999, NULL, 0) == -ESRCH);
+
+    return 0;
+}
+''')
+

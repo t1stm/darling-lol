@@ -2921,7 +2921,7 @@ index e808529..bd663f6 100644
  	if (ret < 0)
  		ret = -errno;
 diff --git a/darling/src/libsystem_kernel/emulation/src/xnu_syscall/bsd/impl/misc/csops.c b/darling/src/libsystem_kernel/emulation/src/xnu_syscall/bsd/impl/misc/csops.c
-index f1ce3d3..2043306 100644
+index f1ce3d3..c189ee0 100644
 --- a/darling/src/libsystem_kernel/emulation/src/xnu_syscall/bsd/impl/misc/csops.c
 +++ b/darling/src/libsystem_kernel/emulation/src/xnu_syscall/bsd/impl/misc/csops.c
 @@ -1,38 +1,50 @@
@@ -2975,7 +2975,7 @@ index f1ce3d3..2043306 100644
 +        case CS_OPS_STATUS:
 +            if (!useraddr) return -EFAULT;
 +            if (usersize < sizeof(uint32_t)) return -ERANGE;
-+            { uint32_t flags = 0;
++            { uint32_t flags = CS_VALID | CS_HARD | CS_KILL | CS_RESTRICT | CS_RUNTIME; // (0x10b01)
 +              return darling_security_write(useraddr, &flags, sizeof(flags)); }
 +        case CS_OPS_CDHASH:
 +        case CS_OPS_BLOB:
@@ -3180,7 +3180,7 @@ index 0000000..97443ce
 +	return -ENOSYS;
 +}
 diff --git a/darling/src/libsystem_kernel/emulation/src/xnu_syscall/bsd/impl/misc/proc_info.c b/darling/src/libsystem_kernel/emulation/src/xnu_syscall/bsd/impl/misc/proc_info.c
-index 468ac94..111e597 100644
+index 468ac94..b305ebb 100644
 --- a/darling/src/libsystem_kernel/emulation/src/xnu_syscall/bsd/impl/misc/proc_info.c
 +++ b/darling/src/libsystem_kernel/emulation/src/xnu_syscall/bsd/impl/misc/proc_info.c
 @@ -101,6 +101,38 @@ long sys_proc_info(uint32_t callnum, int32_t pid, uint32_t flavor,
@@ -3222,6 +3222,88 @@ index 468ac94..111e597 100644
  		default:
  			__simple_printf("sys_proc_info(): Unsupported callnum: %d\n",
  					callnum);
+@@ -129,11 +161,16 @@ static long _proc_pidinfo_regionpath(int32_t pid, uint64_t arg, void* buffer, in
+ static long _proc_pidinfo_taskinfo(int32_t pid, void* buffer, int32_t bufsize);
+ static long _proc_pidinfo_taskallinfo(int32_t pid, void* buffer, int32_t bufsize);
+ static long _proc_pidinfo_listthreads(int32_t pid, void* buffer, int32_t bufsize);
++static long _proc_pidinfo_listfds(int32_t pid, void* buffer, int32_t bufsize);
+ 
+ long _proc_pidinfo(int32_t pid, uint32_t flavor, uint64_t arg, void* buffer, int32_t bufsize)
+ {
+ 	switch (flavor)
+ 	{
++		case PROC_PIDLISTFDS:
++		{
++			return _proc_pidinfo_listfds(pid, buffer, bufsize);
++		}
+ 		// arg is a memory location we want to know about
+ 		// We return information on the mapping where the address belongs or any following mapping
+ 		// Then we return -ESRCH.
+@@ -1027,3 +1064,64 @@ long sys_proc_info_extended_id(uint32_t callnum, int32_t pid, uint32_t flavor,
+ 	return sys_proc_info(callnum, pid, flavor, arg, buffer, bufsize);
+ }
+ 
++
++static long _proc_pidinfo_listfds(int32_t pid, void* buffer, int32_t bufsize)
++{
++	struct proc_fdinfo* fds = (struct proc_fdinfo*)buffer;
++	int32_t maxCount = (buffer && bufsize > 0) ? (bufsize / (int32_t)sizeof(struct proc_fdinfo)) : 0;
++	int32_t count = 0;
++	int fd, ret;
++	long basep = 0;
++	char dents[256];
++	char path[64];
++	bool is_self = (pid <= 0 || pid == (int32_t)LINUX_SYSCALL0(__NR_getpid));
++
++	if (pid <= 0)
++		__simple_sprintf(path, "/proc/self/fd");
++	else
++		__simple_sprintf(path, "/proc/%d/fd", pid);
++
++	fd = sys_open_nocancel(path, BSD_O_RDONLY | BSD_O_DIRECTORY, 0);
++	if (fd < 0)
++		return -ESRCH;
++
++	while ((ret = sys_getdirentries(fd, (char*) dents, sizeof(dents), &basep)) > 0)
++	{
++		int pos = 0;
++
++		while (pos < ret)
++		{
++			struct bsd_dirent* dent = (struct bsd_dirent*) &dents[pos];
++
++			if (!isdigit(dent->d_name[0]))
++			{
++				pos += dent->d_reclen;
++				continue;
++			}
++
++			int this_fd = (int)__simple_atoi(dent->d_name, NULL);
++			if (is_self && this_fd == fd)
++			{
++				pos += dent->d_reclen;
++				continue;
++			}
++
++			if (fds && count < maxCount)
++			{
++				fds[count].proc_fd = this_fd;
++				fds[count].proc_fdtype = PROX_FDTYPE_VNODE;
++			}
++			++count;
++
++			pos += dent->d_reclen;
++		}
++	}
++
++	close_internal(fd);
++
++	if (!buffer || bufsize == 0)
++		return count * sizeof(struct proc_fdinfo);
++
++	int32_t filled = (count < maxCount) ? count : maxCount;
++	return filled * sizeof(struct proc_fdinfo);
++}
 diff --git a/darling/src/libsystem_kernel/emulation/src/xnu_syscall/bsd/impl/misc/ptrace.c b/darling/src/libsystem_kernel/emulation/src/xnu_syscall/bsd/impl/misc/ptrace.c
 index 0a8f1e4..a19f12e 100644
 --- a/darling/src/libsystem_kernel/emulation/src/xnu_syscall/bsd/impl/misc/ptrace.c
