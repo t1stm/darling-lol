@@ -1,22 +1,27 @@
 {
   "schema": 1,
-  "upstream": "https://github.com/darlinghq/darling.git",
-  "revision": "60ba801decee7a00782f74f6be4c8ffb013f79ff",
+  "upstream": "https://github.com/VibeDarling/darling.git",
+  "revision": "1d451b15ffc0937b41017bf3461cbf9fd587f977",
   "components": [
     {
       "path": ".",
-      "revision": "60ba801decee7a00782f74f6be4c8ffb013f79ff",
-      "repository": "https://github.com/darlinghq/darling.git",
+      "revision": "1d451b15ffc0937b41017bf3461cbf9fd587f977",
+      "repository": "https://github.com/VibeDarling/darling.git",
       "patch": "patches/darling.patch",
-      "modified_files": 89,
+      "modified_files": 92,
       "new_files": [
-        "src/CoreAudio/CoreAudio/AudioConverterShim.c",
         "src/CoreAudio/AudioTrace.h",
+        "src/CoreAudio/CoreAudio/AudioConverterShim.c",
+        "src/CoreAudio/CoreAudio/pulse/AudioHardwareStreamPAInput.cpp",
+        "src/CoreAudio/CoreAudio/pulse/AudioHardwareStreamPAOutput.cpp",
+        "src/CoreAudio/CoreAudio/pulse/PADispatchMainLoop.cpp",
+        "src/CoreAudio/CoreAudio/pulse/PADispatchMainLoop.h",
         "src/CoreAudio/CoreAudioComponent/MatrixMixerAU.cpp",
+        "src/frameworks/Accelerate/vecLib/vDSP/src/arith.c",
+        "src/frameworks/Accelerate/vecLib/vDSP/src/fft.c",
         "src/frameworks/Carbon/HIToolbox/src/SecureInput.c",
         "src/frameworks/CoreMedia/include/CoreMedia/CMFormatDescription.h",
         "src/frameworks/CoreServices/src/LaunchServices/LSHostOpen.c",
-        "src/frameworks/CoreServices/src/LaunchServices/LSHostOpen.h",
         "src/frameworks/CoreServices/src/LaunchServices/LSHostOpenBus.c",
         "src/frameworks/CoreServices/src/LaunchServices/LSHostOpenBus.h",
         "src/frameworks/CryptoTokenKit/src/TKTokenWatcher.m",
@@ -24,22 +29,22 @@
         "src/frameworks/OpenDirectory/src/ODLocalDirectory.m",
         "src/frameworks/OpenGL/CGLAsyncPresent.inc",
         "src/frameworks/OpenGL/include/OpenGL/DarlingNativePresent.h",
-        "src/startup/mldr/commpage-cpu-caps.h",
-        "src/shellspawn/shellspawn-fds.h"
+        "src/shellspawn/shellspawn-fds.h",
+        "src/startup/mldr/commpage-cpu-caps.h"
       ]
     },
     {
       "path": "src/external/IOKitUser",
-      "revision": "534684e6748dffbd875c6cd1942477a52b66a077",
-      "repository": "https://github.com/darlinghq/darling-iokituser.git",
+      "revision": "0b989e3ad71f96fcd28b842ef8ea9bb8214dc7cd",
+      "repository": "https://github.com/VibeDarling/darling-iokituser.git",
       "patch": "patches/IOKitUser.patch",
       "modified_files": 1,
       "new_files": []
     },
     {
       "path": "src/external/Libinfo",
-      "revision": "93d242ce3f86d1de67522279edb3a2dcb23f30c7",
-      "repository": "https://github.com/darlinghq/darling-Libinfo.git",
+      "revision": "b9356d8c7da01d7a433153de3f26e855d0c1a1d9",
+      "repository": "https://github.com/VibeDarling/darling-Libinfo.git",
       "patch": "patches/Libinfo.patch",
       "modified_files": 1,
       "new_files": []
@@ -47,66 +52,67 @@
     {
       "path": "src/external/OpenDirectory",
       "revision": "67a8ad2ed0b06775bf53839446e2df7d49ab1c96",
-      "repository": "https://github.com/darlinghq/darling-opendirectory.git",
+      "repository": "https://github.com/VibeDarling/darling-opendirectory.git",
       "patch": "patches/OpenDirectory.patch",
       "modified_files": 1,
       "new_files": []
     },
     {
       "path": "src/external/cocotron",
-      "revision": "c8d38d16a9f613d300157bebbab2b9501bc0c274",
-      "repository": "https://github.com/darlinghq/darling-cocotron.git",
+      "revision": "56e083d3dfd714a5949a21be064fd9c9244e28d7",
+      "repository": "https://github.com/VibeDarling/darling-cocotron.git",
       "patch": "patches/cocotron.patch",
-      "modified_files": 104,
+      "modified_files": 98,
       "new_files": [
-        "QuartzCore/include/QuartzCore/CATransformLayer.h",
-        "AppKit/NSGeometryTrace.h"
+        "AppKit/NSGeometryTrace.h",
+        "AppKit/X11.backend/X11RelativeMouse.h",
+        "QuartzCore/include/QuartzCore/CATransformLayer.h"
       ]
     },
     {
       "path": "src/external/compiler-rt",
       "revision": "5fd9bc0effa307b99b35da59ce579e8e031c22da",
-      "repository": "https://github.com/darlinghq/darling-compiler-rt.git",
+      "repository": "https://github.com/VibeDarling/darling-compiler-rt.git",
       "patch": "patches/compiler-rt.patch",
       "modified_files": 2,
       "new_files": []
     },
     {
       "path": "src/external/configd",
-      "revision": "98e52de19c52f7938e581ed20385f38abd7fa197",
-      "repository": "https://github.com/darlinghq/darling-configd.git",
+      "revision": "df19b3f05423743ae47ccac4074ac723a55655bc",
+      "repository": "https://github.com/VibeDarling/darling-configd.git",
       "patch": "patches/configd.patch",
       "modified_files": 2,
       "new_files": []
     },
     {
       "path": "src/external/corecrypto",
-      "revision": "875f1cd9e75b0029d872b88ce8a77da276c00c84",
-      "repository": "https://github.com/darlinghq/darling-corecrypto.git",
+      "revision": "15f0e949d16108a6de706574f7a7f7c59ca260b0",
+      "repository": "https://github.com/VibeDarling/darling-corecrypto.git",
       "patch": "patches/corecrypto.patch",
       "modified_files": 4,
       "new_files": []
     },
     {
       "path": "src/external/corefoundation",
-      "revision": "a3640a77410cf1825f7855172b1551ae7917c461",
-      "repository": "https://github.com/darlinghq/darling-corefoundation.git",
+      "revision": "5f13f6827f9383cb5131cf176355206b4a8d030d",
+      "repository": "https://github.com/VibeDarling/darling-corefoundation.git",
       "patch": "patches/corefoundation.patch",
       "modified_files": 5,
       "new_files": []
     },
     {
       "path": "src/external/curl",
-      "revision": "92f54fd7eceabed2c2382a4acc0f7293dedd92ff",
-      "repository": "https://github.com/darlinghq/darling-curl.git",
+      "revision": "59e2c57db7fdc34e3481a1639bae28a8f52ca7d5",
+      "repository": "https://github.com/VibeDarling/darling-curl.git",
       "patch": "patches/curl.patch",
       "modified_files": 1,
       "new_files": []
     },
     {
       "path": "src/external/darlingserver",
-      "revision": "89751e64bc6c2082f7725061824ee0e33395b0de",
-      "repository": "https://github.com/darlinghq/darlingserver.git",
+      "revision": "91415406f46359c1fd78a8a5feadf0eefb18fb53",
+      "repository": "https://github.com/VibeDarling/darlingserver.git",
       "patch": "patches/darlingserver.patch",
       "modified_files": 36,
       "new_files": [
@@ -115,61 +121,59 @@
     },
     {
       "path": "src/external/foundation",
-      "revision": "55a4341b470c2a56fea667c1d2167fb074226f04",
-      "repository": "https://github.com/darlinghq/darling-foundation.git",
+      "revision": "e1ac7de68a3e06b2323def2e47faa8526211065d",
+      "repository": "https://github.com/VibeDarling/darling-foundation.git",
       "patch": "patches/foundation.patch",
-      "modified_files": 4,
+      "modified_files": 2,
       "new_files": []
     },
     {
       "path": "src/external/iokitd",
-      "revision": "5549ac4cd2db923c256f016a1381b3bfb716730a",
-      "repository": "https://github.com/darlinghq/darling-iokitd.git",
+      "revision": "6ac40e6229b1b46fe3ef5c58772189950aa49114",
+      "repository": "https://github.com/VibeDarling/darling-iokitd.git",
       "patch": "patches/iokitd.patch",
-      "modified_files": 17,
+      "modified_files": 18,
       "new_files": [
+        "src/HostPowerInhibit.c",
+        "src/HostPowerInhibit.h",
         "src/IOInterestNotification.h",
         "src/IOInterestNotification.mm",
         "src/IOPMrootDomain.h",
         "src/IOPMrootDomain.mm",
-        "src/IOPlatformExpertDevice.h",
-        "src/IOPlatformExpertDevice.mm",
         "src/LogindSleep.c",
         "src/LogindSleep.h",
-        "src/PowerSources.mm",
-        "src/HostPowerInhibit.c",
-        "src/HostPowerInhibit.h",
-        "src/PlatformIdentity.h"
+        "src/PlatformIdentity.h",
+        "src/PowerSources.mm"
       ]
     },
     {
       "path": "src/external/libcxxabi",
-      "revision": "c9c851718eb304a9aefa097aeaaf8c3bd1dff1bc",
-      "repository": "https://github.com/darlinghq/darling-libcxxabi.git",
+      "revision": "25d92f11f09922e9988a39989d4ddbb1dc52c37e",
+      "repository": "https://github.com/VibeDarling/darling-libcxxabi.git",
       "patch": "patches/libcxxabi.patch",
       "modified_files": 1,
       "new_files": []
     },
     {
       "path": "src/external/libdispatch",
-      "revision": "380f03c180b80d940134fb35783ddc714784a53a",
-      "repository": "https://github.com/darlinghq/darling-libdispatch.git",
+      "revision": "675b8e7b1591a6641ac724c20d39cefca6940123",
+      "repository": "https://github.com/VibeDarling/darling-libdispatch.git",
       "patch": "patches/libdispatch.patch",
       "modified_files": 1,
       "new_files": []
     },
     {
       "path": "src/external/libkqueue",
-      "revision": "b0795a2e1dab5331116770139bfea8d832478f5f",
-      "repository": "https://github.com/darlinghq/darling-libkqueue.git",
+      "revision": "96cee191b28e4bfc30bc5f1c296ee1f80dbbe913",
+      "repository": "https://github.com/VibeDarling/darling-libkqueue.git",
       "patch": "patches/libkqueue.patch",
       "modified_files": 13,
       "new_files": []
     },
     {
       "path": "src/external/libmalloc",
-      "revision": "a57991e2651226a675654bd96e5d9ab6bec288c5",
-      "repository": "https://github.com/darlinghq/darling-libmalloc.git",
+      "revision": "668461dee243e6dcd6ceab0898d967b9573c0920",
+      "repository": "https://github.com/VibeDarling/darling-libmalloc.git",
       "patch": "patches/libmalloc.patch",
       "modified_files": 2,
       "new_files": []
@@ -177,23 +181,15 @@
     {
       "path": "src/external/libnetwork",
       "revision": "56c5fad43f24a40d8ca7f8a1d0badedfeaf7e64e",
-      "repository": "https://github.com/darlinghq/darling-libnetwork.git",
+      "repository": "https://github.com/VibeDarling/darling-libnetwork.git",
       "patch": "patches/libnetwork.patch",
       "modified_files": 2,
       "new_files": []
     },
     {
-      "path": "src/external/libnotify",
-      "revision": "98156d3f847a3ced6c5f52c12a889047bc4f9b20",
-      "repository": "https://github.com/darlinghq/darling-Libnotify.git",
-      "patch": "patches/libnotify.patch",
-      "modified_files": 1,
-      "new_files": []
-    },
-    {
       "path": "src/external/libplatform",
-      "revision": "5a3e5b529d25c70257dcfa97e94f1826e71e9f40",
-      "repository": "https://github.com/darlinghq/darling-libplatform.git",
+      "revision": "28f10ec34a1c5e475edf8be0db8e61f061ed3d49",
+      "repository": "https://github.com/VibeDarling/darling-libplatform.git",
       "patch": "patches/libplatform.patch",
       "modified_files": 6,
       "new_files": [
@@ -201,101 +197,89 @@
       ]
     },
     {
-      "path": "src/external/libpthread",
-      "revision": "f07f265bfbcf071c1adfc808de971e053ea5edc5",
-      "repository": "https://github.com/darlinghq/darling-libpthread.git",
-      "patch": "patches/libpthread.patch",
-      "modified_files": 1,
-      "new_files": []
-    },
-    {
       "path": "src/external/libresolv",
       "revision": "cf955392e5449efb269b8b3510c755085fd36a2d",
-      "repository": "https://github.com/darlinghq/darling-libresolv.git",
+      "repository": "https://github.com/VibeDarling/darling-libresolv.git",
       "patch": "patches/libresolv.patch",
       "modified_files": 1,
       "new_files": []
     },
     {
       "path": "src/external/libtrace",
-      "revision": "8cf07f02b15f7dca6436882a03678fff0392eaf6",
-      "repository": "https://github.com/darlinghq/darling-libtrace.git",
+      "revision": "2311fc0e0fa15d161c49fba6845aa3ea9d1003b3",
+      "repository": "https://github.com/VibeDarling/darling-libtrace.git",
       "patch": "patches/libtrace.patch",
       "modified_files": 1,
       "new_files": []
     },
     {
       "path": "src/external/libxpc",
-      "revision": "394e033333d3c253a12f08a99090c113b0917d00",
-      "repository": "https://github.com/darlinghq/darling-libxpc.git",
+      "revision": "4c39dae702c089229627c568a3096846c83a2eeb",
+      "repository": "https://github.com/VibeDarling/darling-libxpc.git",
       "patch": "patches/libxpc.patch",
       "modified_files": 3,
       "new_files": []
     },
     {
       "path": "src/external/metal",
-      "revision": "ae20248dc144beab899e38752f5a530f28a0ea56",
-      "repository": "https://github.com/darlinghq/darling-metal.git",
+      "revision": "79095644e9bdd1acc6564f8d46bb4eff1c58d161",
+      "repository": "https://github.com/VibeDarling/darling-metal.git",
       "patch": "patches/metal.patch",
-      "modified_files": 27,
+      "modified_files": 31,
       "new_files": [
         "include/Metal/MTLArgument.h",
-        "include/Metal/MTLBlitCommandEncoder.h",
         "include/Metal/MTLExceptionBridge.h",
         "include/Metal/MTLTrace.h",
         "private-include/Metal/MTLArgumentInternal.h",
-        "private-include/Metal/MTLBlitCommandEncoderInternal.h",
-        "private-include/Metal/MTLDeviceInfo.h",
         "private-include/Metal/MTLDepthStencilInternal.h",
-        "private-include/Metal/MTLSamplerStateInternal.h",
+        "private-include/Metal/MTLDeviceInfo.h",
         "private-include/Metal/MTLVertexDescriptorInternal.h",
-        "src/Metal/MTLArgument.mm",
-        "src/Metal/MTLBlitCommandEncoder.mm"
+        "src/Metal/MTLArgument.mm"
       ]
     },
     {
       "path": "src/external/objc4",
-      "revision": "1a12df76d12bfc9fdfffadb290f7742763568765",
-      "repository": "https://github.com/darlinghq/darling-objc4.git",
+      "revision": "16a7d8f1bb964ee4fbcf0f4587397488b8f69c3c",
+      "repository": "https://github.com/VibeDarling/darling-objc4.git",
       "patch": "patches/objc4.patch",
       "modified_files": 2,
       "new_files": []
     },
     {
       "path": "src/external/security",
-      "revision": "3cfffcf2c5b5900169c964facdf42cc05c23005c",
-      "repository": "https://github.com/darlinghq/darling-security.git",
+      "revision": "d3165e9744fd566433ce5a09912eab2d388b62f2",
+      "repository": "https://github.com/VibeDarling/darling-security.git",
       "patch": "patches/security.patch",
       "modified_files": 9,
       "new_files": []
     },
     {
       "path": "src/external/xnu",
-      "revision": "fa29287aa2f0115271e091f1031f53c9e024005d",
-      "repository": "https://github.com/darlinghq/darling-xnu.git",
+      "revision": "a6a452b3c23e3546a1e0a95d0cf2e49b4451b3c2",
+      "repository": "https://github.com/VibeDarling/darling-xnu.git",
       "patch": "patches/xnu.patch",
-      "modified_files": 66,
+      "modified_files": 53,
       "new_files": [
+        "darling/src/libsystem_kernel/emulation/include/common/cpu_frequency.h",
         "darling/src/libsystem_kernel/emulation/include/common/cpu_topology.h",
         "darling/src/libsystem_kernel/emulation/include/common/private_mutex.h",
         "darling/src/libsystem_kernel/emulation/include/common/slowwait.h",
-        "darling/src/libsystem_kernel/emulation/include/conversion/xattr/name.h",
         "darling/src/libsystem_kernel/emulation/include/xnu_syscall/bsd/impl/guarded/change_fdguard_np.h",
         "darling/src/libsystem_kernel/emulation/include/xnu_syscall/bsd/impl/misc/mac_syscall.h",
         "darling/src/libsystem_kernel/emulation/src/xnu_syscall/bsd/impl/guarded/change_fdguard_np.c",
         "darling/src/libsystem_kernel/emulation/src/xnu_syscall/bsd/impl/misc/mac_syscall.c",
-        "libsyscall/wrappers/__sysctlbyname.S",
-        "darling/src/libsystem_kernel/emulation/include/common/cpu_frequency.h",
-        "darling/src/libsystem_kernel/emulation/src/xnu_syscall/bsd/impl/misc/security_user_access.h"
+        "darling/src/libsystem_kernel/emulation/src/xnu_syscall/bsd/impl/misc/security_user_access.h",
+        "libsyscall/wrappers/__sysctlbyname.S"
       ]
     },
     {
       "path": "src/external/metal/deps/indium",
-      "revision": "8423a7d2f053167030d2bc4a227f96243c740667",
-      "repository": "https://github.com/darlinghq/indium.git",
+      "revision": "b0129468e47b36b0501171d1d224a194f3a46be9",
+      "repository": "https://github.com/VibeDarling/indium.git",
       "patch": "patches/metal--deps--indium.patch",
-      "modified_files": 36,
+      "modified_files": 55,
       "new_files": [
+        "private-include/indium/completion-spin.private.hpp",
         "private-include/indium/counters.private.hpp",
         "private-include/indium/deferred-blit-encoder.private.hpp",
         "private-include/indium/deferred-render-encoder.private.hpp",
@@ -308,21 +292,20 @@
         "private-include/indium/submission-batch.private.hpp",
         "private-include/indium/submit-batch.private.hpp",
         "private-include/indium/submit-thread.private.hpp",
-        "private-include/indium/waits.private.hpp",
-        "private-include/indium/completion-spin.private.hpp"
+        "private-include/indium/waits.private.hpp"
       ]
     },
     {
       "path": "src/external/cfnetwork",
-      "revision": "e7e3db881008d883f82914765a72ce842bcba735",
-      "repository": "https://github.com/darlinghq/darling-cfnetwork.git",
+      "revision": "9f6fbdd78cc66e4882ea3bc50d3fb023fba29187",
+      "repository": "https://github.com/VibeDarling/darling-cfnetwork.git",
       "patch": "patches/cfnetwork.patch",
-      "modified_files": 4,
+      "modified_files": 1,
       "new_files": []
     },
     {
       "path": "src/external/cctools-port",
-      "revision": "d9456c221e1f462e17c0b3297748bc089d5a861e",
+      "revision": "dd8af1d2a7a6179fe0a08a15aca471697383d82e",
       "patch": "patches/cctools-port.patch"
     }
   ],

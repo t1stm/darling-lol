@@ -1,8 +1,8 @@
 diff --git a/darling/src/libsystem_kernel/CMakeLists.txt b/darling/src/libsystem_kernel/CMakeLists.txt
-index e14e7ea..024981b 100644
+index 8e754fe..4a84bbf 100644
 --- a/darling/src/libsystem_kernel/CMakeLists.txt
 +++ b/darling/src/libsystem_kernel/CMakeLists.txt
-@@ -40,7 +40,11 @@ add_circular(system_kernel FAT
+@@ -44,7 +44,11 @@ add_circular(system_kernel FAT
  		$<IF:$<BOOL:${BUILD_TARGET_64BIT}>,$<TARGET_OBJECTS:libsyscall_64>,>
  		$<TARGET_OBJECTS:libsyscall>
  		$<TARGET_OBJECTS:libsyscall_dynamic>
@@ -15,7 +15,7 @@ index e14e7ea..024981b 100644
  		$<TARGET_OBJECTS:emulation>
  	SIBLINGS
  		system_c
-@@ -48,6 +52,12 @@ add_circular(system_kernel FAT
+@@ -52,6 +56,12 @@ add_circular(system_kernel FAT
  		system_dyld
  	DEPENDENCIES
  		libsimple_darling
@@ -29,22 +29,25 @@ index e14e7ea..024981b 100644
  #target_link_libraries(system_kernel system_duct platform_static32 platform_static64)
  make_fat(system_kernel)
 diff --git a/darling/src/libsystem_kernel/emulation/CMakeLists.txt b/darling/src/libsystem_kernel/emulation/CMakeLists.txt
-index 5b2e765..40308eb 100644
+index 09e5bf1..29c3dc9 100644
 --- a/darling/src/libsystem_kernel/emulation/CMakeLists.txt
 +++ b/darling/src/libsystem_kernel/emulation/CMakeLists.txt
-@@ -6,13 +6,12 @@ enable_language(ASM)
+@@ -6,17 +6,12 @@ enable_language(ASM)
  set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -std=gnu99 -fvisibility=hidden -fPIC -fno-builtin -ggdb -Wno-int-conversion -Wno-compare-distinct-pointer-types")
  set(CMAKE_SHARED_LINKER_FLAGS "${CMAKE_SHARED_LINKER_FLAGS} -nostdlib")
  
+-# This controls only kern.osproductversion, not the parent SystemVersion.plist.
+-set(DARLING_EMULATED_OS_PRODUCT_VERSION "26.0" CACHE STRING
+-	"Product version returned by kern.osproductversion (requires rebuilding libsystem_kernel)")
++add_definitions(-DBSDTHREAD_WRAP_LINUX_PTHREAD)
+ 
 -add_definitions(-DBSDTHREAD_WRAP_LINUX_PTHREAD
 -	-DEMULATED_SYSNAME="Darwin"
--	-DEMULATED_RELEASE="20.6.0"
--	-DEMULATED_VERSION="Darwin Kernel Version 20.6.0"
+-	-DEMULATED_RELEASE="25.0.0"
+-	-DEMULATED_VERSION="Darwin Kernel Version 25.0.0"
 -	-DEMULATED_OSVERSION="20G1120"
--	-DEMULATED_OSPRODUCTVERSION="11.7.4"
+-	-DEMULATED_OSPRODUCTVERSION="${DARLING_EMULATED_OS_PRODUCT_VERSION}"
 -)
-+add_definitions(-DBSDTHREAD_WRAP_LINUX_PTHREAD)
-+
 +# Quoted values are kept off the directory-wide definitions: those are pasted unescaped
 +# into the mig command lines, which breaks the shell quoting.
 +set_source_files_properties(src/xnu_syscall/bsd/helper/misc/sysctl_kern.c PROPERTIES COMPILE_DEFINITIONS
@@ -52,7 +55,7 @@ index 5b2e765..40308eb 100644
  
  # include src/startup for rtsig.h
  include_directories(
-@@ -134,6 +133,7 @@ set(xnu_syscall_bsd_sources
+@@ -140,6 +135,7 @@ set(xnu_syscall_bsd_sources
  	src/xnu_syscall/bsd/impl/guarded/guarded_close_np.c
  	src/xnu_syscall/bsd/impl/guarded/guarded_kqueue_np.c
  	src/xnu_syscall/bsd/impl/guarded/guarded_open_np.c
@@ -60,15 +63,15 @@ index 5b2e765..40308eb 100644
  	src/xnu_syscall/bsd/impl/hfs/stub.c
  	src/xnu_syscall/bsd/impl/ioctl/ioctl.c
  	src/xnu_syscall/bsd/impl/kqueue/kevent.c
-@@ -153,6 +153,7 @@ set(xnu_syscall_bsd_sources
- 	src/xnu_syscall/bsd/impl/misc/getrlimit.c
+@@ -161,6 +157,7 @@ set(xnu_syscall_bsd_sources
  	src/xnu_syscall/bsd/impl/misc/getrusage.c
  	src/xnu_syscall/bsd/impl/misc/iopolicysys.c
+ 	src/xnu_syscall/bsd/impl/misc/kdebug_trace.c
 +	src/xnu_syscall/bsd/impl/misc/mac_syscall.c
  	src/xnu_syscall/bsd/impl/misc/proc_info.c
  	src/xnu_syscall/bsd/impl/misc/ptrace.c
  	src/xnu_syscall/bsd/impl/misc/reboot.c
-@@ -359,6 +360,11 @@ set(emulation_sources
+@@ -371,6 +368,11 @@ set(emulation_sources
  	${CMAKE_BINARY_DIR}/src/external/darlingserver/src/rpc.c
  )
  
@@ -81,7 +84,7 @@ index 5b2e765..40308eb 100644
  set_source_files_properties(src/legacy_path/signal/sigexc.c PROPERTIES OBJECT_DEPENDS ${CMAKE_CURRENT_BINARY_DIR}/src/legacy_path/signal/exc.h)
  set_source_files_properties(${CMAKE_BINARY_DIR}/src/external/darlingserver/src/rpc.c PROPERTIES
 diff --git a/darling/src/libsystem_kernel/emulation/include/common/base.h b/darling/src/libsystem_kernel/emulation/include/common/base.h
-index 207dae6..f5e96db 100644
+index b3e7591..9406763 100644
 --- a/darling/src/libsystem_kernel/emulation/include/common/base.h
 +++ b/darling/src/libsystem_kernel/emulation/include/common/base.h
 @@ -11,13 +11,13 @@
@@ -115,6 +118,33 @@ index 207dae6..f5e96db 100644
  #ifndef BUILDING_BASE_C
  
  VISIBLE
+diff --git a/darling/src/libsystem_kernel/emulation/include/common/cpu_frequency.h b/darling/src/libsystem_kernel/emulation/include/common/cpu_frequency.h
+new file mode 100644
+index 0000000..eb90f43
+--- /dev/null
++++ b/darling/src/libsystem_kernel/emulation/include/common/cpu_frequency.h
+@@ -0,0 +1,21 @@
++#ifndef DARLING_CPU_FREQUENCY_H
++#define DARLING_CPU_FREQUENCY_H
++#include <stdint.h>
++#include <stdbool.h>
++
++// Linux cpufreq exposes kHz; Darwin's hw.cpufrequency is an unsigned 64-bit Hz value.
++static inline bool darling_frequency_hz(const char* text, uint64_t* result)
++{
++    uint64_t value = 0;
++    if (!text || !result || *text < '0' || *text > '9') return false;
++    do {
++        unsigned digit = (unsigned)(*text++ - '0');
++        if (value > (UINT64_MAX - digit) / 10) return false;
++        value = value * 10 + digit;
++    } while (*text >= '0' && *text <= '9');
++    while (*text == ' ' || *text == '\t' || *text == '\r' || *text == '\n') ++text;
++    if (*text || !value || value > UINT64_MAX / 1000) return false;
++    *result = value * 1000;
++    return true;
++}
++#endif
 diff --git a/darling/src/libsystem_kernel/emulation/include/common/cpu_topology.h b/darling/src/libsystem_kernel/emulation/include/common/cpu_topology.h
 new file mode 100644
 index 0000000..8ae1665
@@ -480,81 +510,6 @@ index 0000000..c310159
 +
 +
 +#endif
-diff --git a/darling/src/libsystem_kernel/emulation/include/conversion/xattr/name.h b/darling/src/libsystem_kernel/emulation/include/conversion/xattr/name.h
-new file mode 100644
-index 0000000..976e5d0
---- /dev/null
-+++ b/darling/src/libsystem_kernel/emulation/include/conversion/xattr/name.h
-@@ -0,0 +1,69 @@
-+#ifndef DARLING_CONVERSION_XATTR_NAME
-+#define DARLING_CONVERSION_XATTR_NAME
-+
-+#include <darling/emulation/conversion/errno.h>
-+
-+/*
-+ * darling-lol: macOS xattr names have no namespace prefix
-+ * (e.g. "com.apple.quarantine", "org.chromium.crashpad.database.initialized").
-+ * Linux requires the "user." namespace for names an unprivileged process may
-+ * set/get, and returns ENOTSUP (95) otherwise. Darwin's own xattr layer is
-+ * namespace-less, so translate on the way in/out.
-+ *
-+ * Rules:
-+ *  - "" (Darwin: list/remove all) is passed through unchanged.
-+ *  - names already carrying a Linux namespace ("user.", "trusted.",
-+ *    "system.", "security.") are passed through (avoid double-prefixing).
-+ *  - everything else gets "user." prepended.
-+ *
-+ * OUT must have room for 5 extra bytes + NUL. Returns `name` or `out`.
-+ */
-+static inline const char* xattr_name_to_linux(const char* name, char* out, unsigned long outsz)
-+{
-+	unsigned long i = 0;
-+
-+	if (name == 0 || name[0] == '\0')
-+		return name;
-+
-+	if (__builtin_strncmp(name, "user.", 5) == 0 ||
-+	    __builtin_strncmp(name, "trusted.", 8) == 0 ||
-+	    __builtin_strncmp(name, "system.", 7) == 0 ||
-+	    __builtin_strncmp(name, "security.", 9) == 0)
-+		return name;
-+
-+	if (out == 0 || outsz < 6)
-+		return name;
-+
-+	out[0] = 'u'; out[1] = 's'; out[2] = 'e'; out[3] = 'r'; out[4] = '.';
-+	for (i = 0; name[i] != '\0' && i + 5 < outsz - 1; i++)
-+		out[i + 5] = name[i];
-+	out[i + 5] = '\0';
-+	return out;
-+}
-+
-+/*
-+ * Reverse: strip a leading "user." when returning names to Darwin callers
-+ * (listxattr). Mutates `name` in place (the buffer is caller-owned and the
-+ * caller only needs a valid NUL-terminated name at the same address).
-+ * Returns the (possibly advanced) pointer for convenience.
-+ */
-+static inline char* xattr_name_from_linux(char* name)
-+{
-+	if (name != 0 && __builtin_strncmp(name, "user.", 5) == 0)
-+		return name + 5;
-+	return name;
-+}
-+
-+/*
-+ * Linux reports a missing attribute as ENODATA; Darwin reports ENOATTR (93),
-+ * which callers test for to tell "no such attribute" from a real failure.
-+ * LINUX_ERRNO is the negative value returned by the Linux xattr syscall.
-+ */
-+static inline long xattr_errno_to_bsd(long linux_errno)
-+{
-+	if (linux_errno == -61 /* LINUX_ENODATA */)
-+		return -93 /* ENOATTR */;
-+	return errno_linux_to_bsd(linux_errno);
-+}
-+
-+#endif /* DARLING_CONVERSION_XATTR_NAME */
 diff --git a/darling/src/libsystem_kernel/emulation/include/linux_premigration/resources/dserver-rpc-defs.h b/darling/src/libsystem_kernel/emulation/include/linux_premigration/resources/dserver-rpc-defs.h
 index f6588cc..c60d8f9 100644
 --- a/darling/src/libsystem_kernel/emulation/include/linux_premigration/resources/dserver-rpc-defs.h
@@ -809,19 +764,6 @@ index 5d4beb5..9d5de46 100644
  
  long sys_ptrace(int request, int pid, void* addr, int data);
  
-diff --git a/darling/src/libsystem_kernel/emulation/include/xnu_syscall/bsd/impl/psynch/ulock_wait.h b/darling/src/libsystem_kernel/emulation/include/xnu_syscall/bsd/impl/psynch/ulock_wait.h
-index 90bc146..5bcea21 100644
---- a/darling/src/libsystem_kernel/emulation/include/xnu_syscall/bsd/impl/psynch/ulock_wait.h
-+++ b/darling/src/libsystem_kernel/emulation/include/xnu_syscall/bsd/impl/psynch/ulock_wait.h
-@@ -5,6 +5,8 @@
- 
- long sys_ulock_wait(uint32_t operation, void* addr, uint64_t value, uint32_t timeout);
- 
-+long sys_ulock_wait2(uint32_t operation, void* addr, uint64_t value, uint64_t timeout, uint64_t value2);
-+
- #define XNU_UL_OPCODE_MASK		0xff
- #define XNU_UL_COMPARE_AND_WAIT	1
- #define XNU_UL_UNFAIR_LOCK		2
 diff --git a/darling/src/libsystem_kernel/emulation/src/common/base.c b/darling/src/libsystem_kernel/emulation/src/common/base.c
 index d077d04..3dcafea 100644
 --- a/darling/src/libsystem_kernel/emulation/src/common/base.c
@@ -1450,67 +1392,6 @@ index f27a888..1bbfc73 100644
  	rv = LINUX_SYSCALL(__NR_clock_gettime, __clockid, __res);
  	if (rv < 0)
  	{
-diff --git a/darling/src/libsystem_kernel/emulation/src/linux_premigration/ext/file_handle.c b/darling/src/libsystem_kernel/emulation/src/linux_premigration/ext/file_handle.c
-index 08c05fd..b51d66d 100644
---- a/darling/src/libsystem_kernel/emulation/src/linux_premigration/ext/file_handle.c
-+++ b/darling/src/libsystem_kernel/emulation/src/linux_premigration/ext/file_handle.c
-@@ -1,7 +1,7 @@
- #include <darling/emulation/linux_premigration/ext/file_handle.h>
- 
- #include <sys/errno.h>
--#include <os/lock.h>
-+#include <darling/emulation/common/private_mutex.h>
- 
- #include <darling/emulation/conversion/errno.h>
- #include <darling/emulation/conversion/fcntl/open.h>
-@@ -27,10 +27,8 @@ struct SavedRef
- #define MOUNT_ID_SAVED (-100)
- static struct SavedRef g_savedRefs[200];
- static int g_nextSavedRef = 0, g_nextGen = 0;
--static os_unfair_lock g_savedRefLock = OS_UNFAIR_LOCK_INIT;
-+static emulation_mutex g_savedRefLock = EMULATION_MUTEX_INITIALIZER;
- 
--void __attribute__((weak)) os_unfair_lock_unlock(os_unfair_lock_t lock) {}
--void __attribute__((weak)) os_unfair_lock_lock(os_unfair_lock_t lock) {}
- 
- VISIBLE
- int sys_name_to_handle(const char* name, RefData* ref, int follow)
-@@ -53,7 +51,7 @@ int sys_name_to_handle(const char* name, RefData* ref, int follow)
- 	// This is unfortunately the case for overlayfs, which doesn't support "nfs_export" along with "metacopy"
- 	if (ret == -LINUX_EOPNOTSUPP && sys_access(name, 0) == 0)
- 	{
--		os_unfair_lock_lock(&g_savedRefLock);
-+		emulation_mutex_lock(&g_savedRefLock);
- 
- 		if (g_savedRefs[g_nextSavedRef].path)
- 			free(g_savedRefs[g_nextSavedRef].path);
-@@ -66,7 +64,7 @@ int sys_name_to_handle(const char* name, RefData* ref, int follow)
- 
- 		g_nextSavedRef = (g_nextSavedRef + 1) % (sizeof(g_savedRefs) / sizeof(g_savedRefs[0]));
- 
--		os_unfair_lock_unlock(&g_savedRefLock);
-+		emulation_mutex_unlock(&g_savedRefLock);
- 
- 		ret = 0;
- 	}
-@@ -83,7 +81,7 @@ int sys_handle_to_name(RefData* ref, char name[4096])
- 	if (ref->mount_id == MOUNT_ID_SAVED)
- 	{
- 		int ret = -ENOENT;
--		os_unfair_lock_lock(&g_savedRefLock);
-+		emulation_mutex_lock(&g_savedRefLock);
- 
- 		if (g_savedRefs[ref->index].gen == ref->gen)
- 		{
-@@ -91,7 +89,7 @@ int sys_handle_to_name(RefData* ref, char name[4096])
- 			ret = sys_access(name, 0);
- 		}
- 
--		os_unfair_lock_unlock(&g_savedRefLock);
-+		emulation_mutex_unlock(&g_savedRefLock);
- 		return ret;
- 	}
- 
 diff --git a/darling/src/libsystem_kernel/emulation/src/linux_premigration/ext/sched_yield.c b/darling/src/libsystem_kernel/emulation/src/linux_premigration/ext/sched_yield.c
 index dc8fbb8..171746a 100644
 --- a/darling/src/libsystem_kernel/emulation/src/linux_premigration/ext/sched_yield.c
@@ -1576,15 +1457,16 @@ index dc8fbb8..171746a 100644
 +	__linux_sched_yield_site("SWTYLD");
 +}
 diff --git a/darling/src/libsystem_kernel/emulation/src/linux_premigration/signal/sigexc.c b/darling/src/libsystem_kernel/emulation/src/linux_premigration/signal/sigexc.c
-index 206e92e..1a763fe 100644
+index fef6384..f3277ff 100644
 --- a/darling/src/libsystem_kernel/emulation/src/linux_premigration/signal/sigexc.c
 +++ b/darling/src/libsystem_kernel/emulation/src/linux_premigration/signal/sigexc.c
-@@ -151,8 +151,13 @@ void sigrt_handler(int signum, struct linux_siginfo* info, struct linux_ucontext
+@@ -195,7 +195,15 @@ void sigrt_handler(int signum, struct linux_siginfo* info, struct linux_ucontext
  	int status = dserver_rpc_interrupt_enter();
  
  	if (status != 0) {
--		__simple_printf("*** dserver_rpc_interrupt_enter failed with code %d ***\n", status);
--		__simple_abort();
+-		rpc_failed_in_handler("dserver_rpc_interrupt_enter", status);
++		if (is_server_gone(status))
++			exit_server_gone();
 +		/* darling-lol: same rationale as sigexc_handler -- do not abort
 +		 * inside the handler when darlingserver is unreachable. RT
 +		 * signals are control traffic; if we cannot service them, we
@@ -1595,9 +1477,9 @@ index 206e92e..1a763fe 100644
  	}
  
  	if (signum == SIGNAL_SIGEXC_SUSPEND) {
-@@ -267,13 +272,165 @@ static void state_from_kernel(struct linux_ucontext* ctxt, const void* tstate, c
+@@ -347,6 +355,93 @@ static bool emulate_darling_tsd_read(struct linux_ucontext* ctxt)
+ 
  #endif
- }
  
 +/* Avoid recursive fault reporting; normal signal handling still runs. */
 +static int _lol_depth = 0;
@@ -1688,6 +1570,10 @@ index 206e92e..1a763fe 100644
 +
  void sigexc_handler(int linux_signum, struct linux_siginfo* info, struct linux_ucontext* ctxt)
  {
+ #if defined(__aarch64__) || defined(__arm64__)
+@@ -422,9 +517,77 @@ void sigexc_handler(int linux_signum, struct linux_siginfo* info, struct linux_u
+ 	}
+ 
  	int status = dserver_rpc_interrupt_enter();
 +	if (forward_native_resize_signal(linux_signum, status))
 +		return;
@@ -1702,6 +1588,9 @@ index 206e92e..1a763fe 100644
 +#endif
  
  	if (status != 0) {
+-		rpc_failed_in_handler("dserver_rpc_interrupt_enter", status);
++		if (is_server_gone(status))
++			exit_server_gone();
 +		/* darling-lol: previously this hard-aborted, which killed the
 +		 * process inside the signal handler and hid the original fault
 +		 * (e.g. a freshly-forked/spawned thread whose per-thread RPC
@@ -1710,8 +1599,7 @@ index 206e92e..1a763fe 100644
 +		 * matters most: report WHERE the fault happened, then apply the
 +		 * default signal effects so the process terminates for the
 +		 * right reason instead of via our abort(). */
- 		__simple_printf("*** dserver_rpc_interrupt_enter failed with code %d ***\n", status);
--		__simple_abort();
++		__simple_printf("*** dserver_rpc_interrupt_enter failed with code %d ***\n", status);
 +#ifdef __x86_64__
 +		_lol_depth = 1;
 +		_lol_log_fault(linux_signum, info, ctxt);
@@ -1762,26 +1650,11 @@ index 206e92e..1a763fe 100644
  	}
  
  	kern_printf("sigexc_handler(%d, %p, %p)\n", linux_signum, info, ctxt);
-@@ -359,7 +516,13 @@ void sigexc_handler(int linux_signum, struct linux_siginfo* info, struct linux_u
- 						sizeof(sa.sa_mask));
- 
- 				// Resend signal to self
--				LINUX_SYSCALL(__NR_kill, 0, linux_signum);
-+				// (darling-lol: tgkill, thread-only -- kill(0, sig) hit
-+				// the whole process group and massacred siblings; the
-+				// comment always said "self".)
-+				LINUX_SYSCALL(__NR_tgkill,
-+					LINUX_SYSCALL(__NR_getpid),
-+					LINUX_SYSCALL(__NR_gettid),
-+					linux_signum);
- 			}
- 		}
- 	}
 diff --git a/darling/src/libsystem_kernel/emulation/src/other/mach/lkm.c b/darling/src/libsystem_kernel/emulation/src/other/mach/lkm.c
-index 8c6d5d9..6fd1acf 100644
+index 4f06d3d..44bc22a 100644
 --- a/darling/src/libsystem_kernel/emulation/src/other/mach/lkm.c
 +++ b/darling/src/libsystem_kernel/emulation/src/other/mach/lkm.c
-@@ -97,6 +97,15 @@ void mach_driver_init(const char** applep)
+@@ -149,6 +149,15 @@ void mach_driver_init(const char** applep)
  		// we're being called in the child after a fork; let xtrace know about it
  		_xtrace_postfork_child();
  	}
@@ -1797,7 +1670,7 @@ index 8c6d5d9..6fd1acf 100644
  }
  
  __attribute__((visibility("default")))
-@@ -128,12 +137,20 @@ uint64_t mach_absolute_time(void)
+@@ -185,12 +194,20 @@ uint64_t mach_absolute_time(void)
  {
  	struct timespec ts;
  	uint64_t out;
@@ -1822,10 +1695,10 @@ index 8c6d5d9..6fd1acf 100644
  }
  
 diff --git a/darling/src/libsystem_kernel/emulation/src/xnu_syscall/bsd/bsd_syscall_table.c b/darling/src/libsystem_kernel/emulation/src/xnu_syscall/bsd/bsd_syscall_table.c
-index 7d5ef80..46debb8 100644
+index 58f79f3..72c5368 100644
 --- a/darling/src/libsystem_kernel/emulation/src/xnu_syscall/bsd/bsd_syscall_table.c
 +++ b/darling/src/libsystem_kernel/emulation/src/xnu_syscall/bsd/bsd_syscall_table.c
-@@ -24,6 +24,7 @@
+@@ -26,6 +26,7 @@
  #include <darling/emulation/xnu_syscall/bsd/impl/fcntl/openat.h>
  #include <darling/emulation/xnu_syscall/bsd/impl/guarded/guarded_close_np.h>
  #include <darling/emulation/xnu_syscall/bsd/impl/guarded/guarded_kqueue_np.h>
@@ -1833,15 +1706,15 @@ index 7d5ef80..46debb8 100644
  #include <darling/emulation/xnu_syscall/bsd/impl/guarded/guarded_open_np.h>
  #include <darling/emulation/xnu_syscall/bsd/impl/hfs/stub.h>
  #include <darling/emulation/xnu_syscall/bsd/impl/ioctl/ioctl.h>
-@@ -44,6 +45,7 @@
- #include <darling/emulation/xnu_syscall/bsd/impl/misc/getrlimit.h>
+@@ -48,6 +49,7 @@
  #include <darling/emulation/xnu_syscall/bsd/impl/misc/getrusage.h>
  #include <darling/emulation/xnu_syscall/bsd/impl/misc/iopolicysys.h>
+ #include <darling/emulation/xnu_syscall/bsd/impl/misc/kdebug_trace.h>
 +#include <darling/emulation/xnu_syscall/bsd/impl/misc/mac_syscall.h>
  #include <darling/emulation/xnu_syscall/bsd/impl/misc/proc_info.h>
  #include <darling/emulation/xnu_syscall/bsd/impl/misc/ptrace.h>
  #include <darling/emulation/xnu_syscall/bsd/impl/misc/reboot.h>
-@@ -427,6 +429,7 @@ void* __bsd_syscall_table[600] = {
+@@ -439,6 +441,7 @@ void* __bsd_syscall_table[600] = {
  	[369] = sys_kevent64,
  	[372] = sys_thread_selfid,
  	[374] = sys_kevent_qos,
@@ -1849,36 +1722,28 @@ index 7d5ef80..46debb8 100644
  	[394] = sys_pselect,
  	[395] = sys_pselect_nocancel,
  	[396] = sys_read_nocancel,
-@@ -462,6 +465,7 @@ void* __bsd_syscall_table[600] = {
- 	[441] = sys_guarded_open_np,
- 	[442] = sys_guarded_close_np,
+@@ -476,6 +479,7 @@ void* __bsd_syscall_table[600] = {
  	[443] = sys_guarded_kqueue_np,
+ 	[447] = sys_connectx,
+ 	[448] = sys_disconnectx,
 +	[444] = sys_change_fdguard_np,
  	[461] = sys_getattrlistbulk,
  	[462] = sys_clonefileat,
  	[463] = sys_openat,
-@@ -483,6 +487,7 @@ void* __bsd_syscall_table[600] = {
- 	[500] = sys_getentropy,
- 	[515] = sys_ulock_wait,
- 	[516] = sys_ulock_wake,
-+	[544] = sys_ulock_wait2,
- 	[517] = sys_fclonefileat,
- 	[521] = sys_abort_with_payload,
- 	[524] = sys_setattrlistat,
 diff --git a/darling/src/libsystem_kernel/emulation/src/xnu_syscall/bsd/helper/misc/sysctl_hw.c b/darling/src/libsystem_kernel/emulation/src/xnu_syscall/bsd/helper/misc/sysctl_hw.c
-index f273989..058b985 100644
+index bee22ba..9cfb177 100644
 --- a/darling/src/libsystem_kernel/emulation/src/xnu_syscall/bsd/helper/misc/sysctl_hw.c
 +++ b/darling/src/libsystem_kernel/emulation/src/xnu_syscall/bsd/helper/misc/sysctl_hw.c
-@@ -9,6 +9,8 @@
+@@ -10,6 +10,8 @@
  #include <darling/emulation/xnu_syscall/bsd/helper/misc/sysctl_proc.h>
  #include <darling/emulation/linux_premigration/ext/sys/utsname.h>
  #include <darling/emulation/common/simple.h>
 +#include <darling/emulation/common/cpu_topology.h>
 +#include <darling/emulation/common/cpu_frequency.h>
  #include <darling/emulation/common/string.h>
- 
- extern kern_return_t mach_port_deallocate(ipc_space_t task, mach_port_name_t name);
-@@ -16,6 +18,7 @@ extern kern_return_t host_info(mach_port_name_t host, int itype, void* hinfo, ma
+ #include <darling/emulation/xnu_syscall/bsd/helper/misc/readline.h>
+ #include <darling/emulation/xnu_syscall/bsd/impl/fcntl/open.h>
+@@ -21,6 +23,7 @@ extern kern_return_t host_info(mach_port_name_t host, int itype, void* hinfo, ma
  
  /* Darling specific */
  enum {
@@ -1886,10 +1751,10 @@ index f273989..058b985 100644
  	_HW_PHYSICAL_CPU = 1000,
  	_HW_PHYSICAL_CPU_MAX,
  	_HW_LOGICAL_CPU,
-@@ -24,10 +27,14 @@ enum {
- 	_HW_CPUSUBTYPE,
+@@ -30,10 +33,14 @@ enum {
  	_HW_CPUTHREADTYPE,
  	_HW_64BITCAPABLE,
+ 	_HW_PACKAGES,
 -	_HW_CPUFREQUENCY = 15,
 +	_HW_CPUFREQUENCY_COMPAT = 15,
 +	_HW_CPUFREQUENCY = 1500,
@@ -1902,12 +1767,14 @@ index f273989..058b985 100644
  static sysctl_handler(handle_physicalcpu);
  static sysctl_handler(handle_physicalcpu_max);
  static sysctl_handler(handle_logicalcpu);
-@@ -39,11 +46,78 @@ static sysctl_handler(handle_cpusubtype);
+@@ -45,13 +52,80 @@ static sysctl_handler(handle_cpusubtype);
  static sysctl_handler(handle_cputhreadtype);
  static sysctl_handler(handle_cpu64bitcapable);
  static sysctl_handler(handle_machine);
 +static sysctl_handler(handle_model);
  static sysctl_handler(handle_cpufrequency);
+ static sysctl_handler(handle_cachelinesize);
+ static sysctl_handler(handle_packages);
 +static sysctl_handler(handle_cpufrequency_compat);
 +static sysctl_handler(handle_cacheconfig);
 +static sysctl_handler(handle_cachesize);
@@ -1982,11 +1849,13 @@ index f273989..058b985 100644
  	{ .oid = _HW_PHYSICAL_CPU, .type = CTLTYPE_INT, .exttype = "", .name = "physicalcpu", .handler = handle_physicalcpu },
  	{ .oid = _HW_PHYSICAL_CPU_MAX, .type = CTLTYPE_INT, .exttype = "", .name = "physicalcpu_max", .handler = handle_physicalcpu_max },
  	{ .oid = _HW_LOGICAL_CPU, .type = CTLTYPE_INT, .exttype = "", .name = "logicalcpu", .handler = handle_logicalcpu },
-@@ -55,7 +129,12 @@ const struct known_sysctl sysctls_hw[] = {
+@@ -63,9 +137,14 @@ const struct known_sysctl sysctls_hw[] = {
  	{ .oid = _HW_CPUTHREADTYPE, .type = CTLTYPE_INT, .exttype = "", .name = "cputhreadtype", .handler = handle_cputhreadtype },
  	{ .oid = _HW_64BITCAPABLE, .type = CTLTYPE_INT, .exttype = "", .name = "cpu64bit_capable", .handler = handle_cpu64bitcapable },
  	{ .oid = HW_MACHINE, .type = CTLTYPE_STRING, .exttype = "S", .name = "machine", .handler = handle_machine },
 -	{ .oid = _HW_CPUFREQUENCY, .type = CTLTYPE_INT, .exttype = "", .name = "cpufrequency", .handler = handle_cpufrequency },
+ 	{ .oid = HW_CACHELINE, .type = CTLTYPE_QUAD, .exttype = "U", .name = "cachelinesize", .handler = handle_cachelinesize },
+ 	{ .oid = _HW_PACKAGES, .type = CTLTYPE_INT, .exttype = "I", .name = "packages", .handler = handle_packages },
 +	{ .oid = _HW_OPTIONAL, .type = CTLTYPE_NODE, .exttype = "", .name = "optional", .subctls = sysctls_hw_optional },
 +	{ .oid = HW_MODEL, .type = CTLTYPE_STRING, .exttype = "S", .name = "model", .handler = handle_model },
 +	{ .oid = _HW_CPUFREQUENCY, .type = CTLTYPE_QUAD, .exttype = "Q", .name = "cpufrequency", .handler = handle_cpufrequency },
@@ -1996,7 +1865,7 @@ index f273989..058b985 100644
  	{ .oid = -1 }
  };
  
-@@ -71,6 +150,32 @@ static const struct host_basic_info* gethostinfo(void)
+@@ -81,6 +160,32 @@ static const struct host_basic_info* gethostinfo(void)
  		hself = mach_host_self();
  		host_info(hself, HOST_BASIC_INFO, &hinfo, &hcount);
  		mach_port_deallocate(mach_task_self(), hself);
@@ -2029,7 +1898,7 @@ index f273989..058b985 100644
  	}
  
  	return &hinfo;
-@@ -83,6 +188,13 @@ sysctl_handler(handle_availcpu)
+@@ -93,6 +198,13 @@ sysctl_handler(handle_availcpu)
  	return 0;
  }
  
@@ -2043,7 +1912,7 @@ index f273989..058b985 100644
  sysctl_handler(handle_physicalcpu)
  {
  	sysctl_handle_size(sizeof(int));
-@@ -169,16 +281,49 @@ sysctl_handler(handle_cputhreadtype)
+@@ -181,16 +293,49 @@ sysctl_handler(handle_cputhreadtype)
  	return 0;
  }
  
@@ -2100,9 +1969,9 @@ index f273989..058b985 100644
  }
  
  sysctl_handler(handle_cpu64bitcapable)
-@@ -193,3 +338,104 @@ sysctl_handler(handle_machine)
- 	copyout_string(need_uname()->machine, (char*) old, oldlen);
- 	return 0;
+@@ -252,3 +397,104 @@ sysctl_handler(handle_packages)
+     *(uint32_t*)old = count ? count : 1;
+     return 0;
  }
 +
 +sysctl_handler(handle_model)
@@ -2206,10 +2075,10 @@ index f273989..058b985 100644
 +	return 0;
 +}
 diff --git a/darling/src/libsystem_kernel/emulation/src/xnu_syscall/bsd/helper/misc/sysctl_kern.c b/darling/src/libsystem_kernel/emulation/src/xnu_syscall/bsd/helper/misc/sysctl_kern.c
-index bd9cdc2..83ad15c 100644
+index 60683e3..4a341df 100644
 --- a/darling/src/libsystem_kernel/emulation/src/xnu_syscall/bsd/helper/misc/sysctl_kern.c
 +++ b/darling/src/libsystem_kernel/emulation/src/xnu_syscall/bsd/helper/misc/sysctl_kern.c
-@@ -139,18 +139,23 @@ sysctl_handler(handle_boottime)
+@@ -146,18 +146,23 @@ sysctl_handler(handle_boottime)
  	// Fill in struct timeval { tv_sec, tv_usec }
  	struct sysinfo info;
  	struct bsd_timeval* tv;
@@ -2225,14 +2094,14 @@ index bd9cdc2..83ad15c 100644
  	{
  		if (*oldlen < sizeof(*tv))
  			return -EINVAL;
--		sys_gettimeofday(tv, NULL);
+-		sys_gettimeofday(tv, NULL, NULL);
 -
 -		tv->tv_sec -= info.uptime;
 +		if (boot_sec == 0)
 +		{
 +			if (__linux_sysinfo(&info) == -1)
 +				return -errno;
-+			sys_gettimeofday(tv, NULL);
++			sys_gettimeofday(tv, NULL, NULL);
 +			boot_sec = tv->tv_sec - info.uptime;
 +		}
 +		tv->tv_sec = boot_sec;
@@ -2240,7 +2109,7 @@ index bd9cdc2..83ad15c 100644
  		// we don't want the microseconds to be constantly jumping around
  		// (that actually causes an infinite loop in `_mach_boottime_usec` in libc)
 diff --git a/darling/src/libsystem_kernel/emulation/src/xnu_syscall/bsd/helper/misc/sysctl_machdep.c b/darling/src/libsystem_kernel/emulation/src/xnu_syscall/bsd/helper/misc/sysctl_machdep.c
-index 4319355..122ad3a 100644
+index e1865fd..bd0f159 100644
 --- a/darling/src/libsystem_kernel/emulation/src/xnu_syscall/bsd/helper/misc/sysctl_machdep.c
 +++ b/darling/src/libsystem_kernel/emulation/src/xnu_syscall/bsd/helper/misc/sysctl_machdep.c
 @@ -4,6 +4,7 @@
@@ -2251,15 +2120,15 @@ index 4319355..122ad3a 100644
  #include <darling/emulation/conversion/fcntl/open.h>
  #include <darling/emulation/xnu_syscall/bsd/impl/fcntl/open.h>
  #include <darling/emulation/xnu_syscall/bsd/helper/misc/readline.h>
-@@ -25,6 +26,7 @@ enum {
- 	_CPU_BRAND_STRING,
- 	_CPU_FEATURES,
+@@ -90,6 +91,7 @@ enum {
  	_CPU_CORE_COUNT,
+ 	_CPU_SIGNATURE,
+ 	_CPU_FEATURE_BITS,
 +	_CPU_THREAD_COUNT,
  };
  
  static sysctl_handler(handle_vendor);
-@@ -32,9 +34,15 @@ static sysctl_handler(handle_max_basic);
+@@ -97,11 +99,17 @@ static sysctl_handler(handle_max_basic);
  static sysctl_handler(handle_family);
  static sysctl_handler(handle_model);
  static sysctl_handler(handle_stepping);
@@ -2273,76 +2142,32 @@ index 4319355..122ad3a 100644
 +
 +sysctl_handler(handle_features);
  static sysctl_handler(handle_core_count);
+ static sysctl_handler(handle_signature);
+ static sysctl_handler(handle_feature_bits);
 +static sysctl_handler(handle_thread_count);
  
  const struct known_sysctl sysctls_machdep_cpu[] = {
      { .oid = _CPU_MAX_BASIC, .type = CTLTYPE_INT, .exttype = "I", .name = "max_basic", .handler = handle_max_basic },
-@@ -42,9 +50,10 @@ const struct known_sysctl sysctls_machdep_cpu[] = {
-     { .oid = _CPU_FAMILY, .type = CTLTYPE_INT, .exttype = "I", .name = "family", .handler = handle_family },
- 		{ .oid = _CPU_MODEL, .type = CTLTYPE_INT, .exttype = "I", .name = "model", .handler = handle_model },
- 		{ .oid = _CPU_STEPPING, .type = CTLTYPE_INT, .exttype = "I", .name = "stepping", .handler = handle_stepping },
--		{ .oid = _CPU_BRAND_STRING, .type = CTLTYPE_STRING, .exttype = "S", .name = "vendor", .handler = handle_brand_string },
-+		{ .oid = _CPU_BRAND_STRING, .type = CTLTYPE_STRING, .exttype = "S", .name = "brand_string", .handler = handle_brand_string },
- 		{ .oid = _CPU_FEATURES, .type = CTLTYPE_STRING, .exttype = "S", .name = "features", .handler = handle_features },
+@@ -114,6 +122,7 @@ const struct known_sysctl sysctls_machdep_cpu[] = {
  		{ .oid = _CPU_CORE_COUNT, .type = CTLTYPE_INT, .exttype = "I", .name = "core_count", .handler = handle_core_count },
+ 	{ .oid = _CPU_SIGNATURE, .type = CTLTYPE_INT, .exttype = "IU", .name = "signature", .handler = handle_signature },
+ 	{ .oid = _CPU_FEATURE_BITS, .type = CTLTYPE_QUAD, .exttype = "QU", .name = "feature_bits", .handler = handle_feature_bits },
 +		{ .oid = _CPU_THREAD_COUNT, .type = CTLTYPE_INT, .exttype = "I", .name = "thread_count", .handler = handle_thread_count },
  	{ .oid = -1 }
  };
  
-@@ -154,38 +163,37 @@ sysctl_handler(handle_stepping)
-     return 0;
+@@ -251,6 +260,8 @@ sysctl_handler(handle_stepping)
+ 	return 0;
  }
  
 +// Original cpuid-based implementation, replaced by the fixed brand string defined above
 +#if 0
  sysctl_handler(handle_brand_string)
  {
--    setup(0x80000000);
--
--    __cpuid(level,eax,ebx, ecx, edx);
--
--    if (eax < 0x80000004) // the information is not implemented
--        return 2;
--
-+	union
-+	{
-+		unsigned int brand[12];
-+		char name[49];
-+	} v;
-+	unsigned int eax, ebx, ecx, edx;
+     setup(0x80000000);
+@@ -281,8 +292,9 @@ sysctl_handler(handle_brand_string)
  
-+	__asm__("cpuid" : "=a" (eax), "=b" (ebx), "=c" (ecx), "=d" (edx) : "0" (0x80000000u), "2" (0));
- 
--    union
--    {
--        unsigned int brand[12];
--        char name[49];
--    } v;
-+	if (eax < 0x80000004) // the information is not implemented
-+		return -ENOENT;
- 
--		for (int i = 1; i < 4; i++)
--		{
--				eax = 0x80000000+i;
--				__cpuid(level, eax, ebx, ecx, edx);
--				v.brand[0x0+(i-1)*4] = eax;
--				v.brand[0x1+(i-1)*4] = ebx;
--				v.brand[0x2+(i-1)*4] = ecx;
--				v.brand[0x3+(i-1)*4] = edx;
--		}
-+	for (unsigned int i = 0; i < 3; i++)
-+	{
-+		__asm__("cpuid" : "=a" (eax), "=b" (ebx), "=c" (ecx), "=d" (edx) : "0" (0x80000002u + i), "2" (0));
-+		v.brand[i * 4 + 0] = eax;
-+		v.brand[i * 4 + 1] = ebx;
-+		v.brand[i * 4 + 2] = ecx;
-+		v.brand[i * 4 + 3] = edx;
-+	}
- 
--    v.name[48] = 0;
--    copyout_string(v.name, (char*) old, oldlen);
-+	v.name[48] = 0;
-+	copyout_string(v.name, (char*) old, oldlen);
+     copyout_string(name_ptr, (char*) old, oldlen);
  
 -    return 0;
 +	return 0;
@@ -2351,7 +2176,7 @@ index 4319355..122ad3a 100644
  
  sysctl_handler(handle_features)
  {
-@@ -269,45 +277,54 @@ sysctl_handler(handle_features)
+@@ -325,45 +337,54 @@ sysctl_handler(handle_features)
  // TODO: i doubt core count is ever going to change.
  //       this is something that could be cached if we had some way of doing something only once in libsystem_kernel (i.e. a simple version of dispatch_once).
  sysctl_handler(handle_core_count) {
@@ -2422,23 +2247,23 @@ index 4319355..122ad3a 100644
 +			++line; // skip the colon
 +			if (*line == '\0')
 +				continue;
- 
--		core_count = __simple_atoi(line, NULL);
--		break;
++
 +			++line; // skip the space
 +			if (*line == '\0')
 +				continue;
-+
+ 
+-		core_count = __simple_atoi(line, NULL);
+-		break;
 +			core_count = __simple_atoi(line, NULL);
 +			break;
 +		}
  	}
  
  out:
-@@ -319,3 +336,21 @@ out:
- 		*oldlen = sizeof(uint32_t);
- 	return 0;
+@@ -377,3 +398,21 @@ out:
  }
+ 
+ #endif /* __aarch64__ || __arm64__ */
 +
 +// The host's online logical CPU count (machdep.cpu.thread_count on macOS).
 +sysctl_handler(handle_thread_count) {
@@ -2457,35 +2282,6 @@ index 4319355..122ad3a 100644
 +		*oldlen = sizeof(uint32_t);
 +	return 0;
 +}
-diff --git a/darling/src/libsystem_kernel/emulation/src/xnu_syscall/bsd/helper/misc/sysctl_net.c b/darling/src/libsystem_kernel/emulation/src/xnu_syscall/bsd/helper/misc/sysctl_net.c
-index 8fabdda..6cc204e 100644
---- a/darling/src/libsystem_kernel/emulation/src/xnu_syscall/bsd/helper/misc/sysctl_net.c
-+++ b/darling/src/libsystem_kernel/emulation/src/xnu_syscall/bsd/helper/misc/sysctl_net.c
-@@ -22,6 +22,7 @@ static sysctl_handler(handle_route);
- static int do_iflist(void* old, unsigned long* oldlen);
- 
- #define LINUX_SIOCGIFCONF 0x8912
-+#define LINUX_SIOCGIFFLAGS 0x8913
- #define LINUX_SIOCGIFHWADDR 0x8927
- #define LINUX_SIOCGIFBRDADDR 0x8919
- #define LINUX_SIOCGIFNETMASK 0x891b
-@@ -144,6 +145,16 @@ static int do_iflist(void* old, unsigned long* oldlen) {
- 
- 			memcpy(dl->sdl_data, curr->lifr_name, name_len);
- 
-+			/* Interface-list consumers (including Chromium) discard adapters
-+			 * without IFF_UP. Populate actual flags instead of leaving zero.
-+			 * The low ten flags share values; Linux multicast differs. */
-+			memcpy(tmp.lifr_name, curr->lifr_name, sizeof(curr->lifr_name));
-+			if ((status = __real_ioctl(tmp_sock, LINUX_SIOCGIFFLAGS, &tmp)) < 0)
-+				goto out;
-+			unsigned short linux_flags = (unsigned short)tmp.lifr_flags;
-+			ifm->ifm_flags = linux_flags & 0x03ff;
-+			if (linux_flags & 0x1000) ifm->ifm_flags |= IFF_MULTICAST;
-+
- 			// grab the MAC
- 			memcpy(tmp.lifr_name, curr->lifr_name, sizeof(curr->lifr_name));
- 			if ((status = __real_ioctl(tmp_sock, LINUX_SIOCGIFHWADDR, &tmp)) < 0)
 diff --git a/darling/src/libsystem_kernel/emulation/src/xnu_syscall/bsd/helper/misc/sysctl_sysctl.c b/darling/src/libsystem_kernel/emulation/src/xnu_syscall/bsd/helper/misc/sysctl_sysctl.c
 index 5a49882..5dc5fa7 100644
 --- a/darling/src/libsystem_kernel/emulation/src/xnu_syscall/bsd/helper/misc/sysctl_sysctl.c
@@ -2518,50 +2314,6 @@ index 5a49882..5dc5fa7 100644
 +	*((int*) old) = 0;
 +	return 0;
 +}
-diff --git a/darling/src/libsystem_kernel/emulation/src/xnu_syscall/bsd/impl/audit/audit_addr.c b/darling/src/libsystem_kernel/emulation/src/xnu_syscall/bsd/impl/audit/audit_addr.c
-index 304dadd..1320eda 100644
---- a/darling/src/libsystem_kernel/emulation/src/xnu_syscall/bsd/impl/audit/audit_addr.c
-+++ b/darling/src/libsystem_kernel/emulation/src/xnu_syscall/bsd/impl/audit/audit_addr.c
-@@ -1,6 +1,6 @@
- #include <darling/emulation/xnu_syscall/bsd/impl/audit/audit_addr.h>
- 
--#include <os/lock.h>
-+#include <darling/emulation/common/private_mutex.h>
- 
- #include <darling/emulation/xnu_syscall/bsd/impl/unistd/geteuid.h>
- #include <darling/emulation/xnu_syscall/bsd/impl/misc/getentropy.h>
-@@ -18,19 +18,19 @@ static auditinfo_addr_t info = {
- 	.ai_flags = 0,
- };
- // should be a rw lock but *shrug*
--static os_unfair_lock info_lock = OS_UNFAIR_LOCK_INIT;
-+static emulation_mutex info_lock = EMULATION_MUTEX_INITIALIZER;
- 
- long sys_getaudit_addr(struct auditinfo_addr* auditinfo_addr, int length) {
--	os_unfair_lock_lock(&info_lock);
-+	emulation_mutex_lock(&info_lock);
- 
- 	memcpy(auditinfo_addr, &info, min(length, sizeof(auditinfo_addr_t)));
- 
--	os_unfair_lock_unlock(&info_lock);
-+	emulation_mutex_unlock(&info_lock);
- 	return 0;
- };
- 
- long sys_setaudit_addr(struct auditinfo_addr* auditinfo_addr, int length) {
--	os_unfair_lock_lock(&info_lock);
-+	emulation_mutex_lock(&info_lock);
- 
- 	memcpy(&info, auditinfo_addr, min(length, sizeof(auditinfo_addr_t)));
- 
-@@ -39,6 +39,6 @@ long sys_setaudit_addr(struct auditinfo_addr* auditinfo_addr, int length) {
- 		sys_getentropy(&info.ai_asid, sizeof(info.ai_asid));
- 	}
- 
--	os_unfair_lock_unlock(&info_lock);
-+	emulation_mutex_unlock(&info_lock);
- 	return 0;
- };
 diff --git a/darling/src/libsystem_kernel/emulation/src/xnu_syscall/bsd/impl/bsdthread/bsdthread_create.c b/darling/src/libsystem_kernel/emulation/src/xnu_syscall/bsd/impl/bsdthread/bsdthread_create.c
 index 6f8cf43..c5f6d08 100644
 --- a/darling/src/libsystem_kernel/emulation/src/xnu_syscall/bsd/impl/bsdthread/bsdthread_create.c
@@ -2575,7 +2327,7 @@ index 6f8cf43..c5f6d08 100644
  	guard_entry_options_t options;
  	options.close = __dserver_close_socket;
 diff --git a/darling/src/libsystem_kernel/emulation/src/xnu_syscall/bsd/impl/bsdthread/bsdthread_register.c b/darling/src/libsystem_kernel/emulation/src/xnu_syscall/bsd/impl/bsdthread/bsdthread_register.c
-index 919205b..5c678ab 100644
+index e975adb..b3171df 100644
 --- a/darling/src/libsystem_kernel/emulation/src/xnu_syscall/bsd/impl/bsdthread/bsdthread_register.c
 +++ b/darling/src/libsystem_kernel/emulation/src/xnu_syscall/bsd/impl/bsdthread/bsdthread_register.c
 @@ -34,6 +34,29 @@ struct _pthread_registration_data {
@@ -2632,7 +2384,7 @@ index 919205b..5c678ab 100644
  	sigexc_thread_setup();
  
  	uintptr_t pthread_handle = (unsigned long) self;
-@@ -122,6 +155,9 @@ void pthread_entry_point_wrapper(void* self, int thread_port, void* funptr,
+@@ -136,6 +169,9 @@ void pthread_entry_point_wrapper(void* self, int thread_port, void* funptr,
  void wqueue_entry_point_wrapper(void* self, int thread_port, void* stackaddr,
  		void* item, int reuse, int nevents)
  {
@@ -2642,9 +2394,9 @@ index 919205b..5c678ab 100644
  	sigexc_thread_setup();
  	wqueue_entry_point_asm_jump(self, thread_port, stackaddr, item, reuse, nevents);
  }
-@@ -156,6 +192,11 @@ void wqueue_entry_point_asm_jump(void* self, int thread_port, void* stackaddr,
- 		// `_start_wqthread` does not expect the stack to be aligned (using the 
- 		// call instruction will add the return address to the stack, causing 
+@@ -177,6 +213,11 @@ void wqueue_entry_point_asm_jump(void* self, int thread_port, void* stackaddr,
+ 		// `_start_wqthread` does not expect the stack to be aligned (using the
+ 		// call instruction will add the return address to the stack, causing
  		// it to be aligned).
 +        // Workqueue entry is a fresh kernel-style jump, including on reuse.
 +        // self sits immediately above the usable stack. Dropping the old
@@ -2694,14 +2446,14 @@ index 1e78300..a6acb59 100644
  	return ret;
  }
 diff --git a/darling/src/libsystem_kernel/emulation/src/xnu_syscall/bsd/impl/bsdthread/workq_kernreturn.c b/darling/src/libsystem_kernel/emulation/src/xnu_syscall/bsd/impl/bsdthread/workq_kernreturn.c
-index dbcdd98..0021dc2 100644
+index b3f9851..2b134cf 100644
 --- a/darling/src/libsystem_kernel/emulation/src/xnu_syscall/bsd/impl/bsdthread/workq_kernreturn.c
 +++ b/darling/src/libsystem_kernel/emulation/src/xnu_syscall/bsd/impl/bsdthread/workq_kernreturn.c
 @@ -3,7 +3,7 @@
  #include <sys/errno.h>
  #include <stddef.h>
  #include <sys/queue.h>
--#include <os/lock.h>
+-#include <libsimple/lock.h>
 +#include <darling/emulation/common/private_mutex.h>
  #include <pthread/tsd_private.h>
  
@@ -2710,12 +2462,12 @@ index dbcdd98..0021dc2 100644
  #define WORKQ_EXIT_THREAD_NKEVENT (-1)
  
  static int workq_sem = WQ_MAX_THREADS; // max 64 threads in use
--static os_unfair_lock workq_parked_lock = OS_UNFAIR_LOCK_INIT;
+-static libsimple_lock_t workq_parked_lock = LIBSIMPLE_LOCK_INITIALIZER;
 +static emulation_mutex workq_parked_lock = EMULATION_MUTEX_INITIALIZER;
  // static int workq_parked_threads = 0; // num spawned, but unused threads
  static int workq_parked[WQ_MAX_THREADS];
  static int workq_parked_prio[WQ_MAX_THREADS];
-@@ -78,14 +78,41 @@ struct parked_thread
+@@ -78,6 +78,35 @@ struct parked_thread
  static void list_add(struct parked_thread* head, struct parked_thread* item);
  static void list_remove(struct parked_thread* head, struct parked_thread* item);
  
@@ -2751,15 +2503,7 @@ index dbcdd98..0021dc2 100644
  struct timespec
  {
  	long tv_sec;
- 	long tv_nsec;
- };
- 
--void __attribute__((weak)) os_unfair_lock_unlock(os_unfair_lock_t lock) {}
--void __attribute__((weak)) os_unfair_lock_lock(os_unfair_lock_t lock) {}
- 
- //void* __attribute__((weak)) __attribute__((visibility("default"))) pthread_getspecific(unsigned long key) { return NULL; }
- //int __attribute__((weak)) __attribute__((visibility("default"))) pthread_setspecific(unsigned long key, const void* value) { return 1; }
-@@ -95,6 +122,7 @@ static int priority_to_class(int prio);
+@@ -93,6 +122,7 @@ static int priority_to_class(int prio);
  // This is horrible, but it may work
  static struct wq_kevent_data* wq_event_pending = NULL;
  
@@ -2767,7 +2511,7 @@ index dbcdd98..0021dc2 100644
  static void rpc_guard(int fd) {
  	guard_entry_options_t options;
  	options.close = __dserver_close_socket;
-@@ -162,14 +190,24 @@ long sys_workq_kernreturn(int options, void* item, int affinity, int prio)
+@@ -160,14 +190,24 @@ long sys_workq_kernreturn(int options, void* item, int affinity, int prio)
  			// and can be either recycled or terminated
  
  			int thread_self;
@@ -2779,7 +2523,7 @@ index dbcdd98..0021dc2 100644
  			dthread_t dthread;
  			bool terminating = false;
  
--			os_unfair_lock_lock(&workq_parked_lock);
+-			libsimple_lock_lock(&workq_parked_lock);
 +			emulation_mutex_lock(&workq_parked_lock);
 +
 +			me = workq_node_alloc();
@@ -2795,7 +2539,7 @@ index dbcdd98..0021dc2 100644
  
  			// extract initial flags
  			// (in case we only get created and used once and then terminate; `_pthread_wqthread` requires a valid `flags` argument)
-@@ -177,33 +215,37 @@ long sys_workq_kernreturn(int options, void* item, int affinity, int prio)
+@@ -175,33 +215,37 @@ long sys_workq_kernreturn(int options, void* item, int affinity, int prio)
  			prio = _pthread_getspecific_direct(_PTHREAD_TSD_SLOT_PTHREAD_QOS_CLASS);
  			// doesn't extract `WQ_FLAG_THREAD_KEVENT` if we had it set, but that shouldn't matter
  			// like i said before, the only case where we actually need these flags to be set here is when the thread is going to die immediately after creation
@@ -2809,7 +2553,7 @@ index dbcdd98..0021dc2 100644
  			// Decrease the amount of running threads
  			sem_up(&workq_sem);
  
--			os_unfair_lock_unlock(&workq_parked_lock);
+-			libsimple_lock_unlock(&workq_parked_lock);
 +			emulation_mutex_unlock(&workq_parked_lock);
  
  			// Wait until someone calls WQOPS_QUEUE_REQTHREADS
@@ -2819,13 +2563,13 @@ index dbcdd98..0021dc2 100644
  			{
  				// Make sure we haven't just been woken up before locking the queue
  				// and remove us from the queue if not.
--				os_unfair_lock_lock(&workq_parked_lock);
+-				libsimple_lock_lock(&workq_parked_lock);
 +				emulation_mutex_lock(&workq_parked_lock);
  	
 -				if (me.sem > 0)
 +				if (me->sem > 0)
  				{
--					os_unfair_lock_unlock(&workq_parked_lock);
+-					libsimple_lock_unlock(&workq_parked_lock);
 +					emulation_mutex_unlock(&workq_parked_lock);
  					goto wakeup;
  				}
@@ -2833,7 +2577,7 @@ index dbcdd98..0021dc2 100644
 -				TAILQ_REMOVE(&workq_parked_head, &me, entries);
 +				TAILQ_REMOVE(&workq_parked_head, me, entries);
  
--				os_unfair_lock_unlock(&workq_parked_lock);
+-				libsimple_lock_unlock(&workq_parked_lock);
 +				resume_event = NULL;
 +				resume_flags = me->flags;
 +				workq_node_free(me);
@@ -2842,7 +2586,7 @@ index dbcdd98..0021dc2 100644
  
  				terminating = true;
  
-@@ -214,8 +256,15 @@ long sys_workq_kernreturn(int options, void* item, int affinity, int prio)
+@@ -212,8 +256,15 @@ long sys_workq_kernreturn(int options, void* item, int affinity, int prio)
  wakeup: // we actually want to go back into the thread to do work
  			// __simple_printf("Thread %d woken up, prio=%d\n", thread_self, me.flags & WQ_FLAG_THREAD_PRIOMASK);
  
@@ -2860,7 +2604,7 @@ index dbcdd98..0021dc2 100644
  
  resume_thread: // we want the thread to resume, but it might be just to die
  			// reset stack and call entry point again with WQ_FLAG_THREAD_REUSE
-@@ -223,9 +272,9 @@ resume_thread: // we want the thread to resume, but it might be just to die
+@@ -221,9 +272,9 @@ resume_thread: // we want the thread to resume, but it might be just to die
  			dthread = _pthread_getspecific_direct(_PTHREAD_TSD_SLOT_PTHREAD_SELF);
  
  			wqueue_entry_point_asm_jump(dthread, thread_self, dthread->stackbottom, 
@@ -2873,31 +2617,31 @@ index dbcdd98..0021dc2 100644
  			);
  			
  			__builtin_unreachable();
-@@ -257,7 +306,7 @@ resume_thread: // we want the thread to resume, but it might be just to die
+@@ -255,7 +306,7 @@ resume_thread: // we want the thread to resume, but it might be just to die
  				// Increase the amount of running threads
  				sem_down(&workq_sem, -1);
  
--				os_unfair_lock_lock(&workq_parked_lock);
+-				libsimple_lock_lock(&workq_parked_lock);
 +				emulation_mutex_lock(&workq_parked_lock);
  
  				if (workq_parked_head.tqh_first != NULL)
  				{
-@@ -276,12 +325,12 @@ resume_thread: // we want the thread to resume, but it might be just to die
+@@ -274,12 +325,12 @@ resume_thread: // we want the thread to resume, but it might be just to die
  
  					// Resume the thread
  					sem_up(&thread->sem);
--					os_unfair_lock_unlock(&workq_parked_lock);
+-					libsimple_lock_unlock(&workq_parked_lock);
 +					emulation_mutex_unlock(&workq_parked_lock);
  
  					continue;
  				}
  
--				os_unfair_lock_unlock(&workq_parked_lock);
+-				libsimple_lock_unlock(&workq_parked_lock);
 +				emulation_mutex_unlock(&workq_parked_lock);
  
  				// __simple_printf("Spawning a new thread, nevents=%d\n", (wq_event != NULL) ? wq_event->nevents : -1);
  				wq_event_pending = wq_event;
-@@ -320,36 +369,52 @@ resume_thread: // we want the thread to resume, but it might be just to die
+@@ -318,36 +369,52 @@ resume_thread: // we want the thread to resume, but it might be just to die
  #endif
  }
  
@@ -3176,6 +2920,132 @@ index e808529..bd663f6 100644
  	int ret = kqueue_impl();
  	if (ret < 0)
  		ret = -errno;
+diff --git a/darling/src/libsystem_kernel/emulation/src/xnu_syscall/bsd/impl/misc/csops.c b/darling/src/libsystem_kernel/emulation/src/xnu_syscall/bsd/impl/misc/csops.c
+index f1ce3d3..2043306 100644
+--- a/darling/src/libsystem_kernel/emulation/src/xnu_syscall/bsd/impl/misc/csops.c
++++ b/darling/src/libsystem_kernel/emulation/src/xnu_syscall/bsd/impl/misc/csops.c
+@@ -1,38 +1,50 @@
+ #include <darling/emulation/xnu_syscall/bsd/impl/misc/csops.h>
+-
+-#include <stdint.h>
+-#include <sys/codesign.h>
+-#include <strings.h>
+-
++#include <darling/emulation/xnu_syscall/bsd/impl/unistd/getpid.h>
++#include <darling/emulation/xnu_syscall/bsd/impl/signal/kill.h>
+ #include <darling/emulation/conversion/duct_errno.h>
++#include <sys/codesign.h>
++#include <stdint.h>
++#include "security_user_access.h"
+ 
+-// TODO: actually implement this
+-// this is just a dummy implementation for now that returns no actual data for any operation
++/* The loader does not validate process pages, CMS chains or library policy.
++ * Never advertise CS_VALID or enforcement on the strength of a file name.
++ * A separate on-disk verifier cannot establish the live task's security state.
++ */
+ long sys_csops(int pid, unsigned int ops, void* useraddr, size_t usersize) {
+-	int ret = 0;
+-
+-	switch (ops) {
+-		case CS_OPS_STATUS: {
+-			*(uint32_t*)useraddr = CS_VALID;
+-		} break;
+-
+-		case CS_OPS_BLOB:
+-		case CS_OPS_ENTITLEMENTS_BLOB:
+-		case CS_OPS_IDENTITY: {
+-			memset(useraddr, 0, usersize);
+-		} break;
+-
+-		// all other operations are completely unsupported
+-		default: {
+-			ret = -ENOSYS;
+-		} break;
+-	}
+-
+-	return ret;
++    if (pid < 0) return -EINVAL;
++    if (pid != 0 && pid != sys_getpid()) {
++        long error = sys_kill(pid, 0, 1);
++        if (error == -ESRCH) return error;
++        return -ENOTSUP; /* no task signing state or PID-version binding */
++    }
++    switch (ops) {
++        case CS_OPS_STATUS:
++            if (!useraddr) return -EFAULT;
++            if (usersize < sizeof(uint32_t)) return -ERANGE;
++            { uint32_t flags = 0;
++              return darling_security_write(useraddr, &flags, sizeof(flags)); }
++        case CS_OPS_CDHASH:
++        case CS_OPS_BLOB:
++        case CS_OPS_ENTITLEMENTS_BLOB:
++        case CS_OPS_IDENTITY:
++        case CS_OPS_TEAMID:
++            return -EINVAL; /* no validated process CodeDirectory */
++        case CS_OPS_MARKINVALID:
++        case CS_OPS_MARKHARD:
++        case CS_OPS_MARKKILL:
++        case CS_OPS_MARKRESTRICT:
++        case CS_OPS_SET_STATUS:
++        case CS_OPS_CLEARINSTALLER:
++        case CS_OPS_CLEARPLATFORM:
++        case CS_OPS_CLEAR_LV:
++            return -ENOTSUP; /* no successful setters without enforcement */
++        default:
++            return -EINVAL;
++    }
+ }
+ 
+-// also more or less a stub
+-long sys_csops_audittoken(int pid, unsigned int ops, void* useraddr, size_t usersize, audit_token_t* audit_token) {
+-	// just defer to the regular csops
+-	return sys_csops(pid, ops, useraddr, usersize);
++long sys_csops_audittoken(int pid, unsigned int ops, void* useraddr, size_t usersize, audit_token_t* token) {
++    if (!token) return -EFAULT;
++    /* PID alone cannot validate an audit token's process generation/credentials. */
++    return -ENOTSUP;
+ }
+diff --git a/darling/src/libsystem_kernel/emulation/src/xnu_syscall/bsd/impl/misc/csrctl.c b/darling/src/libsystem_kernel/emulation/src/xnu_syscall/bsd/impl/misc/csrctl.c
+index 7fe0b4e..2490938 100644
+--- a/darling/src/libsystem_kernel/emulation/src/xnu_syscall/bsd/impl/misc/csrctl.c
++++ b/darling/src/libsystem_kernel/emulation/src/xnu_syscall/bsd/impl/misc/csrctl.c
+@@ -1,22 +1,20 @@
+ #include <darling/emulation/xnu_syscall/bsd/impl/misc/csrctl.h>
+-
+ #define PRIVATE
+ #include <sys/csr.h>
+-
+ #include <darling/emulation/conversion/duct_errno.h>
++#include "security_user_access.h"
+ 
+ long sys_csrctl(uint32_t op, void* useraddr, size_t usersize) {
+-	switch (op) {
+-		case CSR_SYSCALL_CHECK: {
+-			// allow everything
+-			return 0;
+-		} break;
+-		case CSR_SYSCALL_GET_ACTIVE_CONFIG: {
+-			// set everything to "allowed"
+-			*(uint32_t*)useraddr = CSR_VALID_FLAGS;
+-			return 0;
+-		} break;
+-		default:
+-			return ENOSYS;
+-	}
++    if (op != CSR_SYSCALL_CHECK && op != CSR_SYSCALL_GET_ACTIVE_CONFIG) return -ENOSYS;
++    if (usersize != sizeof(uint32_t)) return -EINVAL;
++    if (!useraddr) return -EFAULT;
++    /* All supported CSR exceptions are allowed: SIP is NOT enforced. The
++     * existing Linux filesystem/ptrace policy is not macOS SIP enforcement. */
++    uint32_t active = CSR_VALID_FLAGS;
++    if (op == CSR_SYSCALL_GET_ACTIVE_CONFIG) {
++        return darling_security_write(useraddr, &active, sizeof(active));
++    }
++    uint32_t requested;
++    if (darling_security_read(&requested, useraddr, sizeof(requested))) return -EFAULT;
++    return (requested & ~active) ? -EPERM : 0;
+ }
 diff --git a/darling/src/libsystem_kernel/emulation/src/xnu_syscall/bsd/impl/misc/fileport_makefd.c b/darling/src/libsystem_kernel/emulation/src/xnu_syscall/bsd/impl/misc/fileport_makefd.c
 index 1afb57e..d6896e6 100644
 --- a/darling/src/libsystem_kernel/emulation/src/xnu_syscall/bsd/impl/misc/fileport_makefd.c
@@ -3245,6 +3115,7 @@ index be2926c..a25882e 100644
  }
 diff --git a/darling/src/libsystem_kernel/emulation/src/xnu_syscall/bsd/impl/misc/mac_syscall.c b/darling/src/libsystem_kernel/emulation/src/xnu_syscall/bsd/impl/misc/mac_syscall.c
 new file mode 100644
+index 0000000..97443ce
 --- /dev/null
 +++ b/darling/src/libsystem_kernel/emulation/src/xnu_syscall/bsd/impl/misc/mac_syscall.c
 @@ -0,0 +1,60 @@
@@ -3309,12 +3180,12 @@ new file mode 100644
 +	return -ENOSYS;
 +}
 diff --git a/darling/src/libsystem_kernel/emulation/src/xnu_syscall/bsd/impl/misc/proc_info.c b/darling/src/libsystem_kernel/emulation/src/xnu_syscall/bsd/impl/misc/proc_info.c
-index c2f70fb..af904ed 100644
+index 468ac94..111e597 100644
 --- a/darling/src/libsystem_kernel/emulation/src/xnu_syscall/bsd/impl/misc/proc_info.c
 +++ b/darling/src/libsystem_kernel/emulation/src/xnu_syscall/bsd/impl/misc/proc_info.c
-@@ -83,6 +83,38 @@ long sys_proc_info(uint32_t callnum, int32_t pid, uint32_t flavor,
- 		case 2: // proc_pidinfo
- 			return _proc_pidinfo(pid, flavor, arg, buffer, bufsize);
+@@ -101,6 +101,38 @@ long sys_proc_info(uint32_t callnum, int32_t pid, uint32_t flavor,
+ 			return -ENOMEM;
+ 		}
  		case 3: // proc_pidfdinfo
 +		{
 +			if (flavor == PROC_PIDFDVNODEPATHINFO)
@@ -3348,9 +3219,9 @@ index c2f70fb..af904ed 100644
 +					flavor);
 +			return -ENOTSUP;
 +		}
- 		case 1: // proc_listpids
  		default:
  			__simple_printf("sys_proc_info(): Unsupported callnum: %d\n",
+ 					callnum);
 diff --git a/darling/src/libsystem_kernel/emulation/src/xnu_syscall/bsd/impl/misc/ptrace.c b/darling/src/libsystem_kernel/emulation/src/xnu_syscall/bsd/impl/misc/ptrace.c
 index 0a8f1e4..a19f12e 100644
 --- a/darling/src/libsystem_kernel/emulation/src/xnu_syscall/bsd/impl/misc/ptrace.c
@@ -3382,31 +3253,42 @@ index 0a8f1e4..a19f12e 100644
  	}
  
  	if (cmd != NULL)
+diff --git a/darling/src/libsystem_kernel/emulation/src/xnu_syscall/bsd/impl/misc/security_user_access.h b/darling/src/libsystem_kernel/emulation/src/xnu_syscall/bsd/impl/misc/security_user_access.h
+new file mode 100644
+index 0000000..d7da880
+--- /dev/null
++++ b/darling/src/libsystem_kernel/emulation/src/xnu_syscall/bsd/impl/misc/security_user_access.h
+@@ -0,0 +1,25 @@
++#ifndef DARLING_SECURITY_USER_ACCESS_H
++#define DARLING_SECURITY_USER_ACCESS_H
++#include <stddef.h>
++#include <darling/emulation/common/base.h>
++#include <darling/emulation/linux_premigration/linux-syscalls/linux.h>
++#include <darling/emulation/conversion/duct_errno.h>
++
++/* Kernel-mediated copies avoid host SIGSEGV on inaccessible guest buffers.
++ * A short copy reports EFAULT; output may be partially copied across pages,
++ * just as other copyout interfaces may fail after writing part of a buffer. */
++static inline long darling_security_copy(void* local, void* remote, size_t size, int write) {
++    struct security_iovec { void* base; size_t length; };
++    struct security_iovec here = { local, size }, there = { remote, size };
++    long pid = LINUX_SYSCALL0(__NR_getpid);
++    long result = LINUX_SYSCALL(write ? __NR_process_vm_writev : __NR_process_vm_readv,
++                               pid, &here, 1, &there, 1, 0);
++    return result == (long)size ? 0 : -EFAULT;
++}
++static inline long darling_security_read(void* destination, const void* source, size_t size) {
++    return darling_security_copy(destination, (void*)source, size, 0);
++}
++static inline long darling_security_write(void* destination, const void* source, size_t size) {
++    return darling_security_copy((void*)source, destination, size, 1);
++}
++#endif
 diff --git a/darling/src/libsystem_kernel/emulation/src/xnu_syscall/bsd/impl/misc/sysctl.c b/darling/src/libsystem_kernel/emulation/src/xnu_syscall/bsd/impl/misc/sysctl.c
-index 10f39a5..29747d4 100644
+index e44768d..1b02161 100644
 --- a/darling/src/libsystem_kernel/emulation/src/xnu_syscall/bsd/impl/misc/sysctl.c
 +++ b/darling/src/libsystem_kernel/emulation/src/xnu_syscall/bsd/impl/misc/sysctl.c
-@@ -42,11 +42,15 @@ const struct known_sysctl sysctls_root = {
- 
- void copyout_string(const char* str, char* out, unsigned long* out_len)
- {
--	unsigned long len;
-+	// as on XNU, the reported length includes the terminating NUL
-+	unsigned long len = strlen(str) + 1;
-+
- 	if (out != NULL)
--		len = strlcpy(out, str, *out_len);
--	else
--		len = strlen(str);
-+	{
-+		strlcpy(out, str, *out_len);
-+		if (len > *out_len)
-+			len = *out_len;
-+	}
- 
- 	if (out_len != NULL)
- 		*out_len = len;
-@@ -130,7 +134,10 @@ long sys_sysctlbyname(const char* name, unsigned long namelen, void* old, unsign
+@@ -134,7 +134,10 @@ long sys_sysctlbyname(const char* name, unsigned long namelen, void* old, unsign
  		}
  
  		if (next == NULL)
@@ -3524,32 +3406,8 @@ index 10c412b..adb7e24 100644
  
  	ret = LINUX_SYSCALL(__NR_madvise, addr, len, advice);
  
-diff --git a/darling/src/libsystem_kernel/emulation/src/xnu_syscall/bsd/impl/network/accept.c b/darling/src/libsystem_kernel/emulation/src/xnu_syscall/bsd/impl/network/accept.c
-index 4daa631..5aeedd0 100644
---- a/darling/src/libsystem_kernel/emulation/src/xnu_syscall/bsd/impl/network/accept.c
-+++ b/darling/src/libsystem_kernel/emulation/src/xnu_syscall/bsd/impl/network/accept.c
-@@ -34,9 +34,16 @@ long sys_accept_nocancel(int fd, void* from, int* socklen)
- 		ret = errno_linux_to_bsd(ret);
- 	else
- 	{
--		fixed = (struct sockaddr_fixup*) from;
--		fixed->bsd_family = sfamily_linux_to_bsd(fixed->linux_family);
--		fixed->bsd_length = *socklen;
-+		/* darling-lol M57: accept(fd, NULL, NULL) is legal on macOS (the
-+		 * caller isn't interested in the peer address). Chromium's socket
-+		 * code does this; dereferencing NULL crashed in
-+		 * sys_accept_nocancel. */
-+		if (from != 0 && socklen != 0)
-+		{
-+			fixed = (struct sockaddr_fixup*) from;
-+			fixed->bsd_family = sfamily_linux_to_bsd(fixed->linux_family);
-+			fixed->bsd_length = *socklen;
-+		}
- 
- 		// on macOS (and BSD), accept-ed sockets inherit O_NONBLOCK
- 		int parent_flags = sys_fcntl_nocancel(fd, F_GETFL, 0);
 diff --git a/darling/src/libsystem_kernel/emulation/src/xnu_syscall/bsd/impl/network/recvfrom.c b/darling/src/libsystem_kernel/emulation/src/xnu_syscall/bsd/impl/network/recvfrom.c
-index 1419bed..ea83e75 100644
+index dc420c4..71cc2f1 100644
 --- a/darling/src/libsystem_kernel/emulation/src/xnu_syscall/bsd/impl/network/recvfrom.c
 +++ b/darling/src/libsystem_kernel/emulation/src/xnu_syscall/bsd/impl/network/recvfrom.c
 @@ -11,6 +11,8 @@
@@ -3561,24 +3419,19 @@ index 1419bed..ea83e75 100644
  
  long sys_recvfrom(int fd, void* buf, unsigned long len,
  		int flags, void* from, int* socklen)
-@@ -31,8 +33,11 @@ long sys_recvfrom_nocancel(int fd, void* buf, unsigned long len,
- 	ret = LINUX_SYSCALL(__NR_socketcall, LINUX_SYS_RECVFROM, ((long[6]) { fd, buf, len,
- 			flags, from, socklen }));
+@@ -33,6 +35,7 @@ long sys_recvfrom_nocancel(int fd, void* buf, unsigned long len,
  #else
--	ret = LINUX_SYSCALL(__NR_recvfrom, fd, buf, len, flags, from, socklen);
-+	/* this passed the unconverted BSD flags: BSD MSG_DONTWAIT (0x80) is Linux MSG_EOR and BSD MSG_WAITALL (0x40) is
-+	 * Linux MSG_DONTWAIT. sendto/sendmsg/recvmsg already used the converted value. */
-+	ret = LINUX_SYSCALL(__NR_recvfrom, fd, buf, len, linux_flags, from, socklen);
+ 	ret = LINUX_SYSCALL(__NR_recvfrom, fd, buf, len, linux_flags, from, socklen);
  #endif
 +	rclol_trace_io("recvfrom", fd, ret);
  
  	if (ret < 0)
  		ret = errno_linux_to_bsd(ret);
 diff --git a/darling/src/libsystem_kernel/emulation/src/xnu_syscall/bsd/impl/network/recvmsg.c b/darling/src/libsystem_kernel/emulation/src/xnu_syscall/bsd/impl/network/recvmsg.c
-index 927ccbb..ae353d3 100644
+index 0f4f11f..7d0eba4 100644
 --- a/darling/src/libsystem_kernel/emulation/src/xnu_syscall/bsd/impl/network/recvmsg.c
 +++ b/darling/src/libsystem_kernel/emulation/src/xnu_syscall/bsd/impl/network/recvmsg.c
-@@ -17,6 +17,8 @@ extern void* memcpy(void* dest, const void* src, __SIZE_TYPE__ len);
+@@ -18,6 +18,8 @@ extern void* memcpy(void* dest, const void* src, __SIZE_TYPE__ len);
  
  #define ALIGN(what, how) ( ((what) + (how) - 1) & ~((how) - 1) )
  
@@ -3587,7 +3440,7 @@ index 927ccbb..ae353d3 100644
  long sys_recvmsg(int socket, struct bsd_msghdr* msg, int flags)
  {
  	CANCELATION_POINT();
-@@ -62,6 +64,7 @@ long sys_recvmsg_nocancel(int socket, struct bsd_msghdr* msg, int flags)
+@@ -68,6 +70,7 @@ long sys_recvmsg_nocancel(int socket, struct bsd_msghdr* msg, int flags)
  #else
  	ret = LINUX_SYSCALL(__NR_recvmsg, socket, &lmsg, linux_flags);
  #endif
@@ -3596,7 +3449,7 @@ index 927ccbb..ae353d3 100644
  	if (ret < 0)
  		ret = errno_linux_to_bsd(ret);
 diff --git a/darling/src/libsystem_kernel/emulation/src/xnu_syscall/bsd/impl/process/fork.c b/darling/src/libsystem_kernel/emulation/src/xnu_syscall/bsd/impl/process/fork.c
-index 76b6f53..a6c24ff 100644
+index 7e00222..74dd7f9 100644
 --- a/darling/src/libsystem_kernel/emulation/src/xnu_syscall/bsd/impl/process/fork.c
 +++ b/darling/src/libsystem_kernel/emulation/src/xnu_syscall/bsd/impl/process/fork.c
 @@ -4,6 +4,7 @@
@@ -3607,9 +3460,9 @@ index 76b6f53..a6c24ff 100644
  #include <darling/emulation/conversion/signal/duct_signals.h>
  #include <darling/emulation/common/bsdthread/per_thread_wd.h>
  #include <darling/emulation/xnu_syscall/bsd/impl/unistd/fchdir.h>
-@@ -18,18 +19,21 @@
- 
- extern _libkernel_functions_t _libkernel_functions;
+@@ -54,20 +55,27 @@ void sys_fork_postfork_child(void)
+ }
+ #endif
  
 -long sys_fork(void)
 +/* The guest syscall trampoline does not promise ELF stack alignment. */
@@ -3618,13 +3471,16 @@ index 76b6f53..a6c24ff 100644
  	int ret;
  	int wdfd = get_perthread_wd();
  
--#ifdef SYS_fork
+ #if defined(__arm64__) || defined(__aarch64__)
+ 	ret = native_fork();
+-#elif defined(SYS_fork)
 -	ret = LINUX_SYSCALL(__NR_fork);
 -#else
 -	ret = LINUX_SYSCALL(__NR_clone, LINUX_SIGCHLD, 0);
 -#endif
--	if (ret < 0)
--		ret = errno_linux_to_bsd(ret);
+ 	if (ret < 0)
+ 		ret = errno_linux_to_bsd(ret);
++#else
 +	/* The child immediately uses host malloc while refreshing RPC sockets.
 +	 * A raw fork inherits locked glibc arenas from vanished host threads.
 +	 * Use the ELF fork, whose atfork machinery prepares those arenas and
@@ -3634,10 +3490,11 @@ index 76b6f53..a6c24ff 100644
 +	if (ret < 0) {
 +		ret = errno_linux_to_bsd(-elfcalls()->get_errno());
 +	}
++#endif
  	else if (ret == 0)
  	{
  		// in the child
-@@ -39,6 +43,11 @@ long sys_fork(void)
+@@ -77,6 +85,11 @@ long sys_fork(void)
  		// that should also take care of closing descriptors for any other threads.
  		guard_table_postfork_child();
  
@@ -3650,7 +3507,7 @@ index 76b6f53..a6c24ff 100644
  		__dserver_per_thread_socket_refresh();
  		int newReadFd = __dserver_process_lifetime_pipe_refresh();
 diff --git a/darling/src/libsystem_kernel/emulation/src/xnu_syscall/bsd/impl/psynch/psynch_cvwait.c b/darling/src/libsystem_kernel/emulation/src/xnu_syscall/bsd/impl/psynch/psynch_cvwait.c
-index d093b73..b5d0ab1 100644
+index b387ed8..0c5197b 100644
 --- a/darling/src/libsystem_kernel/emulation/src/xnu_syscall/bsd/impl/psynch/psynch_cvwait.c
 +++ b/darling/src/libsystem_kernel/emulation/src/xnu_syscall/bsd/impl/psynch/psynch_cvwait.c
 @@ -6,12 +6,28 @@
@@ -3682,18 +3539,8 @@ index d093b73..b5d0ab1 100644
  
  	if (ret < 0) {
  		if (ret == -LINUX_EINTR) {
-@@ -21,5 +37,8 @@ long sys_psynch_cvwait(void* cv, uint64_t cvlsgen, uint32_t cvugen, void * mutex
- 		__simple_abort();
- 	}
- 
--	return (ret) ? ret : retval;
-+	/* RPC ret is a Darwin errno (possibly carrying condition-variable
-+	 * cleanup flags), not successful sequence bits. The syscall trampoline
-+	 * recognizes negative errors and sets errno for libpthread's -1 path. */
-+	return (ret) ? -(long)ret : (long)retval;
- }
 diff --git a/darling/src/libsystem_kernel/emulation/src/xnu_syscall/bsd/impl/psynch/psynch_mutexdrop.c b/darling/src/libsystem_kernel/emulation/src/xnu_syscall/bsd/impl/psynch/psynch_mutexdrop.c
-index 1799f60..d6f4879 100644
+index 903924c..4eacd97 100644
 --- a/darling/src/libsystem_kernel/emulation/src/xnu_syscall/bsd/impl/psynch/psynch_mutexdrop.c
 +++ b/darling/src/libsystem_kernel/emulation/src/xnu_syscall/bsd/impl/psynch/psynch_mutexdrop.c
 @@ -8,6 +8,11 @@
@@ -3709,7 +3556,7 @@ index 1799f60..d6f4879 100644
  	int ret = dserver_rpc_psynch_mutexdrop(mutex, mgen, ugen, tid, flags, &retval);
  
 diff --git a/darling/src/libsystem_kernel/emulation/src/xnu_syscall/bsd/impl/psynch/psynch_mutexwait.c b/darling/src/libsystem_kernel/emulation/src/xnu_syscall/bsd/impl/psynch/psynch_mutexwait.c
-index 2a05251..205eaa6 100644
+index 9558914..3f7ed8c 100644
 --- a/darling/src/libsystem_kernel/emulation/src/xnu_syscall/bsd/impl/psynch/psynch_mutexwait.c
 +++ b/darling/src/libsystem_kernel/emulation/src/xnu_syscall/bsd/impl/psynch/psynch_mutexwait.c
 @@ -7,11 +7,274 @@
@@ -3987,68 +3834,13 @@ index 2a05251..205eaa6 100644
  
  	if (ret < 0) {
  		if (ret == -LINUX_EINTR) {
-diff --git a/darling/src/libsystem_kernel/emulation/src/xnu_syscall/bsd/impl/psynch/ulock_wait.c b/darling/src/libsystem_kernel/emulation/src/xnu_syscall/bsd/impl/psynch/ulock_wait.c
-index f26ec28..2f31473 100644
---- a/darling/src/libsystem_kernel/emulation/src/xnu_syscall/bsd/impl/psynch/ulock_wait.c
-+++ b/darling/src/libsystem_kernel/emulation/src/xnu_syscall/bsd/impl/psynch/ulock_wait.c
-@@ -3,6 +3,7 @@
- #include <sys/errno.h>
- #include <stdbool.h>
- #include <stddef.h>
-+#include <darling/emulation/xnu_syscall/bsd/impl/bsdthread/pthread_canceled.h>
- 
- #include <darling/emulation/common/base.h>
- #include <darling/emulation/conversion/errno.h>
-@@ -60,3 +61,42 @@ long sys_ulock_wait(uint32_t operation, void* addr, uint64_t value, uint32_t tim
- 
- 	return ret;
- }
-+
-+/* Nanosecond variant used by libpthread's private condition variables. The
-+ * sequence check and sleep are atomic in FUTEX_WAIT; a signal between the
-+ * userspace unlock and this call therefore cannot be lost. */
-+long sys_ulock_wait2(uint32_t operation, void* addr, uint64_t value,
-+                     uint64_t timeout, uint64_t value2)
-+{
-+    const uint32_t allowed = XNU_UL_OPCODE_MASK | XNU_ULF_NO_ERRNO |
-+        0x00010000u /* WORKQ_DATA_CONTENTION */ | 0x00020000u /* CANCEL_POINT */ |
-+        0x00040000u /* ADAPTIVE_SPIN */;
-+    int op = operation & XNU_UL_OPCODE_MASK;
-+    int ret;
-+    if ((operation & ~allowed) || value2 ||
-+        (op != XNU_UL_COMPARE_AND_WAIT && op != XNU_UL_UNFAIR_LOCK) ||
-+        ((uintptr_t)addr & 3)) {
-+        ret = -EINVAL;
-+    } else {
-+        int cancellation = (operation & 0x00020000u) ? sys_pthread_canceled(0) : -EINVAL;
-+        if (cancellation == 0) {
-+            ret = -EINTR;
-+        } else {
-+            /* Darling's server does not implement markcancel/canceled yet.
-+             * Bound cancelable sleeps in that case so libpthread can observe
-+             * its pending cancellation bit. EINTR is a permitted spurious
-+             * condition wake, not a premature timed-wait timeout. */
-+            bool cancellation_poll = cancellation == -ENOSYS &&
-+                (!timeout || timeout > 50000000ull);
-+            uint64_t sleep_ns = cancellation_poll ? 50000000ull : timeout;
-+            struct timespec ts = { sleep_ns / 1000000000ull, sleep_ns % 1000000000ull };
-+            ret = LINUX_SYSCALL(__NR_futex, addr, FUTEX_WAIT | FUTEX_PRIVATE_FLAG,
-+                (uint32_t)value, sleep_ns ? &ts : NULL, 0UL, 0);
-+            if (ret == -LINUX_ETIMEDOUT && cancellation_poll) ret = -LINUX_EINTR;
-+            if (ret == 0 || ret == -LINUX_EAGAIN) ret = 1;
-+            else if (ret < 0) ret = errno_linux_to_bsd(ret);
-+        }
-+    }
-+    if (ret < 0 && (operation & XNU_ULF_NO_ERRNO)) ret &= ~0x800;
-+    return ret;
-+}
 diff --git a/darling/src/libsystem_kernel/emulation/src/xnu_syscall/bsd/impl/select/select.c b/darling/src/libsystem_kernel/emulation/src/xnu_syscall/bsd/impl/select/select.c
-index c3c33f9..831e8cb 100644
+index db98d14..2457913 100644
 --- a/darling/src/libsystem_kernel/emulation/src/xnu_syscall/bsd/impl/select/select.c
 +++ b/darling/src/libsystem_kernel/emulation/src/xnu_syscall/bsd/impl/select/select.c
-@@ -7,6 +7,168 @@
- #include <darling/emulation/linux_premigration/linux-syscalls/linux.h>
- #include <darling/emulation/xnu_syscall/bsd/helper/bsdthread/cancelable.h>
+@@ -9,6 +9,168 @@
+ 
+ extern long sys_pselect_nocancel(int nfds, void* rfds, void* wfds, void* efds, struct bsd_timeval* timeout, const void* mask);
  
 +#include <darling/emulation/common/simple.h>
 +
@@ -4215,7 +4007,7 @@ index c3c33f9..831e8cb 100644
  long sys_select(int nfds, void* rfds, void* wfds, void* efds, struct bsd_timeval* timeout)
  {
  	CANCELATION_POINT();
-@@ -25,6 +187,28 @@ long sys_select_nocancel(int nfds, void* rfds, void* wfds, void* efds, struct bs
+@@ -27,6 +189,28 @@ long sys_select_nocancel(int nfds, void* rfds, void* wfds, void* efds, struct bs
  			ltv.tv_usec = timeout->tv_usec;
  		}
  
@@ -4244,7 +4036,7 @@ index c3c33f9..831e8cb 100644
  		#if defined(__NR__newselect)
  			ret = LINUX_SYSCALL(__NR__newselect, nfds, rfds, wfds, efds,
  					(timeout != NULL) ? &ltv : NULL);
-@@ -32,6 +216,15 @@ long sys_select_nocancel(int nfds, void* rfds, void* wfds, void* efds, struct bs
+@@ -34,6 +218,15 @@ long sys_select_nocancel(int nfds, void* rfds, void* wfds, void* efds, struct bs
  			ret = LINUX_SYSCALL(__NR_select, nfds, rfds, wfds, efds,
  					(timeout != NULL) ? &ltv : NULL);
  		#endif
@@ -4342,7 +4134,7 @@ index 1098510..1741d5a 100644
  	return 0;
  }
 diff --git a/darling/src/libsystem_kernel/emulation/src/xnu_syscall/bsd/impl/stat/statfs.c b/darling/src/libsystem_kernel/emulation/src/xnu_syscall/bsd/impl/stat/statfs.c
-index a6a5162..2155dc4 100644
+index 68cb3bd..d46f366 100644
 --- a/darling/src/libsystem_kernel/emulation/src/xnu_syscall/bsd/impl/stat/statfs.c
 +++ b/darling/src/libsystem_kernel/emulation/src/xnu_syscall/bsd/impl/stat/statfs.c
 @@ -20,6 +20,92 @@ extern __SIZE_TYPE__ strlcpy(char* dst, const char* src, __SIZE_TYPE__ size);
@@ -4450,7 +4242,7 @@ index a6a5162..2155dc4 100644
 -	int max_len = 0;
  
  	struct vchroot_expand_args vc;
- 	vc.flags = 0;
+ 	vc.flags = VCHROOT_FOLLOW;
 @@ -58,47 +141,9 @@ long sys_statfs64(const char* path, struct bsd_statfs64* buf)
  
  	statfs_linux_to_bsd64(&lbuf, buf);
@@ -4541,17 +4333,18 @@ index 687a1b5..83b905a 100644
  		ret = errno_linux_to_bsd(ret);
  
 diff --git a/darling/src/libsystem_kernel/emulation/src/xnu_syscall/bsd/impl/time/gettimeofday.c b/darling/src/libsystem_kernel/emulation/src/xnu_syscall/bsd/impl/time/gettimeofday.c
-index be89afd..96bc339 100644
+index d1ab54e..05a38b0 100644
 --- a/darling/src/libsystem_kernel/emulation/src/xnu_syscall/bsd/impl/time/gettimeofday.c
 +++ b/darling/src/libsystem_kernel/emulation/src/xnu_syscall/bsd/impl/time/gettimeofday.c
-@@ -3,12 +3,32 @@
+@@ -3,6 +3,7 @@
  #include <darling/emulation/common/base.h>
  #include <darling/emulation/conversion/errno.h>
  #include <darling/emulation/linux_premigration/linux-syscalls/linux.h>
 +#include <darling/emulation/linux_premigration/ext/sys/linux_time.h>
  
- long sys_gettimeofday(struct bsd_timeval* tv, struct timezone* tz)
- {
+ extern uint64_t mach_absolute_time(void);
+ 
+@@ -11,6 +12,30 @@ long sys_gettimeofday(struct bsd_timeval* tv, struct timezone* tz, uint64_t* mac
  	int ret;
  	struct linux_timeval ltv;
  
@@ -4568,8 +4361,13 @@ index be89afd..96bc339 100644
 +		if (__darling_vdso_clock_gettime(0 /* CLOCK_REALTIME */, &ts) == 0
 +				|| __darling_fast_clock(0 /* CLOCK_REALTIME */, &ts) == 0)
 +		{
-+			tv->tv_sec = ts.tv_sec;
-+			tv->tv_usec = ts.tv_nsec / 1000;
++			if (tv)
++			{
++				tv->tv_sec = ts.tv_sec;
++				tv->tv_usec = ts.tv_nsec / 1000;
++			}
++			if (mach_time)
++				*mach_time = mach_absolute_time();
 +			return 0;
 +		}
 +	}
@@ -4578,26 +4376,26 @@ index be89afd..96bc339 100644
  	if (ret < 0)
  	{
 diff --git a/darling/src/libsystem_kernel/emulation/src/xnu_syscall/bsd/impl/unistd/close.c b/darling/src/libsystem_kernel/emulation/src/xnu_syscall/bsd/impl/unistd/close.c
-index 6fad87f..e77e786 100644
+index 44c2efa..5fc0bde 100644
 --- a/darling/src/libsystem_kernel/emulation/src/xnu_syscall/bsd/impl/unistd/close.c
 +++ b/darling/src/libsystem_kernel/emulation/src/xnu_syscall/bsd/impl/unistd/close.c
-@@ -16,6 +16,8 @@ __attribute__((weak))
- __attribute__((visibility("default")))
- void kqueue_closed_fd(int fd) {}
+@@ -11,6 +11,8 @@
+ 
+ extern _libkernel_functions_t _libkernel_functions;
  
 +extern void rclol_trace_io(const char* op, int fd, long ret);
 +
  long sys_close(int fd)
  {
  	CANCELATION_POINT();
-@@ -39,6 +41,7 @@ long sys_close_nocancel(int fd)
+@@ -36,6 +38,7 @@ long sys_close_nocancel(int fd)
  	}
  
  	ret = LINUX_SYSCALL1(__NR_close, fd);
 +	rclol_trace_io("close", fd, ret);
  	if (ret < 0)
  		ret = errno_linux_to_bsd(ret);
- 	else
+ 	else {
 diff --git a/darling/src/libsystem_kernel/emulation/src/xnu_syscall/bsd/impl/unistd/read.c b/darling/src/libsystem_kernel/emulation/src/xnu_syscall/bsd/impl/unistd/read.c
 index bafb315..1e8dd67 100644
 --- a/darling/src/libsystem_kernel/emulation/src/xnu_syscall/bsd/impl/unistd/read.c
@@ -4620,299 +4418,11 @@ index bafb315..1e8dd67 100644
  	if (ret < 0)
  	{
  		// When the slave side of a PTY is closed, Linux produces -EIO on the master side.
-diff --git a/darling/src/libsystem_kernel/emulation/src/xnu_syscall/bsd/impl/xattr/fgetxattr.c b/darling/src/libsystem_kernel/emulation/src/xnu_syscall/bsd/impl/xattr/fgetxattr.c
-index 6dca738..3d864d2 100644
---- a/darling/src/libsystem_kernel/emulation/src/xnu_syscall/bsd/impl/xattr/fgetxattr.c
-+++ b/darling/src/libsystem_kernel/emulation/src/xnu_syscall/bsd/impl/xattr/fgetxattr.c
-@@ -4,20 +4,23 @@
- 
- #include <darling/emulation/common/base.h>
- #include <darling/emulation/conversion/errno.h>
-+#include <darling/emulation/conversion/xattr/name.h>
- #include <darling/emulation/linux_premigration/linux-syscalls/linux.h>
- 
- long sys_fgetxattr(int fd, const char* name, char* value,
- 		unsigned long size, unsigned int pos, int options)
- {
- 	int ret;
-+	char linux_name[1024];
- 	
- 	if (pos != 0)
- 		return -ERANGE;
- 
-+	name = xattr_name_to_linux(name, linux_name, sizeof(linux_name));
- 	ret = LINUX_SYSCALL(__NR_fgetxattr, fd, name, value, size);
- 
- 	if (ret < 0)
--		return errno_linux_to_bsd(ret);
-+		return xattr_errno_to_bsd(ret);
- 
- 	return ret;
- }
-diff --git a/darling/src/libsystem_kernel/emulation/src/xnu_syscall/bsd/impl/xattr/fremovexattr.c b/darling/src/libsystem_kernel/emulation/src/xnu_syscall/bsd/impl/xattr/fremovexattr.c
-index adaff44..eb445fe 100644
---- a/darling/src/libsystem_kernel/emulation/src/xnu_syscall/bsd/impl/xattr/fremovexattr.c
-+++ b/darling/src/libsystem_kernel/emulation/src/xnu_syscall/bsd/impl/xattr/fremovexattr.c
-@@ -2,16 +2,19 @@
- 
- #include <darling/emulation/common/base.h>
- #include <darling/emulation/conversion/errno.h>
-+#include <darling/emulation/conversion/xattr/name.h>
- #include <darling/emulation/linux_premigration/linux-syscalls/linux.h>
- 
- long sys_fremovexattr(int fd, const char* name, int options)
- {
- 	int ret;
-+	char linux_name[1024];
- 
-+	name = xattr_name_to_linux(name, linux_name, sizeof(linux_name));
- 	ret = LINUX_SYSCALL(__NR_fremovexattr, fd, name);
- 
- 	if (ret < 0)
--		return errno_linux_to_bsd(ret);
-+		return xattr_errno_to_bsd(ret);
- 
- 	return ret;
- }
-diff --git a/darling/src/libsystem_kernel/emulation/src/xnu_syscall/bsd/impl/xattr/fsetxattr.c b/darling/src/libsystem_kernel/emulation/src/xnu_syscall/bsd/impl/xattr/fsetxattr.c
-index 9aaef2c..1770c47 100644
---- a/darling/src/libsystem_kernel/emulation/src/xnu_syscall/bsd/impl/xattr/fsetxattr.c
-+++ b/darling/src/libsystem_kernel/emulation/src/xnu_syscall/bsd/impl/xattr/fsetxattr.c
-@@ -4,20 +4,23 @@
- 
- #include <darling/emulation/common/base.h>
- #include <darling/emulation/conversion/errno.h>
-+#include <darling/emulation/conversion/xattr/name.h>
- #include <darling/emulation/linux_premigration/linux-syscalls/linux.h>
- 
- long sys_fsetxattr(int fd, const char* name, const void* value,
- 		unsigned long size, unsigned int pos, int options)
- {
- 	int ret;
-+	char linux_name[1024];
- 
- 	if (pos != 0)
- 		return -ERANGE;
- 
-+	name = xattr_name_to_linux(name, linux_name, sizeof(linux_name));
- 	ret = LINUX_SYSCALL(__NR_fsetxattr, fd, name, value, size);
- 
- 	if (ret < 0)
--		return errno_linux_to_bsd(ret);
-+		return xattr_errno_to_bsd(ret);
- 
- 	return ret;
- }
-diff --git a/darling/src/libsystem_kernel/emulation/src/xnu_syscall/bsd/impl/xattr/getxattr.c b/darling/src/libsystem_kernel/emulation/src/xnu_syscall/bsd/impl/xattr/getxattr.c
-index daca861..4b53ad2 100644
---- a/darling/src/libsystem_kernel/emulation/src/xnu_syscall/bsd/impl/xattr/getxattr.c
-+++ b/darling/src/libsystem_kernel/emulation/src/xnu_syscall/bsd/impl/xattr/getxattr.c
-@@ -7,6 +7,7 @@ extern char* strcpy(char* dst, const char* src);
- #include <darling/emulation/common/base.h>
- #include <darling/emulation/conversion/errno.h>
- #include <darling/emulation/conversion/xattr/getxattr.h>
-+#include <darling/emulation/conversion/xattr/name.h>
- #include <darling/emulation/linux_premigration/vchroot_expand.h>
- #include <darling/emulation/common/bsdthread/per_thread_wd.h>
- #include <darling/emulation/linux_premigration/linux-syscalls/linux.h>
-@@ -15,6 +16,7 @@ long sys_getxattr(const char* path, const char* name, char* value,
- 		unsigned long size, unsigned int pos, int options)
- {
- 	int ret;
-+	char linux_name[1024];
- 
- 	if (pos != 0)
- 		return -ERANGE;
-@@ -29,10 +31,16 @@ long sys_getxattr(const char* path, const char* name, char* value,
- 	if (ret < 0)
- 		return errno_linux_to_bsd(ret);
- 
-+	name = xattr_name_to_linux(name, linux_name, sizeof(linux_name));
-+
- 	ret = LINUX_SYSCALL(__NR_getxattr, vc.path, name, value, size);
- 
- 	if (ret < 0)
--		return errno_linux_to_bsd(ret);
-+		return xattr_errno_to_bsd(ret);
- 
--	return 0;
-+	/* Darling returns the number of bytes copied (POSIX semantics).
-+	 * Returning 0 here made callers (e.g. Crashpad's
-+	 * crashpad.database.initialized marker) treat a present attribute as
-+	 * an empty value, so the crash database never initialised. */
-+	return ret;
- }
-diff --git a/darling/src/libsystem_kernel/emulation/src/xnu_syscall/bsd/impl/xattr/listxattr.c b/darling/src/libsystem_kernel/emulation/src/xnu_syscall/bsd/impl/xattr/listxattr.c
-index f4740ec..bc88090 100644
---- a/darling/src/libsystem_kernel/emulation/src/xnu_syscall/bsd/impl/xattr/listxattr.c
-+++ b/darling/src/libsystem_kernel/emulation/src/xnu_syscall/bsd/impl/xattr/listxattr.c
-@@ -2,12 +2,38 @@
- 
- #include <darling/emulation/common/base.h>
- #include <darling/emulation/conversion/errno.h>
-+#include <darling/emulation/conversion/xattr/name.h>
- #include <darling/emulation/linux_premigration/linux-syscalls/linux.h>
- #include <darling/emulation/linux_premigration/vchroot_expand.h>
- #include <darling/emulation/common/bsdthread/per_thread_wd.h>
- 
- #define XATTR_NOFOLLOW	1
- 
-+/* Strip the "user." prefix from each NUL-separated name in the buffer so
-+ * Darwin callers see namespace-less names, and compact the buffer. */
-+static unsigned long xattr_strip_user_prefix(char* namebuf, unsigned long len)
-+{
-+	char* in = namebuf;
-+	char* out = namebuf;
-+	char* end = namebuf + len;
-+
-+	while (in < end) {
-+		unsigned long n = 0;
-+		const char* s = in;
-+		char* dst = out;
-+		if (__builtin_strncmp(s, "user.", 5) == 0)
-+			s += 5;
-+		while (s + n < end && s[n] != '\0') {
-+			dst[n] = s[n];
-+			n++;
-+		}
-+		dst[n] = '\0';
-+		out += n + 1;
-+		in += (s - in) + n + 1;
-+	}
-+	return (unsigned long)(out - namebuf);
-+}
-+
- long sys_listxattr(const char* path, char* namebuf, unsigned long size, int options)
- {
- 	int ret;
-@@ -23,12 +49,15 @@ long sys_listxattr(const char* path, char* namebuf, unsigned long size, int opti
- 		return errno_linux_to_bsd(ret);
- 
- 	if (options & XATTR_NOFOLLOW)
--		ret = LINUX_SYSCALL(__NR_llistxattr, path, namebuf, size);
-+		ret = LINUX_SYSCALL(__NR_llistxattr, vc.path, namebuf, size);
- 	else
--		ret = LINUX_SYSCALL(__NR_listxattr, path, namebuf, size);
-+		ret = LINUX_SYSCALL(__NR_listxattr, vc.path, namebuf, size);
- 
- 	if (ret < 0)
- 		return errno_linux_to_bsd(ret);
- 
-+	if (namebuf != 0 && ret > 0)
-+		ret = (int) xattr_strip_user_prefix(namebuf, (unsigned long) ret);
-+
- 	return ret;
- }
-diff --git a/darling/src/libsystem_kernel/emulation/src/xnu_syscall/bsd/impl/xattr/removexattr.c b/darling/src/libsystem_kernel/emulation/src/xnu_syscall/bsd/impl/xattr/removexattr.c
-index 628a4f7..705b845 100644
---- a/darling/src/libsystem_kernel/emulation/src/xnu_syscall/bsd/impl/xattr/removexattr.c
-+++ b/darling/src/libsystem_kernel/emulation/src/xnu_syscall/bsd/impl/xattr/removexattr.c
-@@ -2,6 +2,9 @@
- 
- #include <darling/emulation/common/base.h>
- #include <darling/emulation/conversion/errno.h>
-+#include <darling/emulation/conversion/xattr/name.h>
-+#include <darling/emulation/linux_premigration/vchroot_expand.h>
-+#include <darling/emulation/common/bsdthread/per_thread_wd.h>
- #include <darling/emulation/linux_premigration/linux-syscalls/linux.h>
- 
- #define XATTR_NOFOLLOW	1
-@@ -9,14 +12,26 @@
- long sys_removexattr(const char* path, const char* name, int options)
- {
- 	int ret;
-+	char linux_name[1024];
-+
-+	struct vchroot_expand_args vc;
-+	vc.flags = (options & XATTR_NOFOLLOW) ? 0 : VCHROOT_FOLLOW;
-+	vc.dfd = get_perthread_wd();
-+
-+	strcpy(vc.path, path);
-+	ret = vchroot_expand(&vc);
-+	if (ret < 0)
-+		return errno_linux_to_bsd(ret);
-+
-+	name = xattr_name_to_linux(name, linux_name, sizeof(linux_name));
- 
- 	if (options & XATTR_NOFOLLOW)
--		ret = LINUX_SYSCALL(__NR_lremovexattr, path, name);
-+		ret = LINUX_SYSCALL(__NR_lremovexattr, vc.path, name);
- 	else
--		ret = LINUX_SYSCALL(__NR_removexattr, path, name);
-+		ret = LINUX_SYSCALL(__NR_removexattr, vc.path, name);
- 
- 	if (ret < 0)
--		return errno_linux_to_bsd(ret);
-+		return xattr_errno_to_bsd(ret);
- 
- 	return ret;
- }
-diff --git a/darling/src/libsystem_kernel/emulation/src/xnu_syscall/bsd/impl/xattr/setxattr.c b/darling/src/libsystem_kernel/emulation/src/xnu_syscall/bsd/impl/xattr/setxattr.c
-index c1b2d50..4e19963 100644
---- a/darling/src/libsystem_kernel/emulation/src/xnu_syscall/bsd/impl/xattr/setxattr.c
-+++ b/darling/src/libsystem_kernel/emulation/src/xnu_syscall/bsd/impl/xattr/setxattr.c
-@@ -2,8 +2,13 @@
- 
- #include <sys/errno.h>
- 
-+extern char* strcpy(char* dst, const char* src);
-+
- #include <darling/emulation/common/base.h>
- #include <darling/emulation/conversion/errno.h>
-+#include <darling/emulation/conversion/xattr/name.h>
-+#include <darling/emulation/linux_premigration/vchroot_expand.h>
-+#include <darling/emulation/common/bsdthread/per_thread_wd.h>
- #include <darling/emulation/linux_premigration/linux-syscalls/linux.h>
- 
- #define XATTR_NOFOLLOW	1
-@@ -12,21 +17,39 @@ long sys_setxattr(const char* path, const char* name, const void* value,
- 		unsigned long size, unsigned int pos, int options)
- {
- 	int ret;
-+	char linux_name[1024];
- 
- 	if (pos != 0)
- 		return -ERANGE;
- 
-+	/* darling-lol: vchroot-expand the path like getxattr does. Without
-+	 * this, a guest path (e.g. /Users/.../Crashes/Riot Client) was passed
-+	 * straight to the host setxattr and failed ENOENT -- Crashpad could
-+	 * never write its crashpad.database.initialized marker. */
-+	struct vchroot_expand_args vc;
-+	vc.flags = (options & XATTR_NOFOLLOW) ? 0 : VCHROOT_FOLLOW;
-+	vc.dfd = get_perthread_wd();
-+
-+	strcpy(vc.path, path);
-+	ret = vchroot_expand(&vc);
-+	if (ret < 0)
-+		return errno_linux_to_bsd(ret);
-+
-+	/* darling-lol: Darwin names are namespace-less; Linux needs a
-+	 * namespace prefix or returns ENOTSUP. */
-+	name = xattr_name_to_linux(name, linux_name, sizeof(linux_name));
-+
- 	if (options & XATTR_NOFOLLOW)
- 	{
--		ret = LINUX_SYSCALL(__NR_lsetxattr, path, name, value, size);
-+		ret = LINUX_SYSCALL(__NR_lsetxattr, vc.path, name, value, size);
- 	}
- 	else
- 	{
--		ret = LINUX_SYSCALL(__NR_setxattr, path, name, value, size);
-+		ret = LINUX_SYSCALL(__NR_setxattr, vc.path, name, value, size);
- 	}
- 
- 	if (ret < 0)
--		return errno_linux_to_bsd(ret);
-+		return xattr_errno_to_bsd(ret);
- 
- 	return ret;
- }
 diff --git a/darling/src/libsystem_kernel/emulation/src/xnu_syscall/mach/impl/mach_traps.c b/darling/src/libsystem_kernel/emulation/src/xnu_syscall/mach/impl/mach_traps.c
-index b998456..c6281e6 100644
+index 1d72325..ab3ade8 100644
 --- a/darling/src/libsystem_kernel/emulation/src/xnu_syscall/mach/impl/mach_traps.c
 +++ b/darling/src/libsystem_kernel/emulation/src/xnu_syscall/mach/impl/mach_traps.c
-@@ -12,9 +12,28 @@
+@@ -14,9 +14,28 @@
  #include <darling/emulation/linux_premigration/ext/mremap.h>
  #include <darling/emulation/common/simple.h>
  #include <darling/emulation/conversion/duct_errno.h>
@@ -4941,7 +4451,7 @@ index b998456..c6281e6 100644
  #define UNIMPLEMENTED_TRAP() { char msg[] = "Called unimplemented Mach trap: "; write(2, msg, sizeof(msg)-1); write(2, __FUNCTION__, sizeof(__FUNCTION__)-1); write(2, "\n", 1); }
  
  mach_port_name_t mach_reply_port_impl(void)
-@@ -44,6 +63,8 @@ mach_port_name_t host_self_trap_impl(void)
+@@ -46,6 +65,8 @@ mach_port_name_t host_self_trap_impl(void)
  	return port_name;
  }
  
@@ -4950,7 +4460,7 @@ index b998456..c6281e6 100644
  mach_msg_return_t mach_msg_trap_impl(
  				mach_msg_header_t *msg,
  				mach_msg_option_t option,
-@@ -72,8 +93,12 @@ mach_msg_return_t mach_msg_overwrite_trap_impl(
+@@ -74,8 +95,12 @@ mach_msg_return_t mach_msg_overwrite_trap_impl(
  {
  	int code;
  
@@ -4964,7 +4474,7 @@ index b998456..c6281e6 100644
  
  	if (code < 0) {
  		if (code == -LINUX_EINTR) {
-@@ -92,33 +117,860 @@ retry:
+@@ -94,33 +119,860 @@ retry:
  			}
  		}
  		__simple_printf("mach_msg_overwrite failed (internally): %d\n", code);
@@ -5828,7 +5338,7 @@ index b998456..c6281e6 100644
  	}
  
  	return code;
-@@ -128,21 +980,33 @@ kern_return_t semaphore_signal_thread_trap_impl(
+@@ -130,21 +982,33 @@ kern_return_t semaphore_signal_thread_trap_impl(
  				mach_port_name_t signal_name,
  				mach_port_name_t thread_name)
  {
@@ -5863,7 +5373,7 @@ index b998456..c6281e6 100644
  	}
  
  	return code;
-@@ -152,14 +1016,33 @@ kern_return_t semaphore_wait_signal_trap_impl(
+@@ -154,14 +1018,33 @@ kern_return_t semaphore_wait_signal_trap_impl(
  				mach_port_name_t wait_name,
  				mach_port_name_t signal_name)
  {
@@ -5898,7 +5408,7 @@ index b998456..c6281e6 100644
  	}
  
  	return code;
-@@ -170,14 +1053,24 @@ kern_return_t semaphore_timedwait_trap_impl(
+@@ -172,14 +1055,24 @@ kern_return_t semaphore_timedwait_trap_impl(
  				unsigned int sec,
  				clock_res_t nsec)
  {
@@ -5924,7 +5434,7 @@ index b998456..c6281e6 100644
  	}
  
  	return code;
-@@ -189,14 +1082,32 @@ kern_return_t semaphore_timedwait_signal_trap_impl(
+@@ -191,14 +1084,32 @@ kern_return_t semaphore_timedwait_signal_trap_impl(
  				unsigned int sec,
  				clock_res_t nsec)
  {
@@ -5958,7 +5468,7 @@ index b998456..c6281e6 100644
  	}
  
  	return code;
-@@ -514,6 +1425,12 @@ kern_return_t _kernelrpc_mach_port_construct_trap_impl(
+@@ -591,6 +1502,12 @@ kern_return_t _kernelrpc_mach_port_construct_trap_impl(
  		__simple_printf("mach_port_construct failed (internally): %d\n", code);
  		__simple_abort();
  	}
@@ -5971,7 +5481,7 @@ index b998456..c6281e6 100644
  
  	return code;
  }
-@@ -673,16 +1590,16 @@ kern_return_t macx_backing_store_recovery_impl(
+@@ -750,16 +1667,16 @@ kern_return_t macx_backing_store_recovery_impl(
  	return KERN_FAILURE;
  }
  
@@ -5991,7 +5501,7 @@ index b998456..c6281e6 100644
  	return 0;
  }
  
-@@ -692,12 +1609,53 @@ kern_return_t syscall_thread_switch_impl(
+@@ -769,12 +1686,53 @@ kern_return_t syscall_thread_switch_impl(
  				int option,
  				mach_msg_timeout_t option_time)
  {
@@ -6050,7 +5560,7 @@ index b998456..c6281e6 100644
  	// TODO: we could implement this with yield_to() in LKM
  	return KERN_SUCCESS;
 diff --git a/libsyscall/CMakeLists.txt b/libsyscall/CMakeLists.txt
-index 57cebad..3014255 100755
+index adbd6b4..519671d 100755
 --- a/libsyscall/CMakeLists.txt
 +++ b/libsyscall/CMakeLists.txt
 @@ -104,6 +104,18 @@ foreach(MIG_FILENAME IN LISTS LIBSYSCALL_MIGS)
@@ -6072,7 +5582,7 @@ index 57cebad..3014255 100755
  # mach/exc also needs the server component
  list(APPEND syscall_mig_sources_32 "${CMAKE_CURRENT_BINARY_DIR}/mach/exc-i386-Server.c")
  list(APPEND syscall_mig_sources_64 "${CMAKE_CURRENT_BINARY_DIR}/mach/exc-x86_64-Server.c")
-@@ -179,6 +191,7 @@ set(syscall_sources
+@@ -185,6 +197,7 @@ set(syscall_sources
  	wrappers/csr.c
  	wrappers/fs_snapshot.c
  	wrappers/__get_cpu_capabilities.S
@@ -6098,7 +5608,7 @@ index 88658cb..83ce61c 100644
  	int *tsderrno = (int*)_os_tsd_get_direct(__TSD_ERRNO);
  	if (tsderrno) {
 diff --git a/libsyscall/os/tsd.h b/libsyscall/os/tsd.h
-index 6619381..78d90df 100644
+index 8a895f1..abe4a33 100644
 --- a/libsyscall/os/tsd.h
 +++ b/libsyscall/os/tsd.h
 @@ -63,6 +63,22 @@ static __inline__ unsigned int
@@ -6159,185 +5669,3 @@ index 0000000..f185f6c
 +__sysctlbyname:
 +    /* Just jump to the syscall stub */
 +    jmp ___sysctlbyname
-diff --git a/darling/src/libsystem_kernel/emulation/include/common/cpu_frequency.h b/darling/src/libsystem_kernel/emulation/include/common/cpu_frequency.h
-new file mode 100644
-index 0000000..eb90f43
---- /dev/null
-+++ b/darling/src/libsystem_kernel/emulation/include/common/cpu_frequency.h
-@@ -0,0 +1,21 @@
-+#ifndef DARLING_CPU_FREQUENCY_H
-+#define DARLING_CPU_FREQUENCY_H
-+#include <stdint.h>
-+#include <stdbool.h>
-+
-+// Linux cpufreq exposes kHz; Darwin's hw.cpufrequency is an unsigned 64-bit Hz value.
-+static inline bool darling_frequency_hz(const char* text, uint64_t* result)
-+{
-+    uint64_t value = 0;
-+    if (!text || !result || *text < '0' || *text > '9') return false;
-+    do {
-+        unsigned digit = (unsigned)(*text++ - '0');
-+        if (value > (UINT64_MAX - digit) / 10) return false;
-+        value = value * 10 + digit;
-+    } while (*text >= '0' && *text <= '9');
-+    while (*text == ' ' || *text == '\t' || *text == '\r' || *text == '\n') ++text;
-+    if (*text || !value || value > UINT64_MAX / 1000) return false;
-+    *result = value * 1000;
-+    return true;
-+}
-+#endif
-diff --git a/darling/src/libsystem_kernel/emulation/src/xnu_syscall/bsd/impl/misc/csops.c b/darling/src/libsystem_kernel/emulation/src/xnu_syscall/bsd/impl/misc/csops.c
---- a/darling/src/libsystem_kernel/emulation/src/xnu_syscall/bsd/impl/misc/csops.c
-+++ b/darling/src/libsystem_kernel/emulation/src/xnu_syscall/bsd/impl/misc/csops.c
-@@ -1,38 +1,50 @@
- #include <darling/emulation/xnu_syscall/bsd/impl/misc/csops.h>
-+#include <darling/emulation/xnu_syscall/bsd/impl/unistd/getpid.h>
-+#include <darling/emulation/xnu_syscall/bsd/impl/signal/kill.h>
-+#include <darling/emulation/conversion/duct_errno.h>
-+#include <sys/codesign.h>
-+#include <stdint.h>
-+#include "security_user_access.h"
- 
--#include <stdint.h>
--#include <sys/codesign.h>
--#include <strings.h>
--
--#include <darling/emulation/conversion/duct_errno.h>
--
--// TODO: actually implement this
--// this is just a dummy implementation for now that returns no actual data for any operation
-+/* The loader does not validate process pages, CMS chains or library policy.
-+ * Never advertise CS_VALID or enforcement on the strength of a file name.
-+ * A separate on-disk verifier cannot establish the live task's security state.
-+ */
- long sys_csops(int pid, unsigned int ops, void* useraddr, size_t usersize) {
--	int ret = 0;
--
--	switch (ops) {
--		case CS_OPS_STATUS: {
--			*(uint32_t*)useraddr = CS_VALID;
--		} break;
--
--		case CS_OPS_BLOB:
--		case CS_OPS_ENTITLEMENTS_BLOB:
--		case CS_OPS_IDENTITY: {
--			memset(useraddr, 0, usersize);
--		} break;
--
--		// all other operations are completely unsupported
--		default: {
--			ret = -ENOSYS;
--		} break;
--	}
--
--	return ret;
-+    if (pid < 0) return -EINVAL;
-+    if (pid != 0 && pid != sys_getpid()) {
-+        long error = sys_kill(pid, 0, 1);
-+        if (error == -ESRCH) return error;
-+        return -ENOTSUP; /* no task signing state or PID-version binding */
-+    }
-+    switch (ops) {
-+        case CS_OPS_STATUS:
-+            if (!useraddr) return -EFAULT;
-+            if (usersize < sizeof(uint32_t)) return -ERANGE;
-+            { uint32_t flags = 0;
-+              return darling_security_write(useraddr, &flags, sizeof(flags)); }
-+        case CS_OPS_CDHASH:
-+        case CS_OPS_BLOB:
-+        case CS_OPS_ENTITLEMENTS_BLOB:
-+        case CS_OPS_IDENTITY:
-+        case CS_OPS_TEAMID:
-+            return -EINVAL; /* no validated process CodeDirectory */
-+        case CS_OPS_MARKINVALID:
-+        case CS_OPS_MARKHARD:
-+        case CS_OPS_MARKKILL:
-+        case CS_OPS_MARKRESTRICT:
-+        case CS_OPS_SET_STATUS:
-+        case CS_OPS_CLEARINSTALLER:
-+        case CS_OPS_CLEARPLATFORM:
-+        case CS_OPS_CLEAR_LV:
-+            return -ENOTSUP; /* no successful setters without enforcement */
-+        default:
-+            return -EINVAL;
-+    }
- }
- 
--// also more or less a stub
--long sys_csops_audittoken(int pid, unsigned int ops, void* useraddr, size_t usersize, audit_token_t* audit_token) {
--	// just defer to the regular csops
--	return sys_csops(pid, ops, useraddr, usersize);
-+long sys_csops_audittoken(int pid, unsigned int ops, void* useraddr, size_t usersize, audit_token_t* token) {
-+    if (!token) return -EFAULT;
-+    /* PID alone cannot validate an audit token's process generation/credentials. */
-+    return -ENOTSUP;
- }
-diff --git a/darling/src/libsystem_kernel/emulation/src/xnu_syscall/bsd/impl/misc/csrctl.c b/darling/src/libsystem_kernel/emulation/src/xnu_syscall/bsd/impl/misc/csrctl.c
---- a/darling/src/libsystem_kernel/emulation/src/xnu_syscall/bsd/impl/misc/csrctl.c
-+++ b/darling/src/libsystem_kernel/emulation/src/xnu_syscall/bsd/impl/misc/csrctl.c
-@@ -1,22 +1,20 @@
- #include <darling/emulation/xnu_syscall/bsd/impl/misc/csrctl.h>
--
- #define PRIVATE
- #include <sys/csr.h>
--
- #include <darling/emulation/conversion/duct_errno.h>
-+#include "security_user_access.h"
- 
- long sys_csrctl(uint32_t op, void* useraddr, size_t usersize) {
--	switch (op) {
--		case CSR_SYSCALL_CHECK: {
--			// allow everything
--			return 0;
--		} break;
--		case CSR_SYSCALL_GET_ACTIVE_CONFIG: {
--			// set everything to "allowed"
--			*(uint32_t*)useraddr = CSR_VALID_FLAGS;
--			return 0;
--		} break;
--		default:
--			return ENOSYS;
--	}
-+    if (op != CSR_SYSCALL_CHECK && op != CSR_SYSCALL_GET_ACTIVE_CONFIG) return -ENOSYS;
-+    if (usersize != sizeof(uint32_t)) return -EINVAL;
-+    if (!useraddr) return -EFAULT;
-+    /* All supported CSR exceptions are allowed: SIP is NOT enforced. The
-+     * existing Linux filesystem/ptrace policy is not macOS SIP enforcement. */
-+    uint32_t active = CSR_VALID_FLAGS;
-+    if (op == CSR_SYSCALL_GET_ACTIVE_CONFIG) {
-+        return darling_security_write(useraddr, &active, sizeof(active));
-+    }
-+    uint32_t requested;
-+    if (darling_security_read(&requested, useraddr, sizeof(requested))) return -EFAULT;
-+    return (requested & ~active) ? -EPERM : 0;
- }
-diff --git a/darling/src/libsystem_kernel/emulation/src/xnu_syscall/bsd/impl/misc/security_user_access.h b/darling/src/libsystem_kernel/emulation/src/xnu_syscall/bsd/impl/misc/security_user_access.h
-new file mode 100644
---- /dev/null
-+++ b/darling/src/libsystem_kernel/emulation/src/xnu_syscall/bsd/impl/misc/security_user_access.h
-@@ -0,0 +1,25 @@
-+#ifndef DARLING_SECURITY_USER_ACCESS_H
-+#define DARLING_SECURITY_USER_ACCESS_H
-+#include <stddef.h>
-+#include <darling/emulation/common/base.h>
-+#include <darling/emulation/linux_premigration/linux-syscalls/linux.h>
-+#include <darling/emulation/conversion/duct_errno.h>
-+
-+/* Kernel-mediated copies avoid host SIGSEGV on inaccessible guest buffers.
-+ * A short copy reports EFAULT; output may be partially copied across pages,
-+ * just as other copyout interfaces may fail after writing part of a buffer. */
-+static inline long darling_security_copy(void* local, void* remote, size_t size, int write) {
-+    struct security_iovec { void* base; size_t length; };
-+    struct security_iovec here = { local, size }, there = { remote, size };
-+    long pid = LINUX_SYSCALL0(__NR_getpid);
-+    long result = LINUX_SYSCALL(write ? __NR_process_vm_writev : __NR_process_vm_readv,
-+                               pid, &here, 1, &there, 1, 0);
-+    return result == (long)size ? 0 : -EFAULT;
-+}
-+static inline long darling_security_read(void* destination, const void* source, size_t size) {
-+    return darling_security_copy(destination, (void*)source, size, 0);
-+}
-+static inline long darling_security_write(void* destination, const void* source, size_t size) {
-+    return darling_security_copy((void*)source, destination, size, 1);
-+}
-+#endif

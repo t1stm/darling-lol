@@ -1,5 +1,5 @@
 diff --git a/CFError.c b/CFError.c
-index 91b5a2b..0f7b4eb 100644
+index bfcb16d..35a5e44 100644
 --- a/CFError.c
 +++ b/CFError.c
 @@ -30,6 +30,7 @@
@@ -10,7 +10,7 @@ index 91b5a2b..0f7b4eb 100644
  #if DEPLOYMENT_TARGET_MACOSX || DEPLOYMENT_TARGET_EMBEDDED
  #include <mach/mach_error.h>
  #endif
-@@ -380,6 +381,19 @@ CFDictionaryRef CFErrorCopyUserInfo(CFErrorRef err) {
+@@ -381,6 +382,19 @@ CFDictionaryRef CFErrorCopyUserInfo(CFErrorRef err) {
  }
  
  CFStringRef CFErrorCopyDescription(CFErrorRef err) {
@@ -30,7 +30,7 @@ index 91b5a2b..0f7b4eb 100644
      if (CF_IS_OBJC(CFErrorGetTypeID(), err)) {  // Since we have to return a retained result, we need to treat the toll-free bridging specially
          CFStringRef desc = (CFStringRef) CF_OBJC_CALLV((NSError *)err, localizedDescription);
          return desc ? (CFStringRef)CFRetain(desc) : NULL;    // !!! It really should never return nil.
-@@ -389,6 +403,19 @@ CFStringRef CFErrorCopyDescription(CFErrorRef err) {
+@@ -390,6 +404,19 @@ CFStringRef CFErrorCopyDescription(CFErrorRef err) {
  }
  
  CFStringRef CFErrorCopyFailureReason(CFErrorRef err) {
@@ -50,7 +50,7 @@ index 91b5a2b..0f7b4eb 100644
      if (CF_IS_OBJC(CFErrorGetTypeID(), err)) {  // Since we have to return a retained result, we need to treat the toll-free bridging specially
          CFStringRef str = (CFStringRef) CF_OBJC_CALLV((NSError *)err, localizedFailureReason);
          return str ? (CFStringRef)CFRetain(str) : NULL;    // It's possible for localizedFailureReason to return nil
-@@ -398,6 +425,19 @@ CFStringRef CFErrorCopyFailureReason(CFErrorRef err) {
+@@ -399,6 +426,19 @@ CFStringRef CFErrorCopyFailureReason(CFErrorRef err) {
  }
  
  CFStringRef CFErrorCopyRecoverySuggestion(CFErrorRef err) {
@@ -71,7 +71,7 @@ index 91b5a2b..0f7b4eb 100644
          CFStringRef str = (CFStringRef) CF_OBJC_CALLV((NSError *)err, localizedRecoverySuggestion);
          return str ? (CFStringRef)CFRetain(str) : NULL;    // It's possible for localizedRecoverySuggestion to return nil
 diff --git a/CFRunLoop.c b/CFRunLoop.c
-index e932ea5..522bc72 100644
+index 1d3432e..785f91c 100644
 --- a/CFRunLoop.c
 +++ b/CFRunLoop.c
 @@ -27,6 +27,7 @@
@@ -106,7 +106,7 @@ index e932ea5..522bc72 100644
      Boolean originalBuffer = true;
      kern_return_t ret = KERN_SUCCESS;
      for (;;) {		/* In that sleep of death what nightmares may come ... */
-@@ -2417,6 +2428,11 @@ static int32_t __CFRunLoopRun(CFRunLoopRef rl, CFRunLoopModeRef rlm, CFTimeInter
+@@ -2433,6 +2444,11 @@ static int32_t __CFRunLoopRun(CFRunLoopRef rl, CFRunLoopModeRef rlm, CFTimeInter
  
          Boolean poll = sourceHandledThisLoop || (0ULL == timeout_context->termTSR);
  
@@ -118,7 +118,7 @@ index e932ea5..522bc72 100644
          if (MACH_PORT_NULL != dispatchPort && !didDispatchPortLastTime) {
  #if DEPLOYMENT_TARGET_MACOSX || DEPLOYMENT_TARGET_EMBEDDED || DEPLOYMENT_TARGET_EMBEDDED_MINI
              msg = (mach_msg_header_t *)msg_buffer;
-@@ -2440,7 +2456,7 @@ static int32_t __CFRunLoopRun(CFRunLoopRef rl, CFRunLoopModeRef rlm, CFTimeInter
+@@ -2456,7 +2472,7 @@ static int32_t __CFRunLoopRun(CFRunLoopRef rl, CFRunLoopModeRef rlm, CFTimeInter
          // iteration, as this mode could be run re-entrantly and we don't
          // want these ports to get serviced.
  
@@ -127,7 +127,7 @@ index e932ea5..522bc72 100644
          
  	__CFRunLoopModeUnlock(rlm);
  	__CFRunLoopUnlock(rl);
-@@ -2500,7 +2516,7 @@ static int32_t __CFRunLoopRun(CFRunLoopRef rl, CFRunLoopModeRef rlm, CFTimeInter
+@@ -2516,7 +2532,7 @@ static int32_t __CFRunLoopRun(CFRunLoopRef rl, CFRunLoopModeRef rlm, CFTimeInter
          // want these ports to get serviced. Also, we don't want them left
          // in there if this function returns.
  
@@ -136,7 +136,7 @@ index e932ea5..522bc72 100644
          
          __CFRunLoopSetIgnoreWakeUps(rl);
  
-@@ -2550,7 +2566,11 @@ static int32_t __CFRunLoopRun(CFRunLoopRef rl, CFRunLoopModeRef rlm, CFTimeInter
+@@ -2566,7 +2582,11 @@ static int32_t __CFRunLoopRun(CFRunLoopRef rl, CFRunLoopModeRef rlm, CFTimeInter
  #endif
          if (MACH_PORT_NULL == livePort) {
              CFRUNLOOP_WAKEUP_FOR_NOTHING();
@@ -149,7 +149,7 @@ index e932ea5..522bc72 100644
          } else if (livePort == rl->_wakeUpPort) {
              CFRUNLOOP_WAKEUP_FOR_WAKEUP();
              // do nothing on Mac OS
-@@ -2719,21 +2739,46 @@ void CFRunLoopWakeUp(CFRunLoopRef rl) {
+@@ -2735,21 +2755,46 @@ void CFRunLoopWakeUp(CFRunLoopRef rl) {
      CHECK_FOR_FORK();
      // This lock is crucial to ignorable wakeups, do not remove it.
      __CFRunLoopLock(rl);
@@ -198,7 +198,7 @@ index e932ea5..522bc72 100644
  }
  
  void CFRunLoopStop(CFRunLoopRef rl) {
-@@ -2828,6 +2873,10 @@ void CFRunLoopPerformBlock(CFRunLoopRef rl, CFTypeRef mode, void (^block)(void))
+@@ -2844,6 +2889,10 @@ void CFRunLoopPerformBlock(CFRunLoopRef rl, CFTypeRef mode, void (^block)(void))
  
  Boolean CFRunLoopContainsSource(CFRunLoopRef rl, CFRunLoopSourceRef rls, CFStringRef modeName) {
      CHECK_FOR_FORK();
@@ -209,7 +209,7 @@ index e932ea5..522bc72 100644
      CFRunLoopModeRef rlm;
      Boolean hasValue = false;
      __CFRunLoopLock(rl);
-@@ -2849,6 +2898,13 @@ Boolean CFRunLoopContainsSource(CFRunLoopRef rl, CFRunLoopSourceRef rls, CFStrin
+@@ -2865,6 +2914,13 @@ Boolean CFRunLoopContainsSource(CFRunLoopRef rl, CFRunLoopSourceRef rls, CFStrin
  void CFRunLoopAddSource(CFRunLoopRef rl, CFRunLoopSourceRef rls, CFStringRef modeName) {	/* DOES CALLOUT */
      CHECK_FOR_FORK();
      if (__CFRunLoopIsDeallocating(rl)) return;
@@ -223,7 +223,7 @@ index e932ea5..522bc72 100644
      if (!__CFIsValid(rls)) return;
      Boolean doVer0Callout = false;
      __CFRunLoopLock(rl);
-@@ -2910,6 +2966,10 @@ void CFRunLoopAddSource(CFRunLoopRef rl, CFRunLoopSourceRef rls, CFStringRef mod
+@@ -2926,6 +2982,10 @@ void CFRunLoopAddSource(CFRunLoopRef rl, CFRunLoopSourceRef rls, CFStringRef mod
  
  void CFRunLoopRemoveSource(CFRunLoopRef rl, CFRunLoopSourceRef rls, CFStringRef modeName) {	/* DOES CALLOUT */
      CHECK_FOR_FORK();
@@ -234,7 +234,7 @@ index e932ea5..522bc72 100644
      Boolean doVer0Callout = false, doRLSRelease = false;
      __CFRunLoopLock(rl);
      if (modeName == kCFRunLoopCommonModes) {
-@@ -3432,6 +3492,12 @@ void CFRunLoopSourceSignal(CFRunLoopSourceRef rls) {
+@@ -3448,6 +3508,12 @@ void CFRunLoopSourceSignal(CFRunLoopSourceRef rls) {
  	__CFRunLoopSourceSetSignaled(rls);
      }
      __CFRunLoopSourceUnlock(rls);
@@ -247,16 +247,16 @@ index e932ea5..522bc72 100644
  }
  
  Boolean CFRunLoopSourceIsSignalled(CFRunLoopSourceRef rls) {
-@@ -3966,4 +4032,3 @@ void CFRunLoopTimerSetTolerance(CFRunLoopTimerRef rlt, CFTimeInterval tolerance)
+@@ -3982,4 +4048,3 @@ void CFRunLoopTimerSetTolerance(CFRunLoopTimerRef rlt, CFTimeInterval tolerance)
      }
  #endif
  }
 -
 diff --git a/CFString.c b/CFString.c
-index 162403a..b9ad8a0 100644
+index 0d88d51..e4e7502 100644
 --- a/CFString.c
 +++ b/CFString.c
-@@ -6572,3 +6572,24 @@ void CFShowStr(CFStringRef str) {
+@@ -6620,3 +6620,24 @@ void CFShowStr(CFStringRef str) {
  #undef HANGUL_TCOUNT
  #undef HANGUL_NCOUNT
  
@@ -282,10 +282,10 @@ index 162403a..b9ad8a0 100644
 +    return kCFNotFound;
 +}
 diff --git a/NSArray.m b/NSArray.m
-index 30ac9df..b389210 100644
+index 33f05c9..f99f0b1 100644
 --- a/NSArray.m
 +++ b/NSArray.m
-@@ -1232,6 +1232,15 @@ SINGLETON_RR()
+@@ -1230,6 +1230,15 @@ SINGLETON_RR()
      return success;
  }
  
@@ -302,10 +302,10 @@ index 30ac9df..b389210 100644
  {
      [self makeObjectsPerformSelector:sel withObject:nil];
 diff --git a/NSDictionary.m b/NSDictionary.m
-index a3da56a..4678733 100644
+index 3863521..eea5446 100644
 --- a/NSDictionary.m
 +++ b/NSDictionary.m
-@@ -986,6 +986,15 @@ static NSString *_getDescription(id obj, id locale, int level)
+@@ -1019,6 +1019,15 @@ static NSString *_getDescription(id obj, id locale, int level)
      return success;
  }
  

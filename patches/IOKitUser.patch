@@ -1,8 +1,8 @@
 diff --git a/IOKitLib.c b/IOKitLib.c
-index 81ed8f7..3120abb 100644
+index dbdfae3..83731ef 100644
 --- a/IOKitLib.c
 +++ b/IOKitLib.c
-@@ -884,6 +884,15 @@ IONotificationPortGetRunLoopSource(
+@@ -906,6 +906,15 @@ IONotificationPortGetRunLoopSource(
      CFMachPortContext 	    context;
      Boolean		            cfReusedPort = false;
  
@@ -18,7 +18,7 @@ index 81ed8f7..3120abb 100644
      if (notify->source)
          return (notify->source);
      
-@@ -934,6 +943,11 @@ mach_port_t
+@@ -956,6 +965,11 @@ mach_port_t
  IONotificationPortGetMachPort(
  	IONotificationPortRef	notify )
  {
