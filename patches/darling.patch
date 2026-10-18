@@ -1,3 +1,39 @@
+diff --git a/CMakeLists.txt b/CMakeLists.txt
+index 8077b7e94..055608065 100644
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -236,7 +236,12 @@ InstallSymlink(/Volumes/SystemRoot/usr/share/zoneinfo ${CMAKE_INSTALL_PREFIX}/li
+ install(DIRECTORY DESTINATION libexec/darling/Library/Preferences)
+ 
+ if(NOT DEBIAN_PACKAGING)
+-	install(CODE "execute_process(COMMAND bash ${DARLING_TOP_DIRECTORY}/tools/shutdown-user.sh)")
++	install(CODE "
++		execute_process(COMMAND bash \"${DARLING_TOP_DIRECTORY}/tools/shutdown-user.sh\" RESULT_VARIABLE DARLING_SHUTDOWN_RESULT)
++		if(NOT DARLING_SHUTDOWN_RESULT STREQUAL \"0\")
++			message(FATAL_ERROR \"Unable to stop old Darling containers; installation stopped\")
++		endif()
++	")
+ endif(NOT DEBIAN_PACKAGING)
+ 
+ add_custom_target(uninstall
+diff --git a/src/CMakeLists.txt b/src/CMakeLists.txt
+index 5c924b34d..54f134873 100644
+--- a/src/CMakeLists.txt
++++ b/src/CMakeLists.txt
+@@ -119,6 +119,13 @@ SET(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -mmacosx-version-min=${CMAKE_OSX_DEPLOYMENT_
+ SET(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -mmacosx-version-min=${CMAKE_OSX_DEPLOYMENT_TARGET}")
+ set(CMAKE_OBJC_FLAGS "${CMAKE_OBJC_FLAGS} -mmacosx-version-min=${CMAKE_OSX_DEPLOYMENT_TARGET}")
+ 
++# Recent clang compiles an empty @[] / @{} for a macOS 11+ runtime into a reference to
++# __NSArray0__struct / __NSDictionary0__struct, which Darling's CoreFoundation does not define
++# (it provides __NSArray0__ / __NSDictionary0__). Keep the earlier code generation.
++SET(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -fobjc-runtime=macosx-10.15")
++SET(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -fobjc-runtime=macosx-10.15")
++set(CMAKE_OBJC_FLAGS "${CMAKE_OBJC_FLAGS} -fobjc-runtime=macosx-10.15")
++
+ add_definitions(-target ${APPLE_TARGET_TRIPLET_PRIMARY})
+ include(darling_lib)
+ include(darling_static_lib)
 diff --git a/src/CoreAudio/AudioToolbox/AUComponent.cpp b/src/CoreAudio/AudioToolbox/AUComponent.cpp
 index d48eec1ef..1deb304e9 100644
 --- a/src/CoreAudio/AudioToolbox/AUComponent.cpp
@@ -820,102 +856,6 @@ index ee6a9b171..8505c3553 100644
          else
              return badComponentSelector;
      }
-diff --git a/src/CoreAudio/CoreAudio/AudioConverterShim.c b/src/CoreAudio/CoreAudio/AudioConverterShim.c
-new file mode 100644
-index 000000000..6e85e8230
---- /dev/null
-+++ b/src/CoreAudio/CoreAudio/AudioConverterShim.c
-@@ -0,0 +1,90 @@
-+/* Minimal AudioConverter for Darling's CoreAudio framework.
-+ *
-+ * Apple's CoreAudio re-exports these AudioToolbox entry points, and
-+ * third-party code (e.g. Discord voice) binds them against CoreAudio.
-+ * AudioToolbox cannot be re-exported here (it depends on CoreAudio),
-+ * so this TU provides small self-contained implementations:
-+ *  - format-identical conversion works (direct frame copy);
-+ *  - anything else returns kAudioConverterErr_InvalidInputSize/
-+ *    codec-unavailable rather than crashing the caller at bind time.
-+ */
-+#include <CoreAudio/CoreAudioTypes.h>
-+#include <AudioToolbox/AudioConverter.h>
-+#include <CarbonCore/MacErrors.h>
-+#include <stdlib.h>
-+#include <string.h>
-+
-+struct DarlingAudioConverter {
-+    AudioStreamBasicDescription src;
-+    AudioStreamBasicDescription dst;
-+};
-+
-+OSStatus AudioConverterNew(const AudioStreamBasicDescription* inSourceFormat,
-+                           const AudioStreamBasicDescription* inDestinationFormat,
-+                           AudioConverterRef* outAudioConverter) {
-+    struct DarlingAudioConverter* c;
-+    if (!inSourceFormat || !inDestinationFormat || !outAudioConverter)
-+        return paramErr;
-+    c = (struct DarlingAudioConverter*)malloc(sizeof(*c));
-+    if (!c)
-+        return memFullErr;
-+    c->src = *inSourceFormat;
-+    c->dst = *inDestinationFormat;
-+    *outAudioConverter = (AudioConverterRef)c;
-+    return noErr;
-+}
-+
-+OSStatus AudioConverterDispose(AudioConverterRef inAudioConverter) {
-+    if (!inAudioConverter)
-+        return paramErr;
-+    free(inAudioConverter);
-+    return noErr;
-+}
-+
-+static int asbd_equal(const AudioStreamBasicDescription* a,
-+                      const AudioStreamBasicDescription* b) {
-+    return a->mSampleRate == b->mSampleRate &&
-+           a->mFormatID == b->mFormatID &&
-+           a->mFormatFlags == b->mFormatFlags &&
-+           a->mBytesPerPacket == b->mBytesPerPacket &&
-+           a->mFramesPerPacket == b->mFramesPerPacket &&
-+           a->mBytesPerFrame == b->mBytesPerFrame &&
-+           a->mChannelsPerFrame == b->mChannelsPerFrame &&
-+           a->mBitsPerChannel == b->mBitsPerChannel;
-+}
-+
-+OSStatus AudioConverterFillComplexBuffer(AudioConverterRef inAudioConverter,
-+                                         AudioConverterComplexInputDataProc inInputDataProc,
-+                                         void* inInputDataProcUserData,
-+                                         UInt32* ioOutputDataPacketSize,
-+                                         AudioBufferList* outOutputData,
-+                                         AudioStreamPacketDescription* outPacketDescription) {
-+    struct DarlingAudioConverter* c = (struct DarlingAudioConverter*)inAudioConverter;
-+    AudioBufferList inBuf;
-+    UInt32 packets, bytes;
-+    OSStatus st;
-+
-+    (void)outPacketDescription;
-+    if (!c || !inInputDataProc || !ioOutputDataPacketSize || !outOutputData)
-+        return paramErr;
-+    if (!asbd_equal(&c->src, &c->dst))
-+        return kAudioConverterErr_UnspecifiedError;
-+    if (c->src.mBytesPerPacket == 0 || outOutputData->mNumberBuffers < 1)
-+        return paramErr;
-+
-+    packets = *ioOutputDataPacketSize;
-+    bytes = packets * c->src.mBytesPerPacket;
-+    if (bytes > outOutputData->mBuffers[0].mDataByteSize)
-+        bytes = outOutputData->mBuffers[0].mDataByteSize;
-+
-+    inBuf.mNumberBuffers = 1;
-+    inBuf.mBuffers[0].mNumberChannels = c->src.mChannelsPerFrame;
-+    inBuf.mBuffers[0].mDataByteSize = bytes;
-+    inBuf.mBuffers[0].mData = outOutputData->mBuffers[0].mData;
-+    st = inInputDataProc((AudioConverterRef)c, &packets, &inBuf, NULL, inInputDataProcUserData);
-+    if (st != noErr)
-+        return st;
-+    *ioOutputDataPacketSize = packets;
-+    outOutputData->mBuffers[0].mDataByteSize = packets * c->dst.mBytesPerPacket;
-+    return noErr;
-+}
 diff --git a/src/CoreAudio/CoreAudio/AudioHardware.cpp b/src/CoreAudio/CoreAudio/AudioHardware.cpp
 index 7243e6a62..647c8aff7 100644
 --- a/src/CoreAudio/CoreAudio/AudioHardware.cpp
@@ -2956,6 +2896,174 @@ index 102614203..9b80671a6 100644
  
  #endif /* AUDIOHARDWAREBASE_H */
 -
+diff --git a/src/external/IOKitUser b/src/external/IOKitUser
+--- a/src/external/IOKitUser
++++ b/src/external/IOKitUser
+@@ -1 +1 @@
+-Subproject commit 534684e6748dffbd875c6cd1942477a52b66a077
++Subproject commit 534684e6748dffbd875c6cd1942477a52b66a077-dirty
+diff --git a/src/external/Libinfo b/src/external/Libinfo
+--- a/src/external/Libinfo
++++ b/src/external/Libinfo
+@@ -1 +1 @@
+-Subproject commit 93d242ce3f86d1de67522279edb3a2dcb23f30c7
++Subproject commit 93d242ce3f86d1de67522279edb3a2dcb23f30c7-dirty
+diff --git a/src/external/OpenDirectory b/src/external/OpenDirectory
+--- a/src/external/OpenDirectory
++++ b/src/external/OpenDirectory
+@@ -1 +1 @@
+-Subproject commit 67a8ad2ed0b06775bf53839446e2df7d49ab1c96
++Subproject commit 67a8ad2ed0b06775bf53839446e2df7d49ab1c96-dirty
+diff --git a/src/external/cfnetwork b/src/external/cfnetwork
+--- a/src/external/cfnetwork
++++ b/src/external/cfnetwork
+@@ -1 +1 @@
+-Subproject commit e7e3db881008d883f82914765a72ce842bcba735
++Subproject commit e7e3db881008d883f82914765a72ce842bcba735-dirty
+diff --git a/src/external/cocotron b/src/external/cocotron
+--- a/src/external/cocotron
++++ b/src/external/cocotron
+@@ -1 +1 @@
+-Subproject commit c8d38d16a9f613d300157bebbab2b9501bc0c274
++Subproject commit c8d38d16a9f613d300157bebbab2b9501bc0c274-dirty
+diff --git a/src/external/compiler-rt b/src/external/compiler-rt
+--- a/src/external/compiler-rt
++++ b/src/external/compiler-rt
+@@ -1 +1 @@
+-Subproject commit 5fd9bc0effa307b99b35da59ce579e8e031c22da
++Subproject commit 5fd9bc0effa307b99b35da59ce579e8e031c22da-dirty
+diff --git a/src/external/configd b/src/external/configd
+--- a/src/external/configd
++++ b/src/external/configd
+@@ -1 +1 @@
+-Subproject commit 98e52de19c52f7938e581ed20385f38abd7fa197
++Subproject commit 98e52de19c52f7938e581ed20385f38abd7fa197-dirty
+diff --git a/src/external/corecrypto b/src/external/corecrypto
+--- a/src/external/corecrypto
++++ b/src/external/corecrypto
+@@ -1 +1 @@
+-Subproject commit 875f1cd9e75b0029d872b88ce8a77da276c00c84
++Subproject commit 875f1cd9e75b0029d872b88ce8a77da276c00c84-dirty
+diff --git a/src/external/corefoundation b/src/external/corefoundation
+--- a/src/external/corefoundation
++++ b/src/external/corefoundation
+@@ -1 +1 @@
+-Subproject commit a3640a77410cf1825f7855172b1551ae7917c461
++Subproject commit a3640a77410cf1825f7855172b1551ae7917c461-dirty
+diff --git a/src/external/curl b/src/external/curl
+--- a/src/external/curl
++++ b/src/external/curl
+@@ -1 +1 @@
+-Subproject commit 92f54fd7eceabed2c2382a4acc0f7293dedd92ff
++Subproject commit 92f54fd7eceabed2c2382a4acc0f7293dedd92ff-dirty
+diff --git a/src/external/darlingserver b/src/external/darlingserver
+--- a/src/external/darlingserver
++++ b/src/external/darlingserver
+@@ -1 +1 @@
+-Subproject commit 89751e64bc6c2082f7725061824ee0e33395b0de
++Subproject commit 89751e64bc6c2082f7725061824ee0e33395b0de-dirty
+diff --git a/src/external/foundation b/src/external/foundation
+--- a/src/external/foundation
++++ b/src/external/foundation
+@@ -1 +1 @@
+-Subproject commit 55a4341b470c2a56fea667c1d2167fb074226f04
++Subproject commit 55a4341b470c2a56fea667c1d2167fb074226f04-dirty
+diff --git a/src/external/iokitd b/src/external/iokitd
+--- a/src/external/iokitd
++++ b/src/external/iokitd
+@@ -1 +1 @@
+-Subproject commit 5549ac4cd2db923c256f016a1381b3bfb716730a
++Subproject commit 5549ac4cd2db923c256f016a1381b3bfb716730a-dirty
+diff --git a/src/external/libcxxabi b/src/external/libcxxabi
+--- a/src/external/libcxxabi
++++ b/src/external/libcxxabi
+@@ -1 +1 @@
+-Subproject commit c9c851718eb304a9aefa097aeaaf8c3bd1dff1bc
++Subproject commit c9c851718eb304a9aefa097aeaaf8c3bd1dff1bc-dirty
+diff --git a/src/external/libdispatch b/src/external/libdispatch
+--- a/src/external/libdispatch
++++ b/src/external/libdispatch
+@@ -1 +1 @@
+-Subproject commit 380f03c180b80d940134fb35783ddc714784a53a
++Subproject commit 380f03c180b80d940134fb35783ddc714784a53a-dirty
+diff --git a/src/external/libkqueue b/src/external/libkqueue
+--- a/src/external/libkqueue
++++ b/src/external/libkqueue
+@@ -1 +1 @@
+-Subproject commit b0795a2e1dab5331116770139bfea8d832478f5f
++Subproject commit b0795a2e1dab5331116770139bfea8d832478f5f-dirty
+diff --git a/src/external/libmalloc b/src/external/libmalloc
+--- a/src/external/libmalloc
++++ b/src/external/libmalloc
+@@ -1 +1 @@
+-Subproject commit a57991e2651226a675654bd96e5d9ab6bec288c5
++Subproject commit a57991e2651226a675654bd96e5d9ab6bec288c5-dirty
+diff --git a/src/external/libnetwork b/src/external/libnetwork
+--- a/src/external/libnetwork
++++ b/src/external/libnetwork
+@@ -1 +1 @@
+-Subproject commit 56c5fad43f24a40d8ca7f8a1d0badedfeaf7e64e
++Subproject commit 56c5fad43f24a40d8ca7f8a1d0badedfeaf7e64e-dirty
+diff --git a/src/external/libnotify b/src/external/libnotify
+--- a/src/external/libnotify
++++ b/src/external/libnotify
+@@ -1 +1 @@
+-Subproject commit 98156d3f847a3ced6c5f52c12a889047bc4f9b20
++Subproject commit 98156d3f847a3ced6c5f52c12a889047bc4f9b20-dirty
+diff --git a/src/external/libplatform b/src/external/libplatform
+--- a/src/external/libplatform
++++ b/src/external/libplatform
+@@ -1 +1 @@
+-Subproject commit 5a3e5b529d25c70257dcfa97e94f1826e71e9f40
++Subproject commit 5a3e5b529d25c70257dcfa97e94f1826e71e9f40-dirty
+diff --git a/src/external/libpthread b/src/external/libpthread
+--- a/src/external/libpthread
++++ b/src/external/libpthread
+@@ -1 +1 @@
+-Subproject commit f07f265bfbcf071c1adfc808de971e053ea5edc5
++Subproject commit f07f265bfbcf071c1adfc808de971e053ea5edc5-dirty
+diff --git a/src/external/libresolv b/src/external/libresolv
+--- a/src/external/libresolv
++++ b/src/external/libresolv
+@@ -1 +1 @@
+-Subproject commit cf955392e5449efb269b8b3510c755085fd36a2d
++Subproject commit cf955392e5449efb269b8b3510c755085fd36a2d-dirty
+diff --git a/src/external/libtrace b/src/external/libtrace
+--- a/src/external/libtrace
++++ b/src/external/libtrace
+@@ -1 +1 @@
+-Subproject commit 8cf07f02b15f7dca6436882a03678fff0392eaf6
++Subproject commit 8cf07f02b15f7dca6436882a03678fff0392eaf6-dirty
+diff --git a/src/external/libxpc b/src/external/libxpc
+--- a/src/external/libxpc
++++ b/src/external/libxpc
+@@ -1 +1 @@
+-Subproject commit 394e033333d3c253a12f08a99090c113b0917d00
++Subproject commit 394e033333d3c253a12f08a99090c113b0917d00-dirty
+diff --git a/src/external/metal b/src/external/metal
+--- a/src/external/metal
++++ b/src/external/metal
+@@ -1 +1 @@
+-Subproject commit ae20248dc144beab899e38752f5a530f28a0ea56
++Subproject commit ae20248dc144beab899e38752f5a530f28a0ea56-dirty
+diff --git a/src/external/objc4 b/src/external/objc4
+--- a/src/external/objc4
++++ b/src/external/objc4
+@@ -1 +1 @@
+-Subproject commit 1a12df76d12bfc9fdfffadb290f7742763568765
++Subproject commit 1a12df76d12bfc9fdfffadb290f7742763568765-dirty
+diff --git a/src/external/security b/src/external/security
+--- a/src/external/security
++++ b/src/external/security
+@@ -1 +1 @@
+-Subproject commit 3cfffcf2c5b5900169c964facdf42cc05c23005c
++Subproject commit 3cfffcf2c5b5900169c964facdf42cc05c23005c-dirty
+diff --git a/src/external/xnu b/src/external/xnu
+--- a/src/external/xnu
++++ b/src/external/xnu
+@@ -1 +1 @@
+-Subproject commit fa29287aa2f0115271e091f1031f53c9e024005d
++Subproject commit fa29287aa2f0115271e091f1031f53c9e024005d-dirty
 diff --git a/src/frameworks/AVFoundation/include/AVFoundation/AVCaptureDevice.h b/src/frameworks/AVFoundation/include/AVFoundation/AVCaptureDevice.h
 index cb2896957..b2c25fbd4 100644
 --- a/src/frameworks/AVFoundation/include/AVFoundation/AVCaptureDevice.h
@@ -3025,6 +3133,443 @@ index cab525b91..2fcab003d 100644
  - (NSMethodSignature *)methodSignatureForSelector:(SEL)aSelector {
      return [NSMethodSignature signatureWithObjCTypes: "v@:"];
  }
+diff --git a/src/frameworks/Accelerate/vecLib/vDSP/CMakeLists.txt b/src/frameworks/Accelerate/vecLib/vDSP/CMakeLists.txt
+index 6ef701609..9bdcace68 100644
+--- a/src/frameworks/Accelerate/vecLib/vDSP/CMakeLists.txt
++++ b/src/frameworks/Accelerate/vecLib/vDSP/CMakeLists.txt
+@@ -7,7 +7,11 @@ set(DYLIB_CURRENT_VERSION "671.250.4")
+ add_darling_library(vDSP SHARED
+ 	src/vDSP.c
+ 	src/extrema.c
++	src/arith.c
++	src/fft.c
+ )
++# WebAudio calls these on the realtime render thread.
++target_compile_options(vDSP PRIVATE -O2)
+ make_fat(vDSP)
+ target_link_libraries(vDSP system)
+ install(TARGETS vDSP DESTINATION libexec/darling/usr/lib)
+diff --git a/src/frameworks/Accelerate/vecLib/vDSP/include/vDSP/vDSP.h b/src/frameworks/Accelerate/vecLib/vDSP/include/vDSP/vDSP.h
+index c6b437c5b..88505eda4 100644
+--- a/src/frameworks/Accelerate/vecLib/vDSP/include/vDSP/vDSP.h
++++ b/src/frameworks/Accelerate/vecLib/vDSP/include/vDSP/vDSP.h
+@@ -24,6 +24,51 @@
+ typedef unsigned long vDSP_Length;
+ typedef long vDSP_Stride;
+ 
++typedef struct DSPComplex {
++	float real;
++	float imag;
++} DSPComplex;
++
++typedef struct DSPSplitComplex {
++	float *realp;
++	float *imagp;
++} DSPSplitComplex;
++
++typedef int FFTDirection;
++typedef int FFTRadix;
++
++enum {
++	kFFTDirection_Forward = 1,
++	kFFTDirection_Inverse = -1
++};
++
++enum {
++	kFFTRadix2 = 0,
++	kFFTRadix3 = 1,
++	kFFTRadix5 = 2
++};
++
++typedef struct OpaqueFFTSetup *FFTSetup;
++
++void vDSP_vadd(const float *__A, vDSP_Stride __IA, const float *__B, vDSP_Stride __IB, float *__C, vDSP_Stride __IC, vDSP_Length __N);
++void vDSP_vsub(const float *__B, vDSP_Stride __IB, const float *__A, vDSP_Stride __IA, float *__C, vDSP_Stride __IC, vDSP_Length __N);
++void vDSP_vmul(const float *__A, vDSP_Stride __IA, const float *__B, vDSP_Stride __IB, float *__C, vDSP_Stride __IC, vDSP_Length __N);
++void vDSP_vsmul(const float *__A, vDSP_Stride __IA, const float *__B, float *__C, vDSP_Stride __IC, vDSP_Length __N);
++void vDSP_vsadd(const float *__A, vDSP_Stride __IA, const float *__B, float *__C, vDSP_Stride __IC, vDSP_Length __N);
++void vDSP_vsma(const float *__A, vDSP_Stride __IA, const float *__B, const float *__C, vDSP_Stride __IC, float *__D, vDSP_Stride __ID, vDSP_Length __N);
++void vDSP_svesq(const float *__A, vDSP_Stride __IA, float *__C, vDSP_Length __N);
++void vDSP_vclip(const float *__A, vDSP_Stride __IA, const float *__B, const float *__C, float *__D, vDSP_Stride __ID, vDSP_Length __N);
++void vDSP_maxmgv(const float *__A, vDSP_Stride __IA, float *__C, vDSP_Length __N);
++void vDSP_conv(const float *__A, vDSP_Stride __IA, const float *__F, vDSP_Stride __IF, float *__C, vDSP_Stride __IC, vDSP_Length __N, vDSP_Length __P);
++void vDSP_ctoz(const DSPComplex *__C, vDSP_Stride __IC, const DSPSplitComplex *__Z, vDSP_Stride __IZ, vDSP_Length __N);
++void vDSP_ztoc(const DSPSplitComplex *__Z, vDSP_Stride __IZ, DSPComplex *__C, vDSP_Stride __IC, vDSP_Length __N);
++void vDSP_zvmul(const DSPSplitComplex *__A, vDSP_Stride __IA, const DSPSplitComplex *__B, vDSP_Stride __IB, const DSPSplitComplex *__C, vDSP_Stride __IC, vDSP_Length __N, int __Conjugate);
++void vDSP_deq22(const float *__A, vDSP_Stride __IA, const float *__B, float *__C, vDSP_Stride __IC, vDSP_Length __N);
++void vDSP_deq22D(const double *__A, vDSP_Stride __IA, const double *__B, double *__C, vDSP_Stride __IC, vDSP_Length __N);
++FFTSetup vDSP_create_fftsetup(vDSP_Length __Log2n, FFTRadix __Radix);
++void vDSP_destroy_fftsetup(FFTSetup __setup);
++void vDSP_fft_zrip(FFTSetup __Setup, const DSPSplitComplex *__C, vDSP_Stride __IC, vDSP_Length __Log2N, FFTDirection __Direction);
++
+ void* vDSP_DCT_CreateSetup(void);
+ void* vDSP_DCT_Execute(void);
+ void* vDSP_DFT_CreateSetup(void);
+@@ -63,17 +108,11 @@ void* vDSP_biquadm_SetTargetsDouble(void);
+ void* vDSP_biquadm_SetTargetsSingle(void);
+ void* vDSP_blkman_window(void);
+ void* vDSP_blkman_windowD(void);
+-void* vDSP_conv(void);
+ void* vDSP_convD(void);
+-void* vDSP_create_fftsetup(void);
+ void* vDSP_create_fftsetupD(void);
+-void* vDSP_ctoz(void);
+ void* vDSP_ctozD(void);
+-void* vDSP_deq22(void);
+-void* vDSP_deq22D(void);
+ void* vDSP_desamp(void);
+ void* vDSP_desampD(void);
+-void* vDSP_destroy_fftsetup(void);
+ void* vDSP_destroy_fftsetupD(void);
+ void* vDSP_distancesq(void);
+ void* vDSP_distancesqD(void);
+@@ -117,7 +156,6 @@ void* vDSP_fft_zop(void);
+ void* vDSP_fft_zopD(void);
+ void* vDSP_fft_zopt(void);
+ void* vDSP_fft_zoptD(void);
+-void* vDSP_fft_zrip(void);
+ void* vDSP_fft_zripD(void);
+ void* vDSP_fft_zript(void);
+ void* vDSP_fft_zriptD(void);
+@@ -194,7 +232,6 @@ void* vDSP_sve_svesq(void);
+ void* vDSP_sve_svesqD(void);
+ void* vDSP_svemg(void);
+ void* vDSP_svemgD(void);
+-void* vDSP_svesq(void);
+ void* vDSP_svesqD(void);
+ void* vDSP_svs(void);
+ void* vDSP_svsD(void);
+@@ -203,7 +240,6 @@ void* vDSP_vaamD(void);
+ void* vDSP_vabs(void);
+ void* vDSP_vabsD(void);
+ void* vDSP_vabsi(void);
+-void* vDSP_vadd(void);
+ void* vDSP_vaddD(void);
+ void* vDSP_vaddi(void);
+ void* vDSP_vaddsub(void);
+@@ -216,7 +252,6 @@ void* vDSP_vasm(void);
+ void* vDSP_vasmD(void);
+ void* vDSP_vavlin(void);
+ void* vDSP_vavlinD(void);
+-void* vDSP_vclip(void);
+ void* vDSP_vclipD(void);
+ void* vDSP_vclipc(void);
+ void* vDSP_vclipcD(void);
+@@ -316,7 +351,6 @@ void* vDSP_vmsa(void);
+ void* vDSP_vmsaD(void);
+ void* vDSP_vmsb(void);
+ void* vDSP_vmsbD(void);
+-void* vDSP_vmul(void);
+ void* vDSP_vmulD(void);
+ void* vDSP_vnabs(void);
+ void* vDSP_vnabsD(void);
+@@ -350,7 +384,6 @@ void* vDSP_vrsum(void);
+ void* vDSP_vrsumD(void);
+ void* vDSP_vrvrs(void);
+ void* vDSP_vrvrsD(void);
+-void* vDSP_vsadd(void);
+ void* vDSP_vsaddD(void);
+ void* vDSP_vsaddi(void);
+ void* vDSP_vsbm(void);
+@@ -364,7 +397,6 @@ void* vDSP_vsdivD(void);
+ void* vDSP_vsdivi(void);
+ void* vDSP_vsimps(void);
+ void* vDSP_vsimpsD(void);
+-void* vDSP_vsma(void);
+ void* vDSP_vsmaD(void);
+ void* vDSP_vsmfix24(void);
+ void* vDSP_vsmfixu24(void);
+@@ -374,7 +406,6 @@ void* vDSP_vsmsb(void);
+ void* vDSP_vsmsbD(void);
+ void* vDSP_vsmsma(void);
+ void* vDSP_vsmsmaD(void);
+-void* vDSP_vsmul(void);
+ void* vDSP_vsmulD(void);
+ void* vDSP_vsort(void);
+ void* vDSP_vsortD(void);
+@@ -385,7 +416,6 @@ void* vDSP_vsq(void);
+ void* vDSP_vsqD(void);
+ void* vDSP_vssq(void);
+ void* vDSP_vssqD(void);
+-void* vDSP_vsub(void);
+ void* vDSP_vsubD(void);
+ void* vDSP_vswap(void);
+ void* vDSP_vswapD(void);
+@@ -439,7 +469,6 @@ void* vDSP_zrvmul(void);
+ void* vDSP_zrvmulD(void);
+ void* vDSP_zrvsub(void);
+ void* vDSP_zrvsubD(void);
+-void* vDSP_ztoc(void);
+ void* vDSP_ztocD(void);
+ void* vDSP_ztrans(void);
+ void* vDSP_ztransD(void);
+@@ -467,7 +496,6 @@ void* vDSP_zvmmaa(void);
+ void* vDSP_zvmmaaD(void);
+ void* vDSP_zvmov(void);
+ void* vDSP_zvmovD(void);
+-void* vDSP_zvmul(void);
+ void* vDSP_zvmulD(void);
+ void* vDSP_zvneg(void);
+ void* vDSP_zvnegD(void);
+diff --git a/src/frameworks/Accelerate/vecLib/vDSP/src/basic.c b/src/frameworks/Accelerate/vecLib/vDSP/src/basic.c
+deleted file mode 100644
+index ecdd15b23..000000000
+--- a/src/frameworks/Accelerate/vecLib/vDSP/src/basic.c
++++ /dev/null
+@@ -1,36 +0,0 @@
+-/*
+- This file is part of Darling.
+-
+- Copyright (C) 2020 Lubos Dolezel
+-
+- Darling is free software: you can redistribute it and/or modify
+- it under the terms of the GNU General Public License as published by
+- the Free Software Foundation, either version 3 of the License, or
+- (at your option) any later version.
+-
+- Darling is distributed in the hope that it will be useful,
+- but WITHOUT ANY WARRANTY; without even the implied warranty of
+- MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+- GNU General Public License for more details.
+-
+- You should have received a copy of the GNU General Public License
+- along with Darling.  If not, see <http://www.gnu.org/licenses/>.
+-*/
+-
+-#include <vDSP/vDSP.h>
+-
+-void vDSP_vsadd(const float *__A, vDSP_Stride __IA, const float *__B, float *__C, vDSP_Stride __IC, vDSP_Length __N)
+-{
+-	if (__IA == 1 && __IC == 1)
+-	{
+-		#pragma clang loop vectorize(enable)
+-		for (vDSP_Length i = 0; i < __N; i++)
+-			__C[i] = __A[i] + __B[i];
+-	}
+-	else
+-	{
+-		#pragma clang loop vectorize(enable)
+-		for (vDSP_Length i = 0; i < __N; i++)
+-			__C[i * __IC] = __A[i * __IA] + __B[i * __IA];
+-	}
+-}
+diff --git a/src/frameworks/Accelerate/vecLib/vDSP/src/vDSP.c b/src/frameworks/Accelerate/vecLib/vDSP/src/vDSP.c
+index 24c037abc..cc18546ce 100644
+--- a/src/frameworks/Accelerate/vecLib/vDSP/src/vDSP.c
++++ b/src/frameworks/Accelerate/vecLib/vDSP/src/vDSP.c
+@@ -263,54 +263,24 @@ void* vDSP_blkman_windowD(void)
+     return NULL;
+ }
+ 
+-void* vDSP_conv(void)
+-{
+-    if (verbose) puts("STUB: vDSP_conv called");
+-    return NULL;
+-}
+-
+ void* vDSP_convD(void)
+ {
+     if (verbose) puts("STUB: vDSP_convD called");
+     return NULL;
+ }
+ 
+-void* vDSP_create_fftsetup(void)
+-{
+-    if (verbose) puts("STUB: vDSP_create_fftsetup called");
+-    return NULL;
+-}
+-
+ void* vDSP_create_fftsetupD(void)
+ {
+     if (verbose) puts("STUB: vDSP_create_fftsetupD called");
+     return NULL;
+ }
+ 
+-void* vDSP_ctoz(void)
+-{
+-    if (verbose) puts("STUB: vDSP_ctoz called");
+-    return NULL;
+-}
+-
+ void* vDSP_ctozD(void)
+ {
+     if (verbose) puts("STUB: vDSP_ctozD called");
+     return NULL;
+ }
+ 
+-void* vDSP_deq22(void)
+-{
+-    if (verbose) puts("STUB: vDSP_deq22 called");
+-    return NULL;
+-}
+-
+-void* vDSP_deq22D(void)
+-{
+-    if (verbose) puts("STUB: vDSP_deq22D called");
+-    return NULL;
+-}
+-
+ void* vDSP_desamp(void)
+ {
+     if (verbose) puts("STUB: vDSP_desamp called");
+@@ -323,12 +293,6 @@ void* vDSP_desampD(void)
+     return NULL;
+ }
+ 
+-void* vDSP_destroy_fftsetup(void)
+-{
+-    if (verbose) puts("STUB: vDSP_destroy_fftsetup called");
+-    return NULL;
+-}
+-
+ void* vDSP_destroy_fftsetupD(void)
+ {
+     if (verbose) puts("STUB: vDSP_destroy_fftsetupD called");
+@@ -587,12 +551,6 @@ void* vDSP_fft_zoptD(void)
+     return NULL;
+ }
+ 
+-void* vDSP_fft_zrip(void)
+-{
+-    if (verbose) puts("STUB: vDSP_fft_zrip called");
+-    return NULL;
+-}
+-
+ void* vDSP_fft_zripD(void)
+ {
+     if (verbose) puts("STUB: vDSP_fft_zripD called");
+@@ -1057,12 +1015,6 @@ void* vDSP_svemgD(void)
+     return NULL;
+ }
+ 
+-void* vDSP_svesq(void)
+-{
+-    if (verbose) puts("STUB: vDSP_svesq called");
+-    return NULL;
+-}
+-
+ void* vDSP_svesqD(void)
+ {
+     if (verbose) puts("STUB: vDSP_svesqD called");
+@@ -1111,12 +1063,6 @@ void* vDSP_vabsi(void)
+     return NULL;
+ }
+ 
+-void* vDSP_vadd(void)
+-{
+-    if (verbose) puts("STUB: vDSP_vadd called");
+-    return NULL;
+-}
+-
+ void* vDSP_vaddD(void)
+ {
+     if (verbose) puts("STUB: vDSP_vaddD called");
+@@ -1189,12 +1135,6 @@ void* vDSP_vavlinD(void)
+     return NULL;
+ }
+ 
+-void* vDSP_vclip(void)
+-{
+-    if (verbose) puts("STUB: vDSP_vclip called");
+-    return NULL;
+-}
+-
+ void* vDSP_vclipD(void)
+ {
+     if (verbose) puts("STUB: vDSP_vclipD called");
+@@ -1789,12 +1729,6 @@ void* vDSP_vmsbD(void)
+     return NULL;
+ }
+ 
+-void* vDSP_vmul(void)
+-{
+-    if (verbose) puts("STUB: vDSP_vmul called");
+-    return NULL;
+-}
+-
+ void* vDSP_vmulD(void)
+ {
+     if (verbose) puts("STUB: vDSP_vmulD called");
+@@ -1993,14 +1927,6 @@ void* vDSP_vrvrsD(void)
+     return NULL;
+ }
+ 
+-/*
+-void* vDSP_vsadd(void)
+-{
+-    if (verbose) puts("STUB: vDSP_vsadd called");
+-    return NULL;
+-}
+-*/
+-
+ void* vDSP_vsaddD(void)
+ {
+     if (verbose) puts("STUB: vDSP_vsaddD called");
+@@ -2079,12 +2005,6 @@ void* vDSP_vsimpsD(void)
+     return NULL;
+ }
+ 
+-void* vDSP_vsma(void)
+-{
+-    if (verbose) puts("STUB: vDSP_vsma called");
+-    return NULL;
+-}
+-
+ void* vDSP_vsmaD(void)
+ {
+     if (verbose) puts("STUB: vDSP_vsmaD called");
+@@ -2139,12 +2059,6 @@ void* vDSP_vsmsmaD(void)
+     return NULL;
+ }
+ 
+-void* vDSP_vsmul(void)
+-{
+-    if (verbose) puts("STUB: vDSP_vsmul called");
+-    return NULL;
+-}
+-
+ void* vDSP_vsmulD(void)
+ {
+     if (verbose) puts("STUB: vDSP_vsmulD called");
+@@ -2205,12 +2119,6 @@ void* vDSP_vssqD(void)
+     return NULL;
+ }
+ 
+-void* vDSP_vsub(void)
+-{
+-    if (verbose) puts("STUB: vDSP_vsub called");
+-    return NULL;
+-}
+-
+ void* vDSP_vsubD(void)
+ {
+     if (verbose) puts("STUB: vDSP_vsubD called");
+@@ -2529,12 +2437,6 @@ void* vDSP_zrvsubD(void)
+     return NULL;
+ }
+ 
+-void* vDSP_ztoc(void)
+-{
+-    if (verbose) puts("STUB: vDSP_ztoc called");
+-    return NULL;
+-}
+-
+ void* vDSP_ztocD(void)
+ {
+     if (verbose) puts("STUB: vDSP_ztocD called");
+@@ -2697,12 +2599,6 @@ void* vDSP_zvmovD(void)
+     return NULL;
+ }
+ 
+-void* vDSP_zvmul(void)
+-{
+-    if (verbose) puts("STUB: vDSP_zvmul called");
+-    return NULL;
+-}
+-
+ void* vDSP_zvmulD(void)
+ {
+     if (verbose) puts("STUB: vDSP_zvmulD called");
 diff --git a/src/frameworks/Carbon/HIToolbox/CMakeLists.txt b/src/frameworks/Carbon/HIToolbox/CMakeLists.txt
 index 3f0820484..7d310f61c 100644
 --- a/src/frameworks/Carbon/HIToolbox/CMakeLists.txt
@@ -3215,6 +3760,70 @@ index 3fac3be55..aae2c7435 100644
  
  set_property(TARGET CoreServices APPEND_STRING PROPERTY
    LINK_FLAGS " -Wl,-reexported_symbols_list,${CMAKE_CURRENT_SOURCE_DIR}/reexport.exp")
+diff --git a/src/frameworks/CoreServices/src/CarbonCore/Gestalt.cpp b/src/frameworks/CoreServices/src/CarbonCore/Gestalt.cpp
+index dffdd4cb2..7430f587b 100644
+--- a/src/frameworks/CoreServices/src/CarbonCore/Gestalt.cpp
++++ b/src/frameworks/CoreServices/src/CarbonCore/Gestalt.cpp
+@@ -25,6 +25,9 @@ along with Darling.  If not, see <http://www.gnu.org/licenses/>.
+ 
+ OSStatus Gestalt(uint32_t type, int* value)
+ {
++	if (!value)
++		return paramErr;
++	*value = 0;
+ 	switch (type)
+ 	{
+ 	case gestaltSystemVersion:
+@@ -32,24 +35,31 @@ OSStatus Gestalt(uint32_t type, int* value)
+ 	case gestaltSystemVersionMinor:
+ 	case gestaltSystemVersionPatch:
+ 	{
+-		// We may be mixing the Darwin and OS version, but this API is deprecated anyway
+-		int name[2] = { CTL_KERN, KERN_OSRELEASE };
+-		char version[32];
+-		size_t version_len = sizeof(version) - 1;
+-		int maj, min, patch;
+-		
+-		sysctl(name, 2, version, &version_len, nullptr, 0);
+-		sscanf(version, "%d.%d.%d", &maj, &min, &patch);
+-		
+-		if (type == gestaltSystemVersion)
+-			*value = 0x100 * maj + 0x10 * min;
+-		else if (type == gestaltSystemVersionMajor)
+-			*value = maj;
+-		else if (type == gestaltSystemVersionMinor)
+-			*value = min;
+-		else if (type == gestaltSystemVersionPatch)
+-			*value = patch;
+-	}
++        // Darwin's kernel release is not the macOS product version.
++        char version[64] = {};
++        size_t version_len = sizeof(version);
++        int major = 0, minor = 0, patch = 0;
++        if (sysctlbyname("kern.osproductversion", version, &version_len, nullptr, 0) != 0)
++            return gestaltUnknownErr;
++        version[sizeof(version) - 1] = '\0';
++        if (sscanf(version, "%d.%d.%d", &major, &minor, &patch) < 1 ||
++            major < 0 || major > 99 || minor < 0 || patch < 0)
++            return gestaltUnknownErr;
++
++        if (type == gestaltSystemVersion) {
++            // Legacy packed BCD: minor and bug-fix components saturate at 9.
++            const int packedMajor = ((major / 10) << 4) | (major % 10);
++            *value = (packedMajor << 8) | ((minor > 9 ? 9 : minor) << 4) |
++                     (patch > 9 ? 9 : patch);
++        } else if (type == gestaltSystemVersionMajor)
++            *value = major;
++        else if (type == gestaltSystemVersionMinor)
++            *value = minor;
++        else
++            *value = patch;
++        // Version selectors must not fall through to the architecture case.
++        return 0;
++    }
+ 	case gestaltSysArchitecture:
+ #ifdef __powerpc__
+ 		*value = gestaltPowerPC;
 diff --git a/src/frameworks/CoreServices/src/CarbonCore/UnicodeUtilities.cpp b/src/frameworks/CoreServices/src/CarbonCore/UnicodeUtilities.cpp
 index 094a9483d..84810f6ab 100644
 --- a/src/frameworks/CoreServices/src/CarbonCore/UnicodeUtilities.cpp
@@ -3269,6 +3878,104 @@ index cf9933a84..6651d50dc 100644
  		[wdmap setObject: path
  				forKey: [NSNumber numberWithInt: wd]];
  	}
+diff --git a/src/frameworks/CoreServices/src/LaunchServices/CMakeLists.txt b/src/frameworks/CoreServices/src/LaunchServices/CMakeLists.txt
+index bb7f35068..957cc9d3e 100644
+--- a/src/frameworks/CoreServices/src/LaunchServices/CMakeLists.txt
++++ b/src/frameworks/CoreServices/src/LaunchServices/CMakeLists.txt
+@@ -1,5 +1,8 @@
+ set(SUBFRAMEWORK_VERSION "A")
+ 
++# LSHostOpen.c loads the host's libsystemd through the ELF loader.
++include_directories(${CMAKE_SOURCE_DIR}/src/startup/mldr/elfcalls)
++
+ generate_sdk_subframework(LaunchServices
+ 	BASE_PATH ${coreservices_sdk_path}
+ 	VERSION ${SUBFRAMEWORK_VERSION}
+@@ -20,6 +23,8 @@ add_framework(LaunchServices
+ 		LSApplicationWorkspace.m
+ 		LSRunning.m
+ 		constants.c
++		LSHostOpen.c
++		LSHostOpenBus.c
+ 		LSInfo.m
+ 		LSOpen.m
+ 		UTType.m
+diff --git a/src/frameworks/CoreServices/src/LaunchServices/LSInfo.m b/src/frameworks/CoreServices/src/LaunchServices/LSInfo.m
+index 4cb2a4941..29eef9956 100644
+--- a/src/frameworks/CoreServices/src/LaunchServices/LSInfo.m
++++ b/src/frameworks/CoreServices/src/LaunchServices/LSInfo.m
+@@ -20,6 +20,7 @@ along with Darling.  If not, see <http://www.gnu.org/licenses/>.
+ 
+ #include <LaunchServices/LaunchServices.h>
+ #include <CarbonCore/MacErrors.h>
++#include "LSHostOpen.h"
+ #include <stdio.h>
+ #include <sqlite3.h>
+ #import <Foundation/NSString.h>
+@@ -106,7 +107,7 @@ CFArrayRef LSCopyApplicationURLsForBundleIdentifier(CFStringRef inBundleIdentifi
+ {
+ 	if (!inBundleIdentifier)
+ 	{
+-		if (*outError)
++		if (outError)
+ 			*outError = CFErrorCreate(NULL, kCFErrorDomainOSStatus, paramErr, NULL);
+ 		return NULL;
+ 	}
+@@ -116,7 +117,7 @@ CFArrayRef LSCopyApplicationURLsForBundleIdentifier(CFStringRef inBundleIdentifi
+ 
+ 	if (dq == nil)
+ 	{
+-		if (*outError)
++		if (outError)
+ 			*outError = CFErrorCreate(NULL, kCFErrorDomainOSStatus, fnfErr, NULL);
+ 		return NULL;
+ 	}
+@@ -138,7 +139,7 @@ CFArrayRef LSCopyApplicationURLsForBundleIdentifier(CFStringRef inBundleIdentifi
+ 		}
+ 		else
+ 		{
+-			if (*outError)
++			if (outError)
+ 				*outError = CFErrorCreate(NULL, kCFErrorDomainOSStatus, kLSApplicationNotFoundErr, NULL);
+ 			retval = NULL;
+ 		}
+@@ -247,7 +248,7 @@ CFURLRef LSCopyDefaultApplicationURLForContentType(CFStringRef inContentType, LS
+ 
+ 	if (dq == nil)
+ 	{
+-		if (*outError)
++		if (outError)
+ 			*outError = CFErrorCreate(NULL, kCFErrorDomainOSStatus, fnfErr, NULL);
+ 		return NULL;
+ 	}
+@@ -275,7 +276,7 @@ CFURLRef LSCopyDefaultApplicationURLForContentType(CFStringRef inContentType, LS
+ 		}
+ 		else
+ 		{
+-			if (*outError)
++			if (outError)
+ 				*outError = CFErrorCreate(NULL, kCFErrorDomainOSStatus, kLSApplicationNotFoundErr, NULL);
+ 			retval = NULL;
+ 		}
+@@ -292,7 +293,7 @@ CFURLRef LSCopyDefaultApplicationURLForURL(CFURLRef inURL, LSRolesMask inRoleMas
+ 
+ 	if (status != noErr)
+ 	{
+-		if (*outError)
++		if (outError)
+ 			*outError = CFErrorCreate(NULL, kCFErrorDomainOSStatus, status, NULL);
+ 		return NULL;
+ 	}
+@@ -306,6 +307,9 @@ CFURLRef LSCopyDefaultApplicationURLForURL(CFURLRef inURL, LSRolesMask inRoleMas
+ 
+ OSStatus LSGetApplicationForURL(CFURLRef inURL, LSRolesMask inRoleMask, FSRef *outAppRef, CFURLRef *outAppURL)
+ {
++	if (_LSGetHostHandlerForURL(inURL, outAppRef, outAppURL) == noErr)
++		return noErr;
++
+ 	NSString* extension = [(NSURL*) inURL pathExtension];
+ 	return LSGetApplicationForInfo(kLSUnknownType, kLSUnknownCreator, (CFStringRef) extension, inRoleMask, outAppRef, outAppURL);
+ }
 diff --git a/src/frameworks/CoreServices/src/LaunchServices/LSOpen.m b/src/frameworks/CoreServices/src/LaunchServices/LSOpen.m
 index dd78f6df4..8fa95a174 100644
 --- a/src/frameworks/CoreServices/src/LaunchServices/LSOpen.m
@@ -3554,10 +4261,10 @@ index 299caa5b1..bdff6028c 100644
  
  __END_DECLS
 diff --git a/src/frameworks/CoreVideo/src/CVDisplayLink.mm b/src/frameworks/CoreVideo/src/CVDisplayLink.mm
-index 3e9cba226..73afbd5ae 100644
+index 3e9cba226..f47f14b06 100644
 --- a/src/frameworks/CoreVideo/src/CVDisplayLink.mm
 +++ b/src/frameworks/CoreVideo/src/CVDisplayLink.mm
-@@ -1,38 +1,901 @@
+@@ -1,38 +1,899 @@
  #include <CoreVideo/CVDisplayLink.h>
 +#include <stdint.h>
 +#include <string.h>
@@ -4076,15 +4783,13 @@ index 3e9cba226..73afbd5ae 100644
 +		denominator / 1000ULL;
 +	uint64_t sequence = ++state.sequence;
 +
-+	uint32_t targetRate = getTargetRefreshRate();
-+	uint64_t intervalUs = 1000000ULL / (uint64_t)targetRate;
-+
 +	/* Chromium 108 release BeginFrameArgs: frame/deadline/interval,
-+	 * BeginFrameId, trace id, type and critical-path flag. */
++	 * BeginFrameId, trace id, type and critical-path flag.
++	 * Always paced at 60 Hz (16.6ms) for Chromium 108 CEF compatibility. */
 +	unsigned char args[128] = {};
 +	*(uint64_t *)(args + 0) = nowUs;
-+	*(uint64_t *)(args + 8) = nowUs + intervalUs;
-+	*(uint64_t *)(args + 16) = intervalUs;
++	*(uint64_t *)(args + 8) = nowUs + 16666ULL;
++	*(uint64_t *)(args + 16) = 16666ULL;
 +	*(uint64_t *)(args + 24) = 0xffffffffULL;
 +	*(uint64_t *)(args + 32) = sequence;
 +	*(int64_t *)(args + 40) = -1;
@@ -4106,9 +4811,9 @@ index 3e9cba226..73afbd5ae 100644
 +}
 +
 +static void startRendererBeginTimer(void) {
-+	uint32_t targetRate = getTargetRefreshRate();
++	/* Chromium 108 frame sink expects standard 60 Hz runloop timer cadence */
 +	CFRunLoopTimerRef timer = CFRunLoopTimerCreate(NULL,
-+		CFAbsoluteTimeGetCurrent() + 2.0, 1.0 / (double)targetRate, 0, 0,
++		CFAbsoluteTimeGetCurrent() + 2.0, 1.0 / 60.0, 0, 0,
 +		rendererBeginTimerF, NULL);
 +	if (timer)
 +		CFRunLoopAddTimer(CFRunLoopGetMain(), timer, kCFRunLoopDefaultMode);
@@ -4467,7 +5172,7 @@ index 3e9cba226..73afbd5ae 100644
  	*displayLinkOut = (CVDisplayLinkRef) self;
  	return kCVReturnSuccess;
  }
-@@ -41,35 +904,128 @@ CVReturn CVDisplayLinkStart(CVDisplayLinkRef displayLink)
+@@ -41,35 +902,128 @@ CVReturn CVDisplayLinkStart(CVDisplayLinkRef displayLink)
  {
  	if (!displayLink)
  		return kCVReturnInvalidArgument;
@@ -4607,7 +5312,7 @@ index 3e9cba226..73afbd5ae 100644
  	return kCVReturnSuccess;
  }
  
-@@ -91,7 +1047,7 @@ CVReturn CVDisplayLinkSetCurrentCGDisplayFromOpenGLContext(CVDisplayLinkRef disp
+@@ -91,7 +1045,7 @@ CVReturn CVDisplayLinkSetCurrentCGDisplayFromOpenGLContext(CVDisplayLinkRef disp
  			CGDirectDisplayID displayID = [window.screen cgDirectDisplayID];
  			NSMutableDictionary* self = (NSMutableDictionary*) displayLink;
  
@@ -4616,7 +5321,7 @@ index 3e9cba226..73afbd5ae 100644
  					forKey: kDirectDisplayArray];
  			return kCVReturnSuccess;
  		}
-@@ -117,36 +1073,65 @@ CVReturn CVDisplayLinkCreateWithCGDisplay(
+@@ -117,36 +1071,65 @@ CVReturn CVDisplayLinkCreateWithCGDisplay(
      CGDirectDisplayID displayID,
      CV_RETURNS_RETAINED_PARAMETER CVDisplayLinkRef CV_NULLABLE * CV_NONNULL displayLinkOut )
  {
@@ -6313,7 +7018,7 @@ index deca16b87..d75d5e22d 100644
  
  set_property(TARGET OpenGL APPEND_STRING PROPERTY LINK_FLAGS
 diff --git a/src/frameworks/OpenGL/OpenGL.c b/src/frameworks/OpenGL/OpenGL.c
-index ffd7fe054..72e179fab 100644
+index ffd7fe054..b10588914 100644
 --- a/src/frameworks/OpenGL/OpenGL.c
 +++ b/src/frameworks/OpenGL/OpenGL.c
 @@ -2,11 +2,22 @@
@@ -6340,7 +7045,7 @@ index ffd7fe054..72e179fab 100644
  
  // Try to get the right (generic) type definitions.
  // In particular, we really want EGLNativeDisplayType to be void *,
-@@ -22,7 +33,133 @@
+@@ -22,7 +33,125 @@
  #define APPLE
  #define __APPLE__
  
@@ -6396,8 +7101,6 @@ index ffd7fe054..72e179fab 100644
 +            setenv("__NV_PRIME_RENDER_OFFLOAD", "1", 1);
 +            setenv("__GLX_VENDOR_LIBRARY_NAME", "nvidia", 1);
 +            setenv("__VK_LAYER_NV_optimus", "NVIDIA_only", 1);
-+            if (access("/usr/share/glvnd/egl_vendor.d/10_nvidia.json", F_OK) == 0)
-+                setenv("__EGL_VENDOR_LIBRARY_FILENAMES", "/usr/share/glvnd/egl_vendor.d/10_nvidia.json", 0);
 +            if (access("/usr/share/vulkan/icd.d/nvidia_icd.x86_64.json", F_OK) == 0)
 +                setenv("VK_DRIVER_FILES", "/usr/share/vulkan/icd.d/nvidia_icd.x86_64.json", 0);
 +        } else if (strcasestr(selector, "intel") || strcasestr(selector, "integrated") || strcasestr(selector, "mesa") || strcasestr(selector, "llvmpipe") || strcmp(selector, "0") == 0) {
@@ -6414,8 +7117,6 @@ index ffd7fe054..72e179fab 100644
 +        setenv("__NV_PRIME_RENDER_OFFLOAD", "1", 1);
 +        setenv("__GLX_VENDOR_LIBRARY_NAME", "nvidia", 1);
 +        setenv("__VK_LAYER_NV_optimus", "NVIDIA_only", 1);
-+        if (access("/usr/share/glvnd/egl_vendor.d/10_nvidia.json", F_OK) == 0)
-+            setenv("__EGL_VENDOR_LIBRARY_FILENAMES", "/usr/share/glvnd/egl_vendor.d/10_nvidia.json", 0);
 +    }
 +}
 +
@@ -6459,22 +7160,18 @@ index ffd7fe054..72e179fab 100644
 +        EGLDisplay d = p_eglGetPlatformDisplay(0x31D5 /* EGL_PLATFORM_X11 */, native_display, NULL);
 +        if (d != EGL_NO_DISPLAY && d != NULL)
 +            return d;
-+        EGLint err = p_eglGetError ? p_eglGetError() : 0;
-+        fprintf(stderr, "M58DG p_eglGetPlatformDisplay returned NO_DISPLAY: native_display=%p err=0x%x\n", (void*)native_display, (unsigned)err);
 +    }
 +    if (p_eglGetDisplay) {
 +        EGLDisplay d = p_eglGetDisplay(native_display);
 +        if (d != EGL_NO_DISPLAY && d != NULL)
 +            return d;
-+        EGLint err = p_eglGetError ? p_eglGetError() : 0;
-+        fprintf(stderr, "M58DG p_eglGetDisplay returned NO_DISPLAY: native_display=%p err=0x%x\n", (void*)native_display, (unsigned)err);
 +    }
 +    return EGL_NO_DISPLAY;
 +}
  
  static EGLConfig config;
  static int num_config;
-@@ -48,10 +185,18 @@ struct _CGLContextObj {
+@@ -48,10 +177,18 @@ struct _CGLContextObj {
      GLuint retain_count;
      pthread_mutex_t lock;
      EGLContext egl_context;
@@ -6493,7 +7190,7 @@ index ffd7fe054..72e179fab 100644
  };
  
  struct _CGLPixelFormatObj {
-@@ -59,6 +204,24 @@ struct _CGLPixelFormatObj {
+@@ -59,6 +196,24 @@ struct _CGLPixelFormatObj {
      CGLPixelFormatAttribute *attributes;
  };
  
@@ -6518,7 +7215,7 @@ index ffd7fe054..72e179fab 100644
  static inline int attribute_has_argument(CGLPixelFormatAttribute attr) {
      switch (attr) {
      case kCGLPFAAuxBuffers:
-@@ -69,6 +232,9 @@ static inline int attribute_has_argument(CGLPixelFormatAttribute attr) {
+@@ -69,6 +224,9 @@ static inline int attribute_has_argument(CGLPixelFormatAttribute attr) {
      case kCGLPFAAccumSize:
      case kCGLPFARendererID:
      case kCGLPFADisplayMask:
@@ -6528,15 +7225,26 @@ index ffd7fe054..72e179fab 100644
          return 1;
      default:
          return 0;
-@@ -78,6 +244,7 @@ static inline int attribute_has_argument(CGLPixelFormatAttribute attr) {
+@@ -78,6 +236,18 @@ static inline int attribute_has_argument(CGLPixelFormatAttribute attr) {
  __attribute__((constructor))
  static void _CGLInitialize(void)
  {
++    /* A parent that spawns us with 0-2 closed lets the first socket/device
++     * open land on a stdio number. Reserve them first. */
++    for (int fd = 0; fd <= 2; ++fd) {
++        if (fcntl(fd, F_GETFD) == -1) {
++            int nfd = open("/dev/null", O_RDWR);
++            if (nfd >= 0 && nfd != fd) {
++                dup2(nfd, fd);
++                close(nfd);
++            }
++        }
++    }
 +    ensure_native_egl();
      g_displays = CFDictionaryCreateMutable(NULL, 0, NULL, NULL);
  }
  
-@@ -93,41 +260,72 @@ static int attributes_count(const CGLPixelFormatAttribute *attrs) {
+@@ -93,41 +263,68 @@ static int attributes_count(const CGLPixelFormatAttribute *attrs) {
  
  CGLError CGLRegisterNativeDisplay(void *native_display) {
  
@@ -6571,16 +7279,12 @@ index ffd7fe054..72e179fab 100644
 +
 +    void *nativeDisplay=_CGSNativeDisplay(CGSMainConnectionID());
 +    EGLDisplay disp = x11EGLDisplay(nativeDisplay?nativeDisplay:EGL_DEFAULT_DISPLAY);
-+    if (disp == EGL_NO_DISPLAY) {
-+        fprintf(stderr, "M58DG ensureDefaultDisplay: eglGetDisplay(DEFAULT)=NO_DISPLAY (p_eglGetDisplay=%p)\n", (void*) p_eglGetDisplay);
++    if (disp == EGL_NO_DISPLAY)
 +        return;
-+    }
 +
 +    EGLConfig cfg = NULL;
 +    EGLBoolean m58dg_ini = p_eglInitialize(disp, NULL, NULL);
 +    EGLBoolean m58dg_ch = p_eglChooseConfig(disp, attribute_list, &cfg, 1, &num_config);
-+    fprintf(stderr, "M58DG ensureDefaultDisplay: disp=%p eglInitialize=%d eglChooseConfig=%d cfg=%p num_config=%d\n",
-+        (void*) disp, (int) m58dg_ini, (int) m58dg_ch, (void*) cfg, num_config);
 +    if (m58dg_ini && m58dg_ch && cfg != NULL) {
 +        display = disp;
 +        config = cfg;
@@ -6617,7 +7321,7 @@ index ffd7fe054..72e179fab 100644
  
          pthread_mutex_lock(&g_displaysMutex);
          CFDictionaryAddValue(g_displays, (const void*)(unsigned long) cid, rv);
-@@ -139,6 +337,8 @@ static struct _CGLDisplay* getCGLDisplay(CGSConnectionID cid)
+@@ -139,6 +336,8 @@ static struct _CGLDisplay* getCGLDisplay(CGSConnectionID cid)
  
  CGLError CGLSetSurface(CGLContextObj gl, CGSConnectionID cid, CGSWindowID wid, CGSSurfaceID sid)
  {
@@ -6626,7 +7330,7 @@ index ffd7fe054..72e179fab 100644
      struct _CGLDisplay* disp = getCGLDisplay(cid);
      if (!disp)
          return kCGLBadConnection;
-@@ -152,7 +352,7 @@ CGLError CGLSetSurface(CGLContextObj gl, CGSConnectionID cid, CGSWindowID wid, C
+@@ -152,7 +351,7 @@ CGLError CGLSetSurface(CGLContextObj gl, CGSConnectionID cid, CGSWindowID wid, C
      if (!window)
          return kCGLBadWindow;
  
@@ -6635,7 +7339,7 @@ index ffd7fe054..72e179fab 100644
      if (gl->egl_surface == EGL_NO_SURFACE)
          return kCGLBadState;
      return kCGLNoError;
-@@ -161,7 +361,7 @@ CGLError CGLSetSurface(CGLContextObj gl, CGSConnectionID cid, CGSWindowID wid, C
+@@ -161,7 +360,7 @@ CGLError CGLSetSurface(CGLContextObj gl, CGSConnectionID cid, CGSWindowID wid, C
  CGLWindowRef CGLGetWindow(void *native_window) {
  
      EGLNativeWindowType window = (EGLNativeWindowType) native_window;
@@ -6644,7 +7348,7 @@ index ffd7fe054..72e179fab 100644
  
      if (surface == EGL_NO_SURFACE) {
          return NULL;
-@@ -171,14 +371,18 @@ CGLWindowRef CGLGetWindow(void *native_window) {
+@@ -171,14 +370,18 @@ CGLWindowRef CGLGetWindow(void *native_window) {
  }
  
  CGL_EXPORT void CGLDestroyWindow(CGLWindowRef window) {
@@ -6665,7 +7369,7 @@ index ffd7fe054..72e179fab 100644
  }
  
  static pthread_key_t current_context_key;
-@@ -198,18 +402,42 @@ CGLContextObj CGLGetCurrentContext(void) {
+@@ -198,18 +401,42 @@ CGLContextObj CGLGetCurrentContext(void) {
      return pthread_getspecific(key);
  }
  
@@ -6713,7 +7417,7 @@ index ffd7fe054..72e179fab 100644
  }
  
  CGLError CGLSetFullScreen(CGLContextObj ctx) {
-@@ -223,11 +451,13 @@ CGLError CGLChoosePixelFormat(
+@@ -223,11 +450,13 @@ CGLError CGLChoosePixelFormat(
      CGLPixelFormatObj *result,
      GLint *number_of_screens
  ) {
@@ -6728,7 +7432,7 @@ index ffd7fe054..72e179fab 100644
      for (int i = 0; i < count; i++) {
          format->attributes[i] = attrs[i];
      }
-@@ -251,6 +481,10 @@ CGLError CGLDescribePixelFormat(
+@@ -251,6 +480,10 @@ CGLError CGLDescribePixelFormat(
      CGLPixelFormatAttribute attr,
      GLint *value
  ) {
@@ -6739,7 +7443,7 @@ index ffd7fe054..72e179fab 100644
      for (int i = 0; format->attributes[i] != 0; i++) {
          int has_arg = attribute_has_argument(format->attributes[i]);
  
-@@ -304,15 +538,118 @@ GLuint CGLGetPixelFormatRetainCount(CGLPixelFormatObj pixelFormat) {
+@@ -304,24 +537,120 @@ GLuint CGLGetPixelFormatRetainCount(CGLPixelFormatObj pixelFormat) {
  }
  
  CGLError CGLCreateContext(CGLPixelFormatObj pixelFormat, CGLContextObj share, CGLContextObj *resultp) {
@@ -6780,11 +7484,8 @@ index ffd7fe054..72e179fab 100644
      if (egl_context == EGL_NO_CONTEXT) {
 -        return kCGLBadContext;
 +        EGLint err = p_eglGetError ? p_eglGetError() : 0;
-+        fprintf(stderr, "M58DG CGLCreateContext FAILED: pid=%d display=%p config=%p share=%p attribs=%p p_eglCreateContext=%p eglGetError=0x%x\n",
-+            getpid(), (void*) display, (void*) config, (void*) egl_share, (void*) attribs, (void*) p_eglCreateContext, (unsigned) err);
 +        if (err == 0x3008 /* EGL_BAD_DISPLAY */ || err == 0x3001 /* EGL_NOT_INITIALIZED */) {
 +            void *nativeDisplay = saved_native_display ? saved_native_display : _CGSNativeDisplay(CGSMainConnectionID());
-+            fprintf(stderr, "M58DG EGL_BAD_DISPLAY detected! Re-probing nativeDisplay=%p saved=%p\n", nativeDisplay, saved_native_display);
 +            EGLDisplay newDisp = nativeDisplay ? x11EGLDisplay(nativeDisplay) : EGL_NO_DISPLAY;
 +            if (newDisp == EGL_NO_DISPLAY) {
 +                typedef void *(*XOpenDisplayFn)(const char *);
@@ -6794,18 +7495,18 @@ index ffd7fe054..72e179fab 100644
 +                    if (!xh) xh = dlopen("/usr/lib/native/libX11.dylib", RTLD_NOW | RTLD_LOCAL);
 +                    if (xh) xopen = (XOpenDisplayFn)dlsym(xh, "XOpenDisplay");
 +                }
-+                if (xopen) {
-+                    void *fresh_x11 = xopen(NULL);
-+                    if (fresh_x11) {
-+                        newDisp = x11EGLDisplay(fresh_x11);
-+                        if (newDisp != EGL_NO_DISPLAY) {
-+                            saved_native_display = fresh_x11;
-+                        } else {
-+                            typedef int (*XCloseDisplayFn)(void *);
-+                            XCloseDisplayFn xclose = (XCloseDisplayFn)dlsym(RTLD_DEFAULT, "XCloseDisplay");
-+                            if (xclose) xclose(fresh_x11);
-+                        }
-+                    }
++                /* Open the fallback X11 connection at most once per process;
++                 * repeated XOpenDisplay(NULL) calls on every failure leak FDs. */
++                static void *fallback_x11_display = NULL;
++                static int fallback_x11_tried = 0;
++                if (xopen && !fallback_x11_tried) {
++                    fallback_x11_tried = 1;
++                    fallback_x11_display = xopen(NULL);
++                }
++                if (fallback_x11_display) {
++                    newDisp = x11EGLDisplay(fallback_x11_display);
++                    if (newDisp != EGL_NO_DISPLAY)
++                        saved_native_display = fallback_x11_display;
 +                }
 +            }
 +            EGLConfig newCfg = NULL;
@@ -6819,8 +7520,6 @@ index ffd7fe054..72e179fab 100644
 +                    ch_err = p_eglGetError ? p_eglGetError() : 0;
 +                }
 +            }
-+            fprintf(stderr, "M58DG re-probe: newDisp=%p ini_ok=%d (err=0x%x) ch_ok=%d (err=0x%x) newCfg=%p num_config=%d\n",
-+                (void*)newDisp, (int)ini_ok, (unsigned)ini_err, (int)ch_ok, (unsigned)ch_err, (void*)newCfg, num_config);
 +            if (ini_ok && ch_ok && newCfg) {
 +                display = newDisp;
 +                config = newCfg;
@@ -6828,14 +7527,11 @@ index ffd7fe054..72e179fab 100644
 +                contextConfig = config;
 +                p_eglBindAPI(EGL_OPENGL_API);
 +                egl_context = p_eglCreateContext(contextDisplay, contextConfig, egl_share, attribs);
-+                fprintf(stderr, "M58DG CGLCreateContext recovered with new display %p cfg %p -> ctx=%p err=0x%x\n",
-+                    (void*)newDisp, (void*)newCfg, (void*)egl_context, (unsigned)(p_eglGetError ? p_eglGetError() : 0));
 +            }
 +        }
 +        if (egl_context == EGL_NO_CONTEXT && !attribs) {
 +            egl_context = p_eglCreateContext(contextDisplay, contextConfig, egl_share, contextAttributes);
 +            if (egl_context != EGL_NO_CONTEXT) {
-+                fprintf(stderr, "M58DG CGLCreateContext fallback to Core profile SUCCEEDED: ctx=%p\n", (void*) egl_context);
 +            } else {
 +                EGLint compatAttrs[] = {
 +                    0x3098 /* EGL_CONTEXT_MAJOR_VERSION */, 3,
@@ -6844,23 +7540,16 @@ index ffd7fe054..72e179fab 100644
 +                };
 +                egl_context = p_eglCreateContext(contextDisplay, contextConfig, egl_share, compatAttrs);
 +                if (egl_context != EGL_NO_CONTEXT) {
-+                    fprintf(stderr, "M58DG CGLCreateContext fallback to 3.0 SUCCEEDED: ctx=%p\n", (void*) egl_context);
 +                }
 +            }
 +        }
 +        if (egl_context == EGL_NO_CONTEXT)
 +            return kCGLBadContext;
-+    }
-+
-+    {
-+        static int m58dg_ok = 0;
-+        if (m58dg_ok++ < 10)
-+            fprintf(stderr, "M58DG CGLCreateContext OK pid=%d display=%p config=%p ctx=%p\n",
-+                getpid(), (void*) display, (void*) config, (void*) egl_context);
      }
  
++
      CGLContextObj context = malloc(sizeof(struct _CGLContextObj));
-@@ -320,8 +657,16 @@ CGLError CGLCreateContext(CGLPixelFormatObj pixelFormat, CGLContextObj share, CG
+ 
      context->retain_count = 1;
      pthread_mutex_init(&(context->lock), NULL);
      context->egl_context = egl_context;
@@ -6877,7 +7566,7 @@ index ffd7fe054..72e179fab 100644
  
      *resultp = context;
  
-@@ -333,7 +678,7 @@ CGLContextObj CGLRetainContext(CGLContextObj context) {
+@@ -333,7 +662,7 @@ CGLContextObj CGLRetainContext(CGLContextObj context) {
          return NULL;
      }
  
@@ -6886,7 +7575,7 @@ index ffd7fe054..72e179fab 100644
      return context;
  }
  
-@@ -342,11 +687,17 @@ void CGLReleaseContext(CGLContextObj context) {
+@@ -342,11 +671,17 @@ void CGLReleaseContext(CGLContextObj context) {
          return;
      }
  
@@ -6907,7 +7596,7 @@ index ffd7fe054..72e179fab 100644
  
      if (CGLGetCurrentContext() == context) {
          CGLSetCurrentContext(NULL);
-@@ -354,7 +705,11 @@ void CGLReleaseContext(CGLContextObj context) {
+@@ -354,7 +689,11 @@ void CGLReleaseContext(CGLContextObj context) {
  
      pthread_mutex_destroy(&(context->lock));
  
@@ -6920,7 +7609,7 @@ index ffd7fe054..72e179fab 100644
  
      free(context);
  }
-@@ -383,9 +738,330 @@ CGLError CGLUnlockContext(CGLContextObj context) {
+@@ -383,9 +722,330 @@ CGLError CGLUnlockContext(CGLContextObj context) {
      return kCGLNoError;
  }
  
@@ -7253,7 +7942,7 @@ index ffd7fe054..72e179fab 100644
  }
  
  CGLError CGLSetParameter(CGLContextObj context, CGLContextParameter parameter, const GLint *value) {
-@@ -394,8 +1070,9 @@ CGLError CGLSetParameter(CGLContextObj context, CGLContextParameter parameter, c
+@@ -394,8 +1054,9 @@ CGLError CGLSetParameter(CGLContextObj context, CGLContextParameter parameter, c
  
      if (parameter == kCGLCPSwapInterval)
      {
@@ -7264,7 +7953,7 @@ index ffd7fe054..72e179fab 100644
          if (success)
              context->swap_interval = v;
          return success ? kCGLNoError : kCGLBadValue;
-@@ -417,14 +1094,19 @@ CGLError CGLGetParameter(CGLContextObj context, CGLContextParameter parameter, G
+@@ -417,14 +1078,19 @@ CGLError CGLGetParameter(CGLContextObj context, CGLContextParameter parameter, G
      return kCGLNoError;
  }
  
@@ -7364,22 +8053,8 @@ index 68242ee34..a9108c9c1 100644
 +extern CFStringRef const kVTVideoEncoderSpecification_EnableLowLatencyRateControl;
 +
  #endif
-diff --git a/src/frameworks/VideoToolbox/src/VTCompressionProperties.c b/src/frameworks/VideoToolbox/src/VTCompressionProperties.c
-index 9e363904e..774557a64 100644
---- a/src/frameworks/VideoToolbox/src/VTCompressionProperties.c
-+++ b/src/frameworks/VideoToolbox/src/VTCompressionProperties.c
-@@ -30,3 +30,9 @@ const CFStringRef kVTCompressionPropertyKey_MaxFrameDelayCount = CFSTR("MaxFrame
- const CFStringRef kVTCompressionPropertyKey_ExpectedFrameRate = CFSTR("ExpectedFrameRate");
- 
- const CFStringRef kVTVideoEncoderSpecification_RequireHardwareAcceleratedVideoEncoder = CFSTR("RequireHardwareAcceleratedVideoEncoder");
-+
-+const CFStringRef kVTCompressionPropertyKey_BaseLayerFrameRateFraction = CFSTR("BaseLayerFrameRateFraction");
-+const CFStringRef kVTCompressionPropertyKey_ColorPrimaries = CFSTR("ColorPrimaries");
-+const CFStringRef kVTCompressionPropertyKey_TransferFunction = CFSTR("TransferFunction");
-+const CFStringRef kVTCompressionPropertyKey_YCbCrMatrix = CFSTR("YCbCrMatrix");
-+const CFStringRef kVTVideoEncoderSpecification_EnableLowLatencyRateControl = CFSTR("EnableLowLatencyRateControl");
 diff --git a/src/frameworks/VideoToolbox/include/VideoToolbox/VideoToolbox.h b/src/frameworks/VideoToolbox/include/VideoToolbox/VideoToolbox.h
-index bfc91f63a..57b322fa1 100644
+index eb5337441..bddd5a1c4 100644
 --- a/src/frameworks/VideoToolbox/include/VideoToolbox/VideoToolbox.h
 +++ b/src/frameworks/VideoToolbox/include/VideoToolbox/VideoToolbox.h
 @@ -75,23 +75,23 @@ void* VTDecoderSessionGetDestinationPixelBufferAttributes(void);
@@ -7432,6 +8107,20 @@ index bfc91f63a..57b322fa1 100644
  void* VTIsMetalDeviceExternal(void);
  void* VTIsMetalDeviceSlotted(void);
  void* VTMakeMovedRectWithDictionaryRepresentation(void);
+diff --git a/src/frameworks/VideoToolbox/src/VTCompressionProperties.c b/src/frameworks/VideoToolbox/src/VTCompressionProperties.c
+index 9e363904e..774557a64 100644
+--- a/src/frameworks/VideoToolbox/src/VTCompressionProperties.c
++++ b/src/frameworks/VideoToolbox/src/VTCompressionProperties.c
+@@ -30,3 +30,9 @@ const CFStringRef kVTCompressionPropertyKey_MaxFrameDelayCount = CFSTR("MaxFrame
+ const CFStringRef kVTCompressionPropertyKey_ExpectedFrameRate = CFSTR("ExpectedFrameRate");
+ 
+ const CFStringRef kVTVideoEncoderSpecification_RequireHardwareAcceleratedVideoEncoder = CFSTR("RequireHardwareAcceleratedVideoEncoder");
++
++const CFStringRef kVTCompressionPropertyKey_BaseLayerFrameRateFraction = CFSTR("BaseLayerFrameRateFraction");
++const CFStringRef kVTCompressionPropertyKey_ColorPrimaries = CFSTR("ColorPrimaries");
++const CFStringRef kVTCompressionPropertyKey_TransferFunction = CFSTR("TransferFunction");
++const CFStringRef kVTCompressionPropertyKey_YCbCrMatrix = CFSTR("YCbCrMatrix");
++const CFStringRef kVTVideoEncoderSpecification_EnableLowLatencyRateControl = CFSTR("EnableLowLatencyRateControl");
 diff --git a/src/frameworks/VideoToolbox/src/VideoToolbox.m b/src/frameworks/VideoToolbox/src/VideoToolbox.m
 index 70570c907..5e5197e57 100644
 --- a/src/frameworks/VideoToolbox/src/VideoToolbox.m
@@ -7609,6 +8298,22 @@ index 9a489b386..9fe56cc3f 100644
  @implementation VNDetectBarcodesRequest
  
  - (NSMethodSignature *)methodSignatureForSelector:(SEL)aSelector
+diff --git a/src/libelfloader/wrapgen/wrapgen.cpp b/src/libelfloader/wrapgen/wrapgen.cpp
+index 7079e613e..397ec6de0 100644
+--- a/src/libelfloader/wrapgen/wrapgen.cpp
++++ b/src/libelfloader/wrapgen/wrapgen.cpp
+@@ -268,7 +268,10 @@ void generate_wrapper(std::ofstream& output, const char* soname, const std::set<
+ 	
+ 	for (const std::string& sym : symbols)
+ 	{
+-		output << "void* " << sym << "() {\n"
++        // ld64's x86-64 resolver stub saves integer argument registers only.
++        // ELF lookup can clobber XMM arguments before the stub jumps to its
++        // resolved function. Preserve them in the resolver itself.
++		output << "__attribute__((preserve_all)) void* " << sym << "() {\n"
+ 			"\t__asm__(\".symbol_resolver _" << sym << "\");\n"
+ 			"\treturn _elfcalls->dlsym_fatal(lib_handle, \"" << sym << "\");\n"
+ 			"}\n\n";
 diff --git a/src/libsandbox/src/sandbox.c b/src/libsandbox/src/sandbox.c
 index 5af5298aa..fb59ee5d1 100644
 --- a/src/libsandbox/src/sandbox.c
@@ -7954,7 +8659,7 @@ index 6fa2d088c..655554284 100644
  int sandbox_issue_fs_extension(const char *path, uint64_t flags, char **ext_token);
  int sandbox_issue_fs_rw_extension(const char *path, char **ext_token);
 diff --git a/src/shellspawn/shellspawn.c b/src/shellspawn/shellspawn.c
-index f5ba615..53d04ad 100644
+index f5ba615bb..53d04ad3d 100644
 --- a/src/shellspawn/shellspawn.c
 +++ b/src/shellspawn/shellspawn.c
 @@ -34,9 +34,10 @@ along with Darling.  If not, see <http://www.gnu.org/licenses/>.
@@ -8438,2511 +9143,8 @@ index 126bd394c..f62c2e0e8 100644
  		
  		filenames = [NSArray arrayWithObjects: urls count: count];
  		free(urls);
-diff --git a/src/CoreAudio/AudioTrace.h b/src/CoreAudio/AudioTrace.h
-new file mode 100644
---- /dev/null
-+++ b/src/CoreAudio/AudioTrace.h
-@@ -0,0 +1,37 @@
-+#ifndef RCLOL_AUDIO_TRACE_H
-+#define RCLOL_AUDIO_TRACE_H
-+#include <cstdio>
-+#include <cstdlib>
-+#include <cstdarg>
-+#include <ctime>
-+#include <atomic>
-+#include <unistd.h>
-+// Opt-in API/status diagnostics only; never records audio samples or names.
-+// Enabled by env RCLOL_AUDIO_TRACE or by the existence of /tmp/rclol-audio-trace
-+// or /Users/Shared/rclol-audio-trace (the latter survives /tmp wipes at launch).
-+// A negative result is re-checked at most once every ~2 seconds; a positive
-+// result is cached for the life of the process.
-+static inline bool rclolAudioTraceEnabled() {
-+    static std::atomic<bool> enabled{false};
-+    static std::atomic<long long> nextCheckMs{0};
-+    if (enabled.load(std::memory_order_relaxed)) return true;
-+    struct timespec ts;
-+    clock_gettime(CLOCK_MONOTONIC, &ts);
-+    long long nowMs = (long long) ts.tv_sec * 1000 + ts.tv_nsec / 1000000 + 1;
-+    if (nowMs < nextCheckMs.load(std::memory_order_relaxed)) return false;
-+    nextCheckMs.store(nowMs + 2000, std::memory_order_relaxed);
-+    if (getenv("RCLOL_AUDIO_TRACE") != nullptr ||
-+        access("/tmp/rclol-audio-trace", F_OK) == 0 ||
-+        access("/Users/Shared/rclol-audio-trace", F_OK) == 0) {
-+        enabled.store(true, std::memory_order_relaxed);
-+        return true;
-+    }
-+    return false;
-+}
-+static inline void rclolAudioTrace(const char* format, ...) {
-+    if (!rclolAudioTraceEnabled()) return;
-+    static FILE* file=[] { FILE* f=fopen("/tmp/rclol-audio-api.log","a"); if(f) setvbuf(f,nullptr,_IOLBF,0); return f; }();
-+    if(!file) return;
-+    va_list args;va_start(args,format);fprintf(file,"pid=%d ",getpid());vfprintf(file,format,args);va_end(args);
-+}
-+#endif
-diff --git a/src/CoreAudio/CoreAudioComponent/MatrixMixerAU.cpp b/src/CoreAudio/CoreAudioComponent/MatrixMixerAU.cpp
-new file mode 100644
---- /dev/null
-+++ b/src/CoreAudio/CoreAudioComponent/MatrixMixerAU.cpp
-@@ -0,0 +1,175 @@
-+#include "../AudioTrace.h"
-+/* This file is part of Darling, distributed under the GNU GPL v3 or later. */
-+#include "AUBase.h"
-+#include "AUInputElement.h"
-+#include "AUOutputElement.h"
-+#include "AUPlugInDispatch.h"
-+#include <AudioToolbox/AudioUnitParameters.h>
-+#include <map>
-+#include <mutex>
-+#include <cmath>
-+#include <cstring>
-+#include <cstdio>
-+#include <cstdlib>
-+#include <atomic>
-+
-+// Float PCM matrix mixing. Channel indices are flattened across each scope's buses.
-+class MatrixMixerAU : public AUBase {
-+    std::mutex mMutex;
-+    std::map<UInt32, Float32> mGains;
-+    std::map<UInt32, Float32> mInputEnabled, mOutputEnabled;
-+    UInt32 channels(AudioUnitScope scope) {
-+        auto& buses = GetScope(scope);
-+        UInt32 count = 0;
-+        for (UInt32 b = 0; b < buses.GetNumberOfElements(); ++b)
-+            count += buses.GetIOElement(b)->GetStreamFormat().mChannelsPerFrame;
-+        return count;
-+    }
-+    static Float32 value(const std::map<UInt32, Float32>& values, UInt32 key, Float32 fallback = 0) {
-+        auto it = values.find(key);
-+        return it == values.end() ? fallback : it->second;
-+    }
-+    bool validGain(UInt32 element) {
-+        UInt32 input = element >> 16, output = element & 0xffff;
-+        return (input == 0xffff || input < channels(kAudioUnitScope_Input)) &&
-+               (output == 0xffff || output < channels(kAudioUnitScope_Output));
-+    }
-+    static Float32* sample(AudioBufferList& buffers, UInt32 channel, UInt32& stride) {
-+        for (UInt32 b = 0; b < buffers.mNumberBuffers; ++b) {
-+            AudioBuffer& buffer = buffers.mBuffers[b];
-+            if (channel < buffer.mNumberChannels) {
-+                stride = buffer.mNumberChannels;
-+                return buffer.mData ? static_cast<Float32*>(buffer.mData) + channel : nullptr;
-+            }
-+            channel -= buffer.mNumberChannels;
-+        }
-+        return nullptr;
-+    }
-+public:
-+    MatrixMixerAU(AudioComponentInstance instance) : AUBase(instance, 1, 1) {}
-+    bool CanScheduleParameters() const override { return false; }
-+    bool StreamFormatWritable(AudioUnitScope, AudioUnitElement) override { return !IsInitialized(); }
-+    bool BusCountWritable(AudioUnitScope scope) override {
-+        return scope == kAudioUnitScope_Input || scope == kAudioUnitScope_Output;
-+    }
-+    bool ValidFormat(AudioUnitScope scope, AudioUnitElement, const CAStreamBasicDescription& f) override {
-+        if (!f.IsPCM() || !f.IsFloat() || f.mBitsPerChannel != 32 ||
-+            !f.mChannelsPerFrame || f.mChannelsPerFrame >= 0xffff || f.mSampleRate <= 0 ||
-+            (f.mFormatFlags & kAudioFormatFlagIsBigEndian) || f.mFramesPerPacket != 1)
-+            return false;
-+        UInt32 bytes = 4 * (f.IsInterleaved() ? f.mChannelsPerFrame : 1);
-+        return f.mBytesPerFrame == bytes && f.mBytesPerPacket == bytes;
-+    }
-+    OSStatus Initialize() override {
-+        if (!Inputs().GetNumberOfElements() || !Outputs().GetNumberOfElements() ||
-+            channels(kAudioUnitScope_Input) >= 0xffff || channels(kAudioUnitScope_Output) >= 0xffff)
-+            return kAudioUnitErr_FormatNotSupported;
-+        /* darling-lol: the rate must agree across the buses that are in use. League declares more buses than it uses (it
-+         * sets the element counts and configures bus 0 only); the unused ones keep a default rate and used to make this
-+         * initialize fail with FormatNotSupported, which sent the game into an endless graph rebuild loop. Input buses
-+         * that have no source are never pulled (RenderBus skips them), and only output bus 0 is ever connected. */
-+        double rate = GetOutput(0)->GetStreamFormat().mSampleRate;
-+        for (UInt32 b = 0; b < Inputs().GetNumberOfElements(); ++b) {
-+            const double r = GetInput(b)->GetStreamFormat().mSampleRate;
-+            if (GetInput(b)->IsActive() && r != rate) {
-+                rclolAudioTrace("MIXER_INIT_RATE_MISMATCH input=%u rate=%.0f output0=%.0f\n", b, r, rate);
-+                return kAudioUnitErr_FormatNotSupported;
-+            }
-+        }
-+        return AUBase::Initialize();
-+    }
-+    OSStatus SetParameter(AudioUnitParameterID id, AudioUnitScope scope, AudioUnitElement element,
-+                          AudioUnitParameterValue gain, UInt32) override {
-+        static std::atomic<unsigned> traceCount{0};
-+        if (rclolAudioTraceEnabled() && traceCount++ < 64)
-+            rclolAudioTrace("AUDIO_MATRIX_PARAM id=%u scope=%u element=%08x gain=%g\n",id,scope,element,gain);
-+        std::lock_guard<std::mutex> lock(mMutex);
-+        if (!std::isfinite(gain)) return kAudioUnitErr_InvalidParameter;
-+        if (id == kMatrixMixerParam_Volume) {
-+            if (scope == kAudioUnitScope_Input) {
-+                if (element >= channels(scope)) return kAudioUnitErr_InvalidElement;
-+                element = (element << 16) | 0xffff;
-+            } else if (scope == kAudioUnitScope_Output) {
-+                if (element >= channels(scope)) return kAudioUnitErr_InvalidElement;
-+                element |= 0xffff0000;
-+            } else if (scope != kAudioUnitScope_Global) return kAudioUnitErr_InvalidScope;
-+            if (!validGain(element)) return kAudioUnitErr_InvalidElement;
-+            mGains[element] = gain;
-+            return noErr;
-+        }
-+        if (id == kMatrixMixerParam_Enable &&
-+            (scope == kAudioUnitScope_Input || scope == kAudioUnitScope_Output)) {
-+            if (element >= GetScope(scope).GetNumberOfElements()) return kAudioUnitErr_InvalidElement;
-+            (scope == kAudioUnitScope_Input ? mInputEnabled : mOutputEnabled)[element] = gain != 0;
-+            return noErr;
-+        }
-+        return kAudioUnitErr_InvalidParameter;
-+    }
-+    OSStatus GetParameter(AudioUnitParameterID id, AudioUnitScope scope, AudioUnitElement element,
-+                          AudioUnitParameterValue& gain) override {
-+        std::lock_guard<std::mutex> lock(mMutex);
-+        if (id == kMatrixMixerParam_Volume) {
-+            if (scope == kAudioUnitScope_Input || scope == kAudioUnitScope_Output) {
-+                if (element >= channels(scope)) return kAudioUnitErr_InvalidElement;
-+                element = scope == kAudioUnitScope_Input ? (element << 16) | 0xffff : element | 0xffff0000;
-+            } else if (scope != kAudioUnitScope_Global) return kAudioUnitErr_InvalidScope;
-+            if (!validGain(element)) return kAudioUnitErr_InvalidElement;
-+            gain = value(mGains, element);
-+            return noErr;
-+        }
-+        if (id == kMatrixMixerParam_Enable &&
-+            (scope == kAudioUnitScope_Input || scope == kAudioUnitScope_Output)) {
-+            if (element >= GetScope(scope).GetNumberOfElements()) return kAudioUnitErr_InvalidElement;
-+            gain = value(scope == kAudioUnitScope_Input ? mInputEnabled : mOutputEnabled, element, 1);
-+            return noErr;
-+        }
-+        return kAudioUnitErr_InvalidParameter;
-+    }
-+    OSStatus RenderBus(AudioUnitRenderActionFlags& flags, const AudioTimeStamp& time,
-+                       UInt32 bus, UInt32 frames) override {
-+        auto& output = GetOutput(bus)->GetBufferList();
-+        for (UInt32 b = 0; b < output.mNumberBuffers; ++b)
-+            if (output.mBuffers[b].mData) memset(output.mBuffers[b].mData, 0, output.mBuffers[b].mDataByteSize);
-+        UInt32 outputOffset = 0;
-+        for (UInt32 b = 0; b < bus; ++b) outputOffset += GetOutput(b)->GetStreamFormat().mChannelsPerFrame;
-+        UInt32 inputOffset = 0;
-+        bool silent = true;
-+        for (UInt32 b = 0; b < Inputs().GetNumberOfElements(); ++b) {
-+            auto* input = GetInput(b);
-+            UInt32 inputChannels = input->GetStreamFormat().mChannelsPerFrame;
-+            // Pull without holding the parameter lock: callbacks may change parameters.
-+            if (input->IsActive()) {
-+                AudioUnitRenderActionFlags inputFlags = 0;
-+                OSStatus status = input->PullInput(inputFlags, time, b, frames);
-+                if (status) return status;
-+                auto& data = input->GetBufferList();
-+                std::lock_guard<std::mutex> lock(mMutex);
-+                if (value(mInputEnabled, b, 1) && value(mOutputEnabled, bus, 1) &&
-+                    !(inputFlags & kAudioUnitRenderAction_OutputIsSilence)) {
-+                    for (UInt32 i = 0; i < inputChannels; ++i) {
-+                        UInt32 inputStride = 0;
-+                        Float32* src = sample(data, i, inputStride);
-+                        for (UInt32 o = 0; o < GetOutput(bus)->GetStreamFormat().mChannelsPerFrame; ++o) {
-+                            UInt32 outputStride = 0;
-+                            Float32* dst = sample(output, o, outputStride);
-+                            Float32 gain = value(mGains, 0xffffffff) *
-+                                value(mGains, ((inputOffset+i) << 16) | 0xffff) *
-+                                value(mGains, 0xffff0000 | (outputOffset+o)) *
-+                                value(mGains, ((inputOffset+i) << 16) | (outputOffset+o));
-+                            if (!src || !dst || !gain) continue;
-+                            for (UInt32 f = 0; f < frames; ++f) dst[f*outputStride] += src[f*inputStride] * gain;
-+                            silent = false;
-+                        }
-+                    }
-+                }
-+            }
-+            inputOffset += inputChannels;
-+        }
-+        if (silent) flags |= kAudioUnitRenderAction_OutputIsSilence;
-+        else flags &= ~kAudioUnitRenderAction_OutputIsSilence;
-+        return noErr;
-+    }
-+};
-+#pragma GCC visibility push(default)
-+AUDIOCOMPONENT_ENTRY(AUBaseFactory, MatrixMixerAU);
-+#pragma GCC visibility pop
-diff --git a/src/frameworks/Carbon/HIToolbox/src/SecureInput.c b/src/frameworks/Carbon/HIToolbox/src/SecureInput.c
-new file mode 100644
---- /dev/null
-+++ b/src/frameworks/Carbon/HIToolbox/src/SecureInput.c
-@@ -0,0 +1,14 @@
-+/* X11 does not provide the macOS secure-event or TSM document facilities.
-+ * Export the entry points and report unsupported instead of aborting in dyld.
-+ * Do not claim that ordinary X11 keyboard input has become secure. */
-+int EnableSecureEventInput(void) { return -4; }
-+int DisableSecureEventInput(void) { return -4; }
-+int TSMSetDocumentProperty(void *document, unsigned tag, unsigned size,
-+                          void *data) {
-+    (void)document; (void)tag; (void)size; (void)data;
-+    return -4;
-+}
-+int TSMRemoveDocumentProperty(void *document, unsigned tag) {
-+    (void)document; (void)tag;
-+    return -4;
-+}
-diff --git a/src/frameworks/CoreMedia/include/CoreMedia/CMFormatDescription.h b/src/frameworks/CoreMedia/include/CoreMedia/CMFormatDescription.h
-new file mode 100644
---- /dev/null
-+++ b/src/frameworks/CoreMedia/include/CoreMedia/CMFormatDescription.h
-@@ -0,0 +1,40 @@
-+#ifndef _COREMEDIA_CMFORMATDESCRIPTION_H_
-+#define _COREMEDIA_CMFORMATDESCRIPTION_H_
-+
-+#include <CoreFoundation/CoreFoundation.h>
-+
-+#ifdef __cplusplus
-+extern "C" {
-+#endif
-+
-+extern const CFStringRef kCMFormatDescriptionTransferFunction_ITU_R_709_2;
-+extern const CFStringRef kCMFormatDescriptionTransferFunction_SMPTE_240M_1995;
-+extern const CFStringRef kCMFormatDescriptionTransferFunction_UseGamma;
-+extern const CFStringRef kCMFormatDescriptionTransferFunction_ITU_R_2020;
-+extern const CFStringRef kCMFormatDescriptionTransferFunction_ITU_R_2100_HLG;
-+extern const CFStringRef kCMFormatDescriptionTransferFunction_SMPTE_ST_2084_PQ;
-+extern const CFStringRef kCMFormatDescriptionTransferFunction_SMPTE_ST_428_1;
-+extern const CFStringRef kCMFormatDescriptionTransferFunction_Linear;
-+extern const CFStringRef kCMFormatDescriptionTransferFunction_sRGB;
-+extern const CFStringRef kCMFormatDescriptionColorPrimaries_ITU_R_709_2;
-+extern const CFStringRef kCMFormatDescriptionColorPrimaries_EBU_3213;
-+extern const CFStringRef kCMFormatDescriptionColorPrimaries_SMPTE_C;
-+extern const CFStringRef kCMFormatDescriptionColorPrimaries_ITU_R_2020;
-+extern const CFStringRef kCMFormatDescriptionColorPrimaries_P3_D65;
-+extern const CFStringRef kCMFormatDescriptionColorPrimaries_DCI_P3;
-+extern const CFStringRef kCMFormatDescriptionExtension_ContentLightLevelInfo;
-+extern const CFStringRef kCMFormatDescriptionExtension_Depth;
-+extern const CFStringRef kCMFormatDescriptionExtension_FormatName;
-+extern const CFStringRef kCMFormatDescriptionExtension_FullRangeVideo;
-+extern const CFStringRef kCMFormatDescriptionExtension_MasteringDisplayColorVolume;
-+extern const CFStringRef kCMSampleAttachmentKey_IsDependedOnByOthers;
-+extern const CFStringRef kCMFormatDescriptionYCbCrMatrix_ITU_R_709_2;
-+extern const CFStringRef kCMFormatDescriptionYCbCrMatrix_ITU_R_601_4;
-+extern const CFStringRef kCMFormatDescriptionYCbCrMatrix_SMPTE_240M_1995;
-+extern const CFStringRef kCMFormatDescriptionYCbCrMatrix_ITU_R_2020;
-+
-+#ifdef __cplusplus
-+}
-+#endif
-+
-+#endif // _COREMEDIA_CMFORMATDESCRIPTION_H_
-diff --git a/src/frameworks/CryptoTokenKit/src/TKTokenWatcher.m b/src/frameworks/CryptoTokenKit/src/TKTokenWatcher.m
-new file mode 100644
---- /dev/null
-+++ b/src/frameworks/CryptoTokenKit/src/TKTokenWatcher.m
-@@ -0,0 +1,60 @@
-+#import <CryptoTokenKit/TKTokenWatcher.h>
-+#import <Foundation/Foundation.h>
-+
-+@protocol TKProtocolTokenWatcher
-+@end
-+
-+@implementation TKTokenWatcher
-+
-+- (id)init
-+{
-+	if ((self = [super init]) != nil) {
-+		_tokenIDs = [[NSMutableArray alloc] init];
-+		_removalHandlers = [[NSMutableDictionary alloc] init];
-+	}
-+	return self;
-+}
-+
-+- (id)initWithInsertionHandler:(id)arg1
-+{
-+	if ((self = [self init]) != nil) {
-+		_insertionHandler = [arg1 copy];
-+	}
-+	return self;
-+}
-+
-+- (void)dealloc
-+{
-+	[_insertionHandler release];
-+	[_removalHandlers release];
-+	[_tokenIDs release];
-+	[super dealloc];
-+}
-+
-+- (NSArray *)tokenIDs
-+{
-+	return [NSArray array];
-+}
-+
-+- (void)addRemovalHandler:(id)arg1 forTokenID:(id)arg2
-+{
-+	if (arg1 && arg2)
-+		[_removalHandlers setObject: [[arg1 copy] autorelease] forKey: arg2];
-+}
-+
-+- (void)insertedToken:(id)arg1 reply:(id)arg2
-+{
-+	// No smartcard/token hardware under Darling; ignore.
-+}
-+
-+- (void)removedToken:(id)arg1 reply:(id)arg2
-+{
-+	// No smartcard/token hardware under Darling; ignore.
-+}
-+
-+- (void)setup
-+{
-+	// No token daemon to connect to; remain empty.
-+}
-+
-+@end
-diff --git a/src/frameworks/OpenDirectory/src/ODLocalDirectory.h b/src/frameworks/OpenDirectory/src/ODLocalDirectory.h
-new file mode 100644
---- /dev/null
-+++ b/src/frameworks/OpenDirectory/src/ODLocalDirectory.h
-@@ -0,0 +1,37 @@
-+/*
-+ This file is part of Darling.
-+
-+ Copyright (C) 2026 Darling Team
-+
-+ Darling is free software: you can redistribute it and/or modify
-+ it under the terms of the GNU General Public License as published by
-+ the Free Software Foundation, either version 3 of the License, or
-+ (at your option) any later version.
-+
-+ Darling is distributed in the hope that it will be useful,
-+ but WITHOUT ANY WARRANTY; without even the implied warranty of
-+ MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-+ GNU General Public License for more details.
-+
-+ You should have received a copy of the GNU General Public License
-+ along with Darling.  If not, see <http://www.gnu.org/licenses/>.
-+*/
-+
-+#import <Foundation/Foundation.h>
-+#import <OpenDirectory/OpenDirectory.h>
-+
-+// The local node: user records read from the system account database.
-+// Every value is an array of strings, keyed by attribute type.
-+
-+extern NSString *const ODLocalNodeName;
-+
-+NSError *ODLocalError(NSInteger code);
-+// nil when the name is not one of the nodes a standalone system has
-+NSString *ODLocalNodeNameForName(NSString *name);
-+NSString *ODLocalNodeNameForType(unsigned int type);
-+NSDictionary *ODLocalUserAttributes(NSString *name);
-+NSArray *ODLocalAllUserAttributes(void);
-+// a single record type or a list of them
-+BOOL ODLocalRecordTypesIncludeUsers(id recordTypeOrList);
-+
-+ODRecord *ODLocalRecordCreate(NSDictionary *attributes);
-diff --git a/src/frameworks/OpenDirectory/src/ODLocalDirectory.m b/src/frameworks/OpenDirectory/src/ODLocalDirectory.m
-new file mode 100644
---- /dev/null
-+++ b/src/frameworks/OpenDirectory/src/ODLocalDirectory.m
-@@ -0,0 +1,141 @@
-+/*
-+ This file is part of Darling.
-+
-+ Copyright (C) 2026 Darling Team
-+
-+ Darling is free software: you can redistribute it and/or modify
-+ it under the terms of the GNU General Public License as published by
-+ the Free Software Foundation, either version 3 of the License, or
-+ (at your option) any later version.
-+
-+ Darling is distributed in the hope that it will be useful,
-+ but WITHOUT ANY WARRANTY; without even the implied warranty of
-+ MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-+ GNU General Public License for more details.
-+
-+ You should have received a copy of the GNU General Public License
-+ along with Darling.  If not, see <http://www.gnu.org/licenses/>.
-+*/
-+
-+#import "ODLocalDirectory.h"
-+
-+#include <arpa/inet.h>
-+#include <membership.h>
-+#include <pthread.h>
-+#include <pwd.h>
-+#include <uuid/uuid.h>
-+
-+NSString *const ODFrameworkErrorDomain = @"com.apple.OpenDirectory";
-+NSString *const ODLocalNodeName = @"/Local/Default";
-+
-+// getpwent() iterates process-wide state
-+static pthread_mutex_t enumerationLock = PTHREAD_MUTEX_INITIALIZER;
-+
-+NSError *ODLocalError(NSInteger code)
-+{
-+    return [NSError errorWithDomain: ODFrameworkErrorDomain code: code userInfo: nil];
-+}
-+
-+NSString *ODLocalNodeNameForName(NSString *name)
-+{
-+    for (NSString *known in @[ODLocalNodeName, @"/Search", @"/Contacts"]) {
-+        if ([known isEqualToString: name])
-+            return known;
-+    }
-+    return nil;
-+}
-+
-+NSString *ODLocalNodeNameForType(unsigned int type)
-+{
-+    switch (type) {
-+        case 0x2201: // kODNodeTypeAuthentication
-+        case 0x2205: // kODNodeTypeNetwork
-+            return @"/Search";
-+        case 0x2204: // kODNodeTypeContacts
-+            return @"/Contacts";
-+        default:
-+            return ODLocalNodeName;
-+    }
-+}
-+
-+static NSDictionary *attributesForEntry(const struct passwd *entry)
-+{
-+    NSMutableDictionary *attributes = [NSMutableDictionary dictionary];
-+    NSString *name = [NSString stringWithUTF8String: entry->pw_name];
-+    uuid_t uuid;
-+
-+    if (name == nil)
-+        return nil;
-+
-+    attributes[@"dsAttrTypeStandard:RecordName"] = @[name];
-+    attributes[@"dsAttrTypeStandard:RecordType"] = @[@"dsRecTypeStandard:Users"];
-+    attributes[@"dsAttrTypeStandard:AppleMetaNodeLocation"] = @[ODLocalNodeName];
-+    attributes[@"dsAttrTypeStandard:UniqueID"] = @[[NSString stringWithFormat: @"%u", (unsigned int)entry->pw_uid]];
-+    attributes[@"dsAttrTypeStandard:PrimaryGroupID"] = @[[NSString stringWithFormat: @"%u", (unsigned int)entry->pw_gid]];
-+
-+    if (mbr_uid_to_uuid(entry->pw_uid, uuid) != 0) {
-+        // No stored UUID: use the membership library's compatibility mapping
-+        // for such accounts, FFFFEEEE-DDDD-CCCC-BBBB-AAAA followed by the uid.
-+        static const uuid_t prefix = {0xff, 0xff, 0xee, 0xee, 0xdd, 0xdd, 0xcc, 0xcc, 0xbb, 0xbb, 0xaa, 0xaa};
-+        uint32_t uid = htonl(entry->pw_uid);
-+
-+        memcpy(uuid, prefix, sizeof(uuid_t));
-+        memcpy(&uuid[12], &uid, sizeof(uid));
-+    }
-+    uuid_string_t text;
-+    uuid_unparse_upper(uuid, text);
-+    attributes[@"dsAttrTypeStandard:GeneratedUID"] = @[[NSString stringWithUTF8String: text]];
-+
-+    NSString *value;
-+    if (entry->pw_gecos != NULL && (value = [NSString stringWithUTF8String: entry->pw_gecos]) != nil)
-+        attributes[@"dsAttrTypeStandard:RealName"] = @[value];
-+    if (entry->pw_dir != NULL && (value = [NSString stringWithUTF8String: entry->pw_dir]) != nil)
-+        attributes[@"dsAttrTypeStandard:NFSHomeDirectory"] = @[value];
-+    if (entry->pw_shell != NULL && (value = [NSString stringWithUTF8String: entry->pw_shell]) != nil)
-+        attributes[@"dsAttrTypeStandard:UserShell"] = @[value];
-+
-+    return attributes;
-+}
-+
-+NSDictionary *ODLocalUserAttributes(NSString *name)
-+{
-+    struct passwd entry, *result = NULL;
-+    char buffer[4096];
-+
-+    if (![name isKindOfClass: [NSString class]] || [name UTF8String] == NULL)
-+        return nil;
-+    if (getpwnam_r([name UTF8String], &entry, buffer, sizeof(buffer), &result) != 0 || result == NULL)
-+        return nil;
-+
-+    return attributesForEntry(result);
-+}
-+
-+NSArray *ODLocalAllUserAttributes(void)
-+{
-+    NSMutableArray *users = [NSMutableArray array];
-+    struct passwd *entry;
-+
-+    pthread_mutex_lock(&enumerationLock);
-+    setpwent();
-+    while ((entry = getpwent()) != NULL) {
-+        NSDictionary *attributes = attributesForEntry(entry);
-+        if (attributes != nil)
-+            [users addObject: attributes];
-+    }
-+    endpwent();
-+    pthread_mutex_unlock(&enumerationLock);
-+
-+    return users;
-+}
-+
-+BOOL ODLocalRecordTypesIncludeUsers(id recordTypeOrList)
-+{
-+    NSArray *types = [recordTypeOrList isKindOfClass: [NSArray class]] ? recordTypeOrList
-+                   : recordTypeOrList != nil ? @[recordTypeOrList] : @[];
-+
-+    for (id type in types) {
-+        if ([type isKindOfClass: [NSString class]] && [type isEqualToString: @"dsRecTypeStandard:Users"])
-+            return YES;
-+    }
-+    return NO;
-+}
-diff --git a/src/frameworks/OpenGL/CGLAsyncPresent.inc b/src/frameworks/OpenGL/CGLAsyncPresent.inc
-new file mode 100644
-index 000000000..e5363c06a
---- /dev/null
-+++ b/src/frameworks/OpenGL/CGLAsyncPresent.inc
-@@ -0,0 +1,204 @@
-+/* Bounded GPU-only staging: the producer never waits for display cadence.
-+ * Three textures cover the currently displayed, pending, and writing frames.
-+ * GPU fences order both the completed producer copy and subsequent reuse. */
-+
-+/* darling-lol: software refresh period for the paced paths, from RCLOL_REFRESH_HZ
-+ * (1-1000 Hz). Unset or out of range keeps the previous 60 Hz period. */
-+static uint64_t nativeRefreshIntervalNS(void){
-+    static uint64_t interval;
-+    if(!interval){
-+        const char *hz=getenv("RCLOL_REFRESH_HZ");
-+        long rate=hz?strtol(hz,NULL,10):0;
-+        interval=(rate>0&&rate<=1000)?1000000000ull/(uint64_t)rate:16666667ull;
-+    }
-+    return interval;
-+}
-+
-+struct DarlingAsyncPresent {
-+    CGLContextObj owner;
-+    pthread_mutex_t mutex;
-+    pthread_t thread;
-+    int started, running, failed, displayed;
-+    unsigned width, height;
-+    GLuint textures[3], copy_fbos[2];
-+    int state[3]; /* 0 free, 1 pending, 2 display, 3 producer writing */
-+    GLsync produced[3], consumed[3];
-+    unsigned submissions, frames;
-+    uint64_t serial[3];
-+};
-+static uint64_t nativeMonotonicNS(void) {
-+    struct timespec now;
-+    if(__lolsys_syscall(1,(long)&now,0,0,0,0,228))return 0;
-+    return (uint64_t)now.tv_sec*1000000000ull+now.tv_nsec;
-+}
-+static void nativeWaitUntil(uint64_t deadline) {
-+    struct timespec wake={deadline/1000000000ull,deadline%1000000000ull};
-+    while(__lolsys_syscall(1,1,(long)&wake,0,0,0,230)==-4){}
-+}
-+static void *asyncPresentWorker(void *opaque) {
-+    struct DarlingAsyncPresent *a=opaque;
-+    CGLContextObj ctx=a->owner;
-+    int valid=p_eglBindAPI(EGL_OPENGL_API) && p_eglMakeCurrent(ctx->egl_display,
-+        ctx->native_present_surface,ctx->native_present_surface,ctx->native_present_context);
-+    GLuint fbo=0;
-+    if(getenv("RCLOL_GPU_DIRECT_TRACE"))fprintf(stderr,"GPU_ASYNC worker_context=%d\n",valid);
-+    /* The async context can wait for native VSync without blocking the
-+     * Chromium producer. Keep the monotonic limiter as a fallback/bound. */
-+    int nativeVSync=0;
-+    unsigned slowNativeSwaps=0;
-+    if(valid){
-+        const char *vsync=getenv("RCLOL_GPU_DIRECT_VSYNC");
-+        nativeVSync=vsync && vsync[0]=='1' && p_eglSwapInterval(ctx->egl_display,1);
-+        if(!nativeVSync)p_eglSwapInterval(ctx->egl_display,0);
-+        glGenFramebuffers(1,&fbo);
-+    }
-+    uint64_t deadline=nativeMonotonicNS();
-+    for(;;){
-+        pthread_mutex_lock(&a->mutex);
-+        int running=a->running,index=-1;
-+        GLsync produced=NULL;
-+        if(running && valid){
-+            for(int n=0;n<3;++n)if(a->state[n]==1 && a->produced[n] && (a->displayed<0 || a->serial[n]>a->serial[a->displayed])){
-+                GLenum ready=glClientWaitSync(a->produced[n],0,0);
-+                if(ready==GL_WAIT_FAILED){valid=0;break;}
-+                if((ready==GL_ALREADY_SIGNALED || ready==GL_CONDITION_SATISFIED) &&
-+                   (index<0 || a->serial[n]>a->serial[index]))index=n;
-+            }
-+            if(valid && index>=0){
-+                for(int n=0;n<3;++n)if(a->state[n]==1 && a->serial[n]<a->serial[index])a->state[n]=0;
-+                a->state[index]=2;produced=a->produced[index];a->produced[index]=NULL;
-+            }
-+        }
-+        pthread_mutex_unlock(&a->mutex);
-+        if(!running || !valid)break;
-+        DarlingNativePresentTarget *target=ctx->native_present_target;
-+        if(!target || __atomic_load_n(&target->magic,__ATOMIC_ACQUIRE)!=DARLING_NATIVE_PRESENT_MAGIC || target->target!=ctx->native_present_window){if(produced)glDeleteSync(produced);valid=0;break;}
-+        if(index>=0){
-+            uint64_t workStarted=nativeMonotonicNS();
-+            if(produced){glWaitSync(produced,0,GL_TIMEOUT_IGNORED);glDeleteSync(produced);}
-+            glBindFramebuffer(GL_READ_FRAMEBUFFER,fbo);
-+            glFramebufferTexture2D(GL_READ_FRAMEBUFFER,GL_COLOR_ATTACHMENT0,GL_TEXTURE_2D,a->textures[index],0);
-+            glBindFramebuffer(GL_DRAW_FRAMEBUFFER,0);glDrawBuffer(GL_BACK);glReadBuffer(GL_COLOR_ATTACHMENT0);
-+            glDisable(GL_SCISSOR_TEST);glDisable(GL_FRAMEBUFFER_SRGB);
-+            if(glCheckFramebufferStatus(GL_READ_FRAMEBUFFER)!=GL_FRAMEBUFFER_COMPLETE){valid=0;break;}
-+            glBlitFramebuffer(0,a->height,a->width,0,0,0,a->width,a->height,GL_COLOR_BUFFER_BIT,GL_NEAREST);
-+            GLsync consumed=glFenceSync(GL_SYNC_GPU_COMMANDS_COMPLETE,0);glFlush();
-+            int swapped=consumed && glGetError()==GL_NO_ERROR && p_eglSwapBuffers(ctx->egl_display,ctx->native_present_surface);
-+            uint64_t workFinished=nativeMonotonicNS();
-+            /* Xwayland may acknowledge interval 1 but throttle an occluded
-+             * surface to one swap per second. Two consecutive long swaps
-+             * select our existing bounded 60 Hz clock for this surface.
-+             * Keep texture ownership and the producer independent of it. */
-+            if(nativeVSync && swapped){
-+                slowNativeSwaps=workFinished-workStarted>=100000000ull?slowNativeSwaps+1:0;
-+                if(slowNativeSwaps>=2 && p_eglSwapInterval(ctx->egl_display,0)){
-+                    nativeVSync=0;
-+                    deadline=workFinished;
-+                }
-+            }
-+            pthread_mutex_lock(&a->mutex);
-+            a->consumed[index]=consumed;
-+            if(a->displayed>=0)a->state[a->displayed]=0;
-+            a->displayed=index;
-+            if(swapped)++a->frames;
-+            pthread_mutex_unlock(&a->mutex);
-+            if(!swapped){valid=0;break;}
-+            __atomic_store_n(&target->presenter,getpid(),__ATOMIC_RELEASE);
-+            __atomic_fetch_add(&target->sequence,1,__ATOMIC_RELEASE);
-+            __atomic_store_n(&target->ready,3,__ATOMIC_RELEASE);
-+            __atomic_fetch_add(&target->reserved[3],(uint32_t)((workFinished-workStarted)/1000),__ATOMIC_RELAXED);
-+            __atomic_store_n(&target->reserved[6],nativeVSync?0x544d4732u:0x544d4731u,__ATOMIC_RELEASE);
-+        }
-+        /* If the producer finishes just after our refresh deadline, wait for
-+         * that frame in short increments instead of losing a whole refresh.
-+         * Only a real swap advances the display clock. */
-+        if(index<0){__atomic_fetch_add(&target->reserved[1],1,__ATOMIC_RELAXED);nativeWaitUntil(nativeMonotonicNS()+1000000ull);continue;}
-+        /* Native VSync owns the refresh cadence; avoid a second clock that
-+         * can miss the compositor's next refresh after a variable swap wait. */
-+        if(nativeVSync)continue;
-+        uint64_t refreshNS=nativeRefreshIntervalNS();
-+        deadline += refreshNS;
-+        uint64_t now=nativeMonotonicNS();
-+        /* Preserve the refresh phase across small scheduling delays. Reset only
-+         * after a full missed period, so lateness does not accumulate as drift. */
-+        if(now>deadline && now-deadline>refreshNS){__atomic_fetch_add(&target->reserved[2],1,__ATOMIC_RELAXED);deadline=now;}
-+        nativeWaitUntil(deadline);
-+    }
-+    if(fbo)glDeleteFramebuffers(1,&fbo);
-+    p_eglMakeCurrent(ctx->egl_display,EGL_NO_SURFACE,EGL_NO_SURFACE,EGL_NO_CONTEXT);
-+    pthread_mutex_lock(&a->mutex);a->failed=!valid;a->running=0;pthread_mutex_unlock(&a->mutex);
-+    if(ctx->native_present_target)__atomic_store_n(&ctx->native_present_target->ready,0,__ATOMIC_RELEASE);
-+    return NULL;
-+}
-+static void stopAsyncPresent(CGLContextObj ctx) {
-+    struct DarlingAsyncPresent *a=ctx->native_async;
-+    if(!a)return;
-+    pthread_mutex_lock(&a->mutex);a->running=0;pthread_mutex_unlock(&a->mutex);
-+    if(a->started)pthread_join(a->thread,NULL);
-+    CGLContextObj previous=CGLGetCurrentContext();
-+    if(p_eglMakeCurrent(ctx->egl_display,ctx->egl_surface,ctx->egl_surface,ctx->egl_context)){
-+        for(int n=0;n<3;++n){if(a->produced[n])glDeleteSync(a->produced[n]);if(a->consumed[n])glDeleteSync(a->consumed[n]);}
-+        glDeleteFramebuffers(2,a->copy_fbos);glDeleteTextures(3,a->textures);
-+        if(previous && previous!=ctx)p_eglMakeCurrent(previous->egl_display,previous->egl_surface,previous->egl_surface,previous->egl_context);
-+        else if(!previous)p_eglMakeCurrent(ctx->egl_display,EGL_NO_SURFACE,EGL_NO_SURFACE,EGL_NO_CONTEXT);
-+    }
-+    pthread_mutex_destroy(&a->mutex);free(a);ctx->native_async=NULL;
-+}
-+static int enqueueAsyncPresent(CGLContextObj ctx,GLuint texture,GLenum textureTarget,unsigned width,unsigned height) {
-+    struct DarlingAsyncPresent *a=ctx->native_async;
-+    if(a && (a->width!=width || a->height!=height)){stopAsyncPresent(ctx);a=NULL;}
-+    if(!a){
-+        a=calloc(1,sizeof(*a));if(!a)return 0;
-+        a->owner=ctx;a->width=width;a->height=height;a->displayed=-1;
-+        pthread_mutex_init(&a->mutex,NULL);
-+        GLint oldTexture;glGetIntegerv(GL_TEXTURE_BINDING_2D,&oldTexture);
-+        glGenFramebuffers(2,a->copy_fbos);glGenTextures(3,a->textures);
-+        for(int n=0;n<3;++n){glBindTexture(GL_TEXTURE_2D,a->textures[n]);glTexImage2D(GL_TEXTURE_2D,0,GL_RGBA8,width,height,0,GL_RGBA,GL_UNSIGNED_BYTE,NULL);}
-+        glBindTexture(GL_TEXTURE_2D,oldTexture);ctx->native_async=a;
-+        GLenum allocationError=glGetError();if(allocationError!=GL_NO_ERROR){if(getenv("RCLOL_GPU_DIRECT_TRACE"))fprintf(stderr,"GPU_ASYNC allocation_error=%u\n",allocationError);stopAsyncPresent(ctx);return 0;}
-+        a->running=1;
-+        pthread_attr_t attr;pthread_attr_init(&attr);pthread_attr_setstacksize(&attr,1024*1024);
-+        int status=pthread_create(&a->thread,&attr,asyncPresentWorker,a);pthread_attr_destroy(&attr);
-+        if(getenv("RCLOL_GPU_DIRECT_TRACE"))fprintf(stderr,"GPU_ASYNC worker_create=%d\n",status);
-+        if(status){stopAsyncPresent(ctx);return 0;}a->started=1;
-+    }
-+    pthread_mutex_lock(&a->mutex);
-+    if(a->failed || !a->running){pthread_mutex_unlock(&a->mutex);return 0;}
-+    int index=-1;
-+    for(int n=0;n<3;++n)if(!a->state[n]){index=n;break;}
-+    /* Keep an older pending frame available to finish while replacing the
-+     * newest pending frame with fresh producer work. Never touch display slots. */
-+    if(index<0)for(int n=0;n<3;++n)if(a->state[n]==1 &&
-+        (index<0 || a->serial[n]>a->serial[index]))index=n;
-+    if(index<0){pthread_mutex_unlock(&a->mutex);return 0;}
-+    a->state[index]=3;
-+    GLsync consumed=a->consumed[index],produced=a->produced[index];
-+    a->consumed[index]=a->produced[index]=NULL;
-+    pthread_mutex_unlock(&a->mutex);
-+    if(consumed){glWaitSync(consumed,0,GL_TIMEOUT_IGNORED);glDeleteSync(consumed);}
-+    if(produced)glDeleteSync(produced);
-+    GLint oldRead,oldDraw;
-+    glGetIntegerv(GL_READ_FRAMEBUFFER_BINDING,&oldRead);glGetIntegerv(GL_DRAW_FRAMEBUFFER_BINDING,&oldDraw);
-+    GLboolean scissor=glIsEnabled(GL_SCISSOR_TEST),srgb=glIsEnabled(GL_FRAMEBUFFER_SRGB);
-+    glDisable(GL_SCISSOR_TEST);glDisable(GL_FRAMEBUFFER_SRGB);
-+    glBindFramebuffer(GL_READ_FRAMEBUFFER,a->copy_fbos[0]);
-+    glFramebufferTexture2D(GL_READ_FRAMEBUFFER,GL_COLOR_ATTACHMENT0,textureTarget,texture,0);glReadBuffer(GL_COLOR_ATTACHMENT0);
-+    glBindFramebuffer(GL_DRAW_FRAMEBUFFER,a->copy_fbos[1]);
-+    glFramebufferTexture2D(GL_DRAW_FRAMEBUFFER,GL_COLOR_ATTACHMENT0,GL_TEXTURE_2D,a->textures[index],0);glDrawBuffer(GL_COLOR_ATTACHMENT0);
-+    int complete=glCheckFramebufferStatus(GL_READ_FRAMEBUFFER)==GL_FRAMEBUFFER_COMPLETE && glCheckFramebufferStatus(GL_DRAW_FRAMEBUFFER)==GL_FRAMEBUFFER_COMPLETE;
-+    if(complete)glBlitFramebuffer(0,0,width,height,0,0,width,height,GL_COLOR_BUFFER_BIT,GL_NEAREST);
-+    glBindFramebuffer(GL_READ_FRAMEBUFFER,oldRead);glBindFramebuffer(GL_DRAW_FRAMEBUFFER,oldDraw);
-+    if(scissor)glEnable(GL_SCISSOR_TEST);if(srgb)glEnable(GL_FRAMEBUFFER_SRGB);
-+    produced=glFenceSync(GL_SYNC_GPU_COMMANDS_COMPLETE,0);glFlush();
-+    GLenum copyError=glGetError();
-+    if(!complete || !produced || copyError!=GL_NO_ERROR){if(getenv("RCLOL_GPU_DIRECT_TRACE"))fprintf(stderr,"GPU_ASYNC copy_error=%u fence=%d\n",copyError,produced!=NULL);if(produced)glDeleteSync(produced);pthread_mutex_lock(&a->mutex);a->state[index]=0;pthread_mutex_unlock(&a->mutex);return 0;}
-+    pthread_mutex_lock(&a->mutex);
-+    a->produced[index]=produced;a->state[index]=1;a->serial[index]=++a->submissions;
-+    if(ctx->native_present_target)__atomic_fetch_add(&ctx->native_present_target->reserved[0],1,__ATOMIC_RELAXED);
-+    if(ctx->native_present_target){
-+        __atomic_store_n(&ctx->native_present_target->reserved[4],__atomic_load_n(&nativeUploadCount,__ATOMIC_RELAXED),__ATOMIC_RELAXED);
-+        __atomic_store_n(&ctx->native_present_target->reserved[5],__atomic_load_n(&nativeUploadMicroseconds,__ATOMIC_RELAXED),__ATOMIC_RELAXED);
-+    }
-+    pthread_mutex_unlock(&a->mutex);
-+    return 1;
-+}
-diff --git a/src/frameworks/OpenGL/include/OpenGL/DarlingNativePresent.h b/src/frameworks/OpenGL/include/OpenGL/DarlingNativePresent.h
-new file mode 100644
---- /dev/null
-+++ b/src/frameworks/OpenGL/include/OpenGL/DarlingNativePresent.h
-@@ -0,0 +1,11 @@
-+#ifndef DARLING_NATIVE_PRESENT_H
-+#define DARLING_NATIVE_PRESENT_H
-+#include <stdint.h>
-+#define DARLING_NATIVE_PRESENT_MAGIC 0x47505532u
-+/* Host X11 target metadata only; no pixels, input, or account information. */
-+typedef struct {
-+ uint32_t magic,target,width,height;
-+ uint32_t ready,presenter,sequence,visual;
-+ uint32_t flags,reserved[7];
-+} DarlingNativePresentTarget;
-+#endif
-diff --git a/src/startup/mldr/commpage-cpu-caps.h b/src/startup/mldr/commpage-cpu-caps.h
-new file mode 100644
---- /dev/null
-+++ b/src/startup/mldr/commpage-cpu-caps.h
-@@ -0,0 +1,41 @@
-+#ifndef MLDR_COMMPAGE_CPU_CAPS_H
-+#define MLDR_COMMPAGE_CPU_CAPS_H
-+#include <stdint.h>
-+
-+/* CPUID leaf 1 uses EDX for legacy SIMD and ECX for newer SIMD. AVX
-+ * also needs the operating system to save both XMM and YMM state. */
-+static inline uint64_t commpage_decode_cpu_caps(uint32_t ecx1, uint32_t edx1,
-+    uint32_t ebx7, uint64_t xcr0, int long_mode)
-+{
-+    uint64_t caps = long_mode ? k64Bit : 0;
-+#define FEATURE(reg, bit, cap) do { if ((reg) & (UINT32_C(1) << (bit))) caps |= (cap); } while (0)
-+    FEATURE(edx1, 23, kHasMMX);
-+    FEATURE(edx1, 25, kHasSSE);
-+    FEATURE(edx1, 26, kHasSSE2);
-+    FEATURE(ecx1, 0, kHasSSE3);
-+    FEATURE(ecx1, 9, kHasSupplementalSSE3);
-+    FEATURE(ecx1, 19, kHasSSE4_1);
-+    FEATURE(ecx1, 20, kHasSSE4_2);
-+    FEATURE(ecx1, 25, kHasAES);
-+    FEATURE(ecx1, 30, kHasRDRAND);
-+    const uint32_t avx_requirements = (UINT32_C(1) << 26) | (UINT32_C(1) << 27) | (UINT32_C(1) << 28);
-+    const int avx_usable = (ecx1 & avx_requirements) == avx_requirements && (xcr0 & 6) == 6;
-+    if (avx_usable) {
-+        caps |= kHasAVX1_0;
-+        FEATURE(ecx1, 12, kHasFMA);
-+        FEATURE(ecx1, 29, kHasF16C);
-+        FEATURE(ebx7, 5, kHasAVX2_0);
-+    }
-+    FEATURE(ebx7, 9, kHasENFSTRG);
-+    FEATURE(ebx7, 3, kHasBMI1);
-+    FEATURE(ebx7, 8, kHasBMI2);
-+    FEATURE(ebx7, 11, kHasRTM);
-+    FEATURE(ebx7, 4, kHasHLE);
-+    FEATURE(ebx7, 18, kHasRDSEED);
-+    FEATURE(ebx7, 19, kHasADX);
-+    FEATURE(ebx7, 14, kHasMPX);
-+    FEATURE(ebx7, 2, kHasSGX);
-+#undef FEATURE
-+    return caps;
-+}
-+#endif
-diff --git a/src/CMakeLists.txt b/src/CMakeLists.txt
-index 5c924b34d..54f134873 100644
---- a/src/CMakeLists.txt
-+++ b/src/CMakeLists.txt
-@@ -119,6 +119,13 @@ SET(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -mmacosx-version-min=${CMAKE_OSX_DEPLOYMENT_
- SET(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -mmacosx-version-min=${CMAKE_OSX_DEPLOYMENT_TARGET}")
- set(CMAKE_OBJC_FLAGS "${CMAKE_OBJC_FLAGS} -mmacosx-version-min=${CMAKE_OSX_DEPLOYMENT_TARGET}")
- 
-+# Recent clang compiles an empty @[] / @{} for a macOS 11+ runtime into a reference to
-+# __NSArray0__struct / __NSDictionary0__struct, which Darling's CoreFoundation does not define
-+# (it provides __NSArray0__ / __NSDictionary0__). Keep the earlier code generation.
-+SET(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -fobjc-runtime=macosx-10.15")
-+SET(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -fobjc-runtime=macosx-10.15")
-+set(CMAKE_OBJC_FLAGS "${CMAKE_OBJC_FLAGS} -fobjc-runtime=macosx-10.15")
-+
- add_definitions(-target ${APPLE_TARGET_TRIPLET_PRIMARY})
- include(darling_lib)
- include(darling_static_lib)
-diff --git a/src/libelfloader/wrapgen/wrapgen.cpp b/src/libelfloader/wrapgen/wrapgen.cpp
-index 7079e613e..397ec6de0 100644
---- a/src/libelfloader/wrapgen/wrapgen.cpp
-+++ b/src/libelfloader/wrapgen/wrapgen.cpp
-@@ -268,7 +268,10 @@ void generate_wrapper(std::ofstream& output, const char* soname, const std::set<
- 	
- 	for (const std::string& sym : symbols)
- 	{
--		output << "void* " << sym << "() {\n"
-+        // ld64's x86-64 resolver stub saves integer argument registers only.
-+        // ELF lookup can clobber XMM arguments before the stub jumps to its
-+        // resolved function. Preserve them in the resolver itself.
-+		output << "__attribute__((preserve_all)) void* " << sym << "() {\n"
- 			"\t__asm__(\".symbol_resolver _" << sym << "\");\n"
- 			"\treturn _elfcalls->dlsym_fatal(lib_handle, \"" << sym << "\");\n"
- 			"}\n\n";
-diff --git a/src/frameworks/CoreServices/src/LaunchServices/LSInfo.m b/src/frameworks/CoreServices/src/LaunchServices/LSInfo.m
-index 4cb2a4941..29eef9956 100644
---- a/src/frameworks/CoreServices/src/LaunchServices/LSInfo.m
-+++ b/src/frameworks/CoreServices/src/LaunchServices/LSInfo.m
-@@ -20,6 +20,7 @@ along with Darling.  If not, see <http://www.gnu.org/licenses/>.
- 
- #include <LaunchServices/LaunchServices.h>
- #include <CarbonCore/MacErrors.h>
-+#include "LSHostOpen.h"
- #include <stdio.h>
- #include <sqlite3.h>
- #import <Foundation/NSString.h>
-@@ -106,7 +107,7 @@ CFArrayRef LSCopyApplicationURLsForBundleIdentifier(CFStringRef inBundleIdentifi
- {
- 	if (!inBundleIdentifier)
- 	{
--		if (*outError)
-+		if (outError)
- 			*outError = CFErrorCreate(NULL, kCFErrorDomainOSStatus, paramErr, NULL);
- 		return NULL;
- 	}
-@@ -116,7 +117,7 @@ CFArrayRef LSCopyApplicationURLsForBundleIdentifier(CFStringRef inBundleIdentifi
- 
- 	if (dq == nil)
- 	{
--		if (*outError)
-+		if (outError)
- 			*outError = CFErrorCreate(NULL, kCFErrorDomainOSStatus, fnfErr, NULL);
- 		return NULL;
- 	}
-@@ -138,7 +139,7 @@ CFArrayRef LSCopyApplicationURLsForBundleIdentifier(CFStringRef inBundleIdentifi
- 		}
- 		else
- 		{
--			if (*outError)
-+			if (outError)
- 				*outError = CFErrorCreate(NULL, kCFErrorDomainOSStatus, kLSApplicationNotFoundErr, NULL);
- 			retval = NULL;
- 		}
-@@ -247,7 +248,7 @@ CFURLRef LSCopyDefaultApplicationURLForContentType(CFStringRef inContentType, LS
- 
- 	if (dq == nil)
- 	{
--		if (*outError)
-+		if (outError)
- 			*outError = CFErrorCreate(NULL, kCFErrorDomainOSStatus, fnfErr, NULL);
- 		return NULL;
- 	}
-@@ -275,7 +276,7 @@ CFURLRef LSCopyDefaultApplicationURLForContentType(CFStringRef inContentType, LS
- 		}
- 		else
- 		{
--			if (*outError)
-+			if (outError)
- 				*outError = CFErrorCreate(NULL, kCFErrorDomainOSStatus, kLSApplicationNotFoundErr, NULL);
- 			retval = NULL;
- 		}
-@@ -292,7 +293,7 @@ CFURLRef LSCopyDefaultApplicationURLForURL(CFURLRef inURL, LSRolesMask inRoleMas
- 
- 	if (status != noErr)
- 	{
--		if (*outError)
-+		if (outError)
- 			*outError = CFErrorCreate(NULL, kCFErrorDomainOSStatus, status, NULL);
- 		return NULL;
- 	}
-@@ -306,6 +307,9 @@ CFURLRef LSCopyDefaultApplicationURLForURL(CFURLRef inURL, LSRolesMask inRoleMas
- 
- OSStatus LSGetApplicationForURL(CFURLRef inURL, LSRolesMask inRoleMask, FSRef *outAppRef, CFURLRef *outAppURL)
- {
-+	if (_LSGetHostHandlerForURL(inURL, outAppRef, outAppURL) == noErr)
-+		return noErr;
-+
- 	NSString* extension = [(NSURL*) inURL pathExtension];
- 	return LSGetApplicationForInfo(kLSUnknownType, kLSUnknownCreator, (CFStringRef) extension, inRoleMask, outAppRef, outAppURL);
- }
-diff --git a/src/frameworks/CoreServices/src/LaunchServices/CMakeLists.txt b/src/frameworks/CoreServices/src/LaunchServices/CMakeLists.txt
-index bb7f35068..957cc9d3e 100644
---- a/src/frameworks/CoreServices/src/LaunchServices/CMakeLists.txt
-+++ b/src/frameworks/CoreServices/src/LaunchServices/CMakeLists.txt
-@@ -1,5 +1,8 @@
- set(SUBFRAMEWORK_VERSION "A")
- 
-+# LSHostOpen.c loads the host's libsystemd through the ELF loader.
-+include_directories(${CMAKE_SOURCE_DIR}/src/startup/mldr/elfcalls)
-+
- generate_sdk_subframework(LaunchServices
- 	BASE_PATH ${coreservices_sdk_path}
- 	VERSION ${SUBFRAMEWORK_VERSION}
-@@ -20,6 +23,8 @@ add_framework(LaunchServices
- 		LSApplicationWorkspace.m
- 		LSRunning.m
- 		constants.c
-+		LSHostOpen.c
-+		LSHostOpenBus.c
- 		LSInfo.m
- 		LSOpen.m
- 		UTType.m
-diff --git a/src/frameworks/CoreServices/src/LaunchServices/LSHostOpen.h b/src/frameworks/CoreServices/src/LaunchServices/LSHostOpen.h
-new file mode 100644
---- /dev/null
-+++ b/src/frameworks/CoreServices/src/LaunchServices/LSHostOpen.h
-@@ -0,0 +1,43 @@
-+/*
-+This file is part of Darling.
-+
-+Copyright (C) 2026 Darling developers
-+
-+Darling is free software: you can redistribute it and/or modify
-+it under the terms of the GNU General Public License as published by
-+the Free Software Foundation, either version 3 of the License, or
-+(at your option) any later version.
-+
-+Darling is distributed in the hope that it will be useful,
-+but WITHOUT ANY WARRANTY; without even the implied warranty of
-+MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-+GNU General Public License for more details.
-+
-+You should have received a copy of the GNU General Public License
-+along with Darling.  If not, see <http://www.gnu.org/licenses/>.
-+*/
-+
-+#ifndef LS_HOST_OPEN_H_
-+#define LS_HOST_OPEN_H_
-+
-+#include <CoreFoundation/CoreFoundation.h>
-+#include <LaunchServices/LaunchServices.h>
-+
-+#ifdef __cplusplus
-+extern "C" {
-+#endif
-+
-+/* URLs with these schemes (http, https, mailto) are opened by the host desktop. */
-+Boolean _LSIsHostOpenURL(CFURLRef url);
-+
-+/* Hands the URL to the host desktop. */
-+OSStatus _LSOpenURLOnHost(CFURLRef url);
-+
-+/* Reports the host opener as the default application for a host-opened URL. */
-+OSStatus _LSGetHostHandlerForURL(CFURLRef url, FSRef* outAppRef, CFURLRef* outAppURL);
-+
-+#ifdef __cplusplus
-+}
-+#endif
-+
-+#endif
-diff --git a/src/frameworks/CoreServices/src/LaunchServices/LSHostOpen.c b/src/frameworks/CoreServices/src/LaunchServices/LSHostOpen.c
-new file mode 100644
---- /dev/null
-+++ b/src/frameworks/CoreServices/src/LaunchServices/LSHostOpen.c
-@@ -0,0 +1,207 @@
-+/*
-+This file is part of Darling.
-+
-+Copyright (C) 2026 Darling developers
-+
-+Darling is free software: you can redistribute it and/or modify
-+it under the terms of the GNU General Public License as published by
-+the Free Software Foundation, either version 3 of the License, or
-+(at your option) any later version.
-+
-+Darling is distributed in the hope that it will be useful,
-+but WITHOUT ANY WARRANTY; without even the implied warranty of
-+MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-+GNU General Public License for more details.
-+
-+You should have received a copy of the GNU General Public License
-+along with Darling.  If not, see <http://www.gnu.org/licenses/>.
-+*/
-+
-+/*
-+ * Web and mail URLs have no handler inside the prefix, so they are handed to
-+ * the Linux desktop. sd-bus is used from the host's libsystemd, loaded through
-+ * the ELF loader; the guest shares the host's user and network, so the
-+ * session bus is reachable directly.
-+ */
-+
-+#include "LSHostOpen.h"
-+#include "LSHostOpenBus.h"
-+#include <CarbonCore/MacErrors.h>
-+#include <elfcalls.h>
-+#include <pthread.h>
-+#include <stdlib.h>
-+#include <stdio.h>
-+#include <string.h>
-+
-+extern struct elf_calls* _elfcalls;
-+
-+/* Where the host's root file system appears inside the prefix. */
-+#define HOST_ROOT "/Volumes/SystemRoot"
-+
-+static struct ls_host_api host_api;
-+static Boolean host_api_ready;
-+static pthread_once_t host_api_once = PTHREAD_ONCE_INIT;
-+
-+static void load_host_api(void)
-+{
-+	void *systemd, *libc;
-+	struct ls_host_api api;
-+
-+	if (_elfcalls == NULL)
-+		return;
-+
-+	systemd = _elfcalls->dlopen("libsystemd.so.0");
-+	if (systemd == NULL)
-+		return;
-+	libc = _elfcalls->dlopen("libc.so.6");
-+	if (libc == NULL)
-+	{
-+		_elfcalls->dlclose(systemd);
-+		return;
-+	}
-+
-+	memset(&api, 0, sizeof(api));
-+#define BIND(lib, field) \
-+	if ((*(void**) &api.field = _elfcalls->dlsym(lib, #field)) == NULL) \
-+		goto fail;
-+	BIND(systemd, sd_bus_new);
-+	BIND(systemd, sd_bus_set_address);
-+	BIND(systemd, sd_bus_set_bus_client);
-+	BIND(systemd, sd_bus_start);
-+	BIND(systemd, sd_bus_flush_close_unref);
-+	BIND(systemd, sd_bus_message_new_method_call);
-+	BIND(systemd, sd_bus_message_append);
-+	BIND(systemd, sd_bus_message_append_strv);
-+	BIND(systemd, sd_bus_message_open_container);
-+	BIND(systemd, sd_bus_message_close_container);
-+	BIND(systemd, sd_bus_call);
-+	BIND(systemd, sd_bus_message_unref);
-+	BIND(systemd, sd_bus_error_free);
-+	/* Host IDs and paths, not the prefix's view of them. */
-+	BIND(libc, getuid);
-+	BIND(libc, access);
-+#undef BIND
-+	api.getenv = getenv;
-+	api.runtime_dir_root = "/run/user";
-+
-+	host_api = api;
-+	host_api_ready = TRUE;
-+	return;
-+
-+fail:
-+	_elfcalls->dlclose(libc);
-+	_elfcalls->dlclose(systemd);
-+}
-+
-+static const struct ls_host_api* get_host_api(void)
-+{
-+	pthread_once(&host_api_once, load_host_api);
-+	return host_api_ready ? &host_api : NULL;
-+}
-+
-+/* Returns the absolute URL as a malloc'd UTF-8 string. */
-+static char* copy_url_string(CFURLRef url)
-+{
-+	CFURLRef absolute;
-+	CFStringRef string;
-+	CFIndex size;
-+	char* buffer = NULL;
-+
-+	if (url == NULL)
-+		return NULL;
-+	absolute = CFURLCopyAbsoluteURL(url);
-+	if (absolute == NULL)
-+		return NULL;
-+
-+	string = CFURLGetString(absolute);
-+	size = CFStringGetMaximumSizeForEncoding(CFStringGetLength(string), kCFStringEncodingUTF8) + 1;
-+	if (size <= LS_HOST_OPEN_MAX_URL_LENGTH * 4 + 1)
-+	{
-+		buffer = malloc(size);
-+		if (buffer != NULL && !CFStringGetCString(string, buffer, size, kCFStringEncodingUTF8))
-+		{
-+			free(buffer);
-+			buffer = NULL;
-+		}
-+	}
-+	CFRelease(absolute);
-+	return buffer;
-+}
-+
-+Boolean _LSIsHostOpenURL(CFURLRef url)
-+{
-+	CFStringRef scheme;
-+	Boolean result = FALSE;
-+
-+	if (url == NULL)
-+		return FALSE;
-+	scheme = CFURLCopyScheme(url);
-+	if (scheme == NULL)
-+		return FALSE;
-+
-+	result = CFStringCompare(scheme, CFSTR("http"), kCFCompareCaseInsensitive) == kCFCompareEqualTo
-+		|| CFStringCompare(scheme, CFSTR("https"), kCFCompareCaseInsensitive) == kCFCompareEqualTo
-+		|| CFStringCompare(scheme, CFSTR("mailto"), kCFCompareCaseInsensitive) == kCFCompareEqualTo;
-+	CFRelease(scheme);
-+	return result;
-+}
-+
-+OSStatus _LSOpenURLOnHost(CFURLRef url)
-+{
-+	const struct ls_host_api* api;
-+	char* string = copy_url_string(url);
-+	int r;
-+
-+	if (string == NULL || _LSHostOpenValidateURL(string) < 0)
-+	{
-+		free(string);
-+		return paramErr;
-+	}
-+
-+	api = get_host_api();
-+	if (api == NULL)
-+	{
-+		fprintf(stderr, "LaunchServices: cannot open URL: host libsystemd is unavailable\n");
-+		free(string);
-+		return kLSApplicationNotFoundErr;
-+	}
-+
-+	r = _LSHostOpenURL(api, string, NULL);
-+	free(string);
-+	if (r < 0)
-+	{
-+		fprintf(stderr, "LaunchServices: host desktop did not accept URL (error %d)\n", -r);
-+		return kLSServerCommunicationErr;
-+	}
-+	return noErr;
-+}
-+
-+OSStatus _LSGetHostHandlerForURL(CFURLRef url, FSRef* outAppRef, CFURLRef* outAppURL)
-+{
-+	const struct ls_host_api* api;
-+	const char* opener;
-+	char path[256];
-+
-+	if (!_LSIsHostOpenURL(url))
-+		return kLSApplicationNotFoundErr;
-+	api = get_host_api();
-+	if (api == NULL)
-+		return kLSApplicationNotFoundErr;
-+
-+	opener = _LSHostOpenFindOpener(api);
-+	snprintf(path, sizeof(path), HOST_ROOT "%s", opener ? opener : "/usr/bin/xdg-open");
-+
-+	if (outAppRef != NULL)
-+	{
-+		OSStatus status = FSPathMakeRef((const UInt8*) path, outAppRef, NULL);
-+		if (status != noErr)
-+			return status;
-+	}
-+	if (outAppURL != NULL)
-+	{
-+		*outAppURL = CFURLCreateFromFileSystemRepresentation(NULL, (const UInt8*) path, strlen(path), FALSE);
-+		if (*outAppURL == NULL)
-+			return kLSApplicationNotFoundErr;
-+	}
-+	return noErr;
-+}
-diff --git a/src/frameworks/CoreServices/src/LaunchServices/LSHostOpenBus.h b/src/frameworks/CoreServices/src/LaunchServices/LSHostOpenBus.h
-new file mode 100644
---- /dev/null
-+++ b/src/frameworks/CoreServices/src/LaunchServices/LSHostOpenBus.h
-@@ -0,0 +1,111 @@
-+/*
-+This file is part of Darling.
-+
-+Copyright (C) 2026 Darling developers
-+
-+Darling is free software: you can redistribute it and/or modify
-+it under the terms of the GNU General Public License as published by
-+the Free Software Foundation, either version 3 of the License, or
-+(at your option) any later version.
-+
-+Darling is distributed in the hope that it will be useful,
-+but WITHOUT ANY WARRANTY; without even the implied warranty of
-+MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-+GNU General Public License for more details.
-+
-+You should have received a copy of the GNU General Public License
-+along with Darling.  If not, see <http://www.gnu.org/licenses/>.
-+*/
-+
-+/*
-+ * Hands a URL to the host desktop over the user's D-Bus session bus.
-+ *
-+ * This part has no Darling or CoreFoundation dependencies: every host
-+ * function comes from the table below, so it can also be built natively on
-+ * Linux against libsystemd for testing. Errors are negative Linux errno
-+ * values as returned by sd-bus.
-+ */
-+
-+#ifndef LS_HOST_OPEN_BUS_H_
-+#define LS_HOST_OPEN_BUS_H_
-+
-+#include <stdint.h>
-+
-+#ifdef __cplusplus
-+extern "C" {
-+#endif
-+
-+#define LS_HOST_OPEN_MAX_URL_LENGTH 4096
-+
-+/* Linux errno values; the guest's errno numbering differs. */
-+#define LS_HOST_LINUX_ENOENT 2
-+#define LS_HOST_LINUX_EINVAL 22
-+#define LS_HOST_LINUX_ENOSYS 38
-+#define LS_HOST_LINUX_ETIMEDOUT 110
-+
-+/* Layout of sd_bus_error. */
-+struct ls_host_bus_error
-+{
-+	const char* name;
-+	const char* message;
-+	int _need_free;
-+};
-+
-+struct ls_host_api
-+{
-+	/* libsystemd (sd-bus); bus and message objects are opaque */
-+	int (*sd_bus_new)(void** ret);
-+	int (*sd_bus_set_address)(void* bus, const char* address);
-+	int (*sd_bus_set_bus_client)(void* bus, int b);
-+	int (*sd_bus_start)(void* bus);
-+	void* (*sd_bus_flush_close_unref)(void* bus);
-+	int (*sd_bus_message_new_method_call)(void* bus, void** m, const char* destination,
-+		const char* path, const char* interface, const char* member);
-+	int (*sd_bus_message_append)(void* m, const char* types, ...);
-+	int (*sd_bus_message_append_strv)(void* m, char** l);
-+	int (*sd_bus_message_open_container)(void* m, char type, const char* contents);
-+	int (*sd_bus_message_close_container)(void* m);
-+	int (*sd_bus_call)(void* bus, void* m, uint64_t usec, struct ls_host_bus_error* ret_error, void** reply);
-+	void* (*sd_bus_message_unref)(void* m);
-+	void (*sd_bus_error_free)(struct ls_host_bus_error* e);
-+
-+	/* Host process environment */
-+	char* (*getenv)(const char* name);
-+	unsigned int (*getuid)(void);
-+	int (*access)(const char* path, int mode);
-+
-+	/* Parent of the per-user runtime directories, normally "/run/user" */
-+	const char* runtime_dir_root;
-+	/* Per-call timeout; 0 selects the default */
-+	uint64_t timeout_usec;
-+};
-+
-+enum
-+{
-+	LS_HOST_OPEN_VIA_PORTAL = 1,
-+	LS_HOST_OPEN_VIA_SYSTEMD = 2,
-+};
-+
-+/* 1 if the URL has a scheme that is handed to the host (http, https, mailto). */
-+int _LSHostOpenSchemeSupported(const char* url);
-+
-+/* 0 if the URL may be handed to the host, otherwise -EINVAL. */
-+int _LSHostOpenValidateURL(const char* url);
-+
-+/* Host path of xdg-open, or NULL if it is not in the usual locations. */
-+const char* _LSHostOpenFindOpener(const struct ls_host_api* api);
-+
-+/*
-+ * Opens the URL through org.freedesktop.portal.OpenURI, or, if that fails,
-+ * runs xdg-open in a transient systemd user service. Either way the handler
-+ * is started by the host session, never as a child of the caller.
-+ * Returns 0 and stores the method used in *method (may be NULL), or a
-+ * negative errno.
-+ */
-+int _LSHostOpenURL(const struct ls_host_api* api, const char* url, int* method);
-+
-+#ifdef __cplusplus
-+}
-+#endif
-+
-+#endif
-diff --git a/src/frameworks/CoreServices/src/LaunchServices/LSHostOpenBus.c b/src/frameworks/CoreServices/src/LaunchServices/LSHostOpenBus.c
-new file mode 100644
---- /dev/null
-+++ b/src/frameworks/CoreServices/src/LaunchServices/LSHostOpenBus.c
-@@ -0,0 +1,278 @@
-+/*
-+This file is part of Darling.
-+
-+Copyright (C) 2026 Darling developers
-+
-+Darling is free software: you can redistribute it and/or modify
-+it under the terms of the GNU General Public License as published by
-+the Free Software Foundation, either version 3 of the License, or
-+(at your option) any later version.
-+
-+Darling is distributed in the hope that it will be useful,
-+but WITHOUT ANY WARRANTY; without even the implied warranty of
-+MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-+GNU General Public License for more details.
-+
-+You should have received a copy of the GNU General Public License
-+along with Darling.  If not, see <http://www.gnu.org/licenses/>.
-+*/
-+
-+#include "LSHostOpenBus.h"
-+#include <stdio.h>
-+#include <string.h>
-+#include <strings.h>
-+#include <time.h>
-+#include <unistd.h>
-+
-+#define DEFAULT_TIMEOUT_USEC (10ULL * 1000 * 1000)
-+#define HOST_X_OK 1
-+
-+static const char* const supported_schemes[] = { "http:", "https:", "mailto:" };
-+
-+/* Passed to the transient unit so xdg-open finds the user's display. */
-+static const char* const forwarded_environment[] = { "DISPLAY", "WAYLAND_DISPLAY", "XDG_CURRENT_DESKTOP" };
-+
-+int _LSHostOpenSchemeSupported(const char* url)
-+{
-+	if (url == NULL)
-+		return 0;
-+	for (size_t i = 0; i < sizeof(supported_schemes) / sizeof(supported_schemes[0]); i++)
-+	{
-+		size_t len = strlen(supported_schemes[i]);
-+		if (strncasecmp(url, supported_schemes[i], len) == 0)
-+			return 1;
-+	}
-+	return 0;
-+}
-+
-+int _LSHostOpenValidateURL(const char* url)
-+{
-+	size_t len;
-+
-+	if (!_LSHostOpenSchemeSupported(url))
-+		return -LS_HOST_LINUX_EINVAL;
-+
-+	len = strlen(url);
-+	if (len > LS_HOST_OPEN_MAX_URL_LENGTH)
-+		return -LS_HOST_LINUX_EINVAL;
-+
-+	for (size_t i = 0; i < len; i++)
-+	{
-+		unsigned char c = (unsigned char) url[i];
-+		if (c < 0x20 || c == 0x7f)
-+			return -LS_HOST_LINUX_EINVAL;
-+	}
-+	return 0;
-+}
-+
-+const char* _LSHostOpenFindOpener(const struct ls_host_api* api)
-+{
-+	static const char* const candidates[] = {
-+		"/usr/local/bin/xdg-open",
-+		"/usr/bin/xdg-open",
-+		"/bin/xdg-open",
-+	};
-+
-+	if (api == NULL || api->access == NULL)
-+		return NULL;
-+	for (size_t i = 0; i < sizeof(candidates) / sizeof(candidates[0]); i++)
-+	{
-+		if (api->access(candidates[i], HOST_X_OK) == 0)
-+			return candidates[i];
-+	}
-+	return NULL;
-+}
-+
-+static int api_complete(const struct ls_host_api* api)
-+{
-+	return api != NULL && api->sd_bus_new && api->sd_bus_set_address && api->sd_bus_set_bus_client
-+		&& api->sd_bus_start && api->sd_bus_flush_close_unref && api->sd_bus_message_new_method_call
-+		&& api->sd_bus_message_append && api->sd_bus_message_append_strv
-+		&& api->sd_bus_message_open_container && api->sd_bus_message_close_container
-+		&& api->sd_bus_call && api->sd_bus_message_unref && api->sd_bus_error_free
-+		&& api->getenv && api->getuid;
-+}
-+
-+static int open_session_bus(const struct ls_host_api* api, void** ret)
-+{
-+	char address[512];
-+	const char* env = api->getenv("DBUS_SESSION_BUS_ADDRESS");
-+	void* bus = NULL;
-+	int r;
-+
-+	if (env != NULL && env[0] != '\0')
-+	{
-+		if (strlen(env) >= sizeof(address))
-+			return -LS_HOST_LINUX_EINVAL;
-+		strcpy(address, env);
-+	}
-+	else
-+	{
-+		const char* root = api->runtime_dir_root ? api->runtime_dir_root : "/run/user";
-+		if (snprintf(address, sizeof(address), "unix:path=%s/%u/bus", root, api->getuid())
-+				>= (int) sizeof(address))
-+			return -LS_HOST_LINUX_EINVAL;
-+	}
-+
-+	r = api->sd_bus_new(&bus);
-+	if (r < 0)
-+		return r;
-+	r = api->sd_bus_set_address(bus, address);
-+	if (r >= 0)
-+		r = api->sd_bus_set_bus_client(bus, 1);
-+	if (r >= 0)
-+		r = api->sd_bus_start(bus);
-+	if (r < 0)
-+	{
-+		api->sd_bus_flush_close_unref(bus);
-+		return r;
-+	}
-+	*ret = bus;
-+	return 0;
-+}
-+
-+static int call(const struct ls_host_api* api, void* bus, void* m)
-+{
-+	struct ls_host_bus_error error = { NULL, NULL, 0 };
-+	void* reply = NULL;
-+	uint64_t timeout = api->timeout_usec ? api->timeout_usec : DEFAULT_TIMEOUT_USEC;
-+	int r = api->sd_bus_call(bus, m, timeout, &error, &reply);
-+
-+	if (reply != NULL)
-+		api->sd_bus_message_unref(reply);
-+	api->sd_bus_error_free(&error);
-+	return r < 0 ? r : 0;
-+}
-+
-+static int open_via_portal(const struct ls_host_api* api, void* bus, const char* url)
-+{
-+	void* m = NULL;
-+	int r = api->sd_bus_message_new_method_call(bus, &m, "org.freedesktop.portal.Desktop",
-+		"/org/freedesktop/portal/desktop", "org.freedesktop.portal.OpenURI", "OpenURI");
-+	if (r < 0)
-+		return r;
-+
-+	r = api->sd_bus_message_append(m, "ss", "", url);
-+	if (r >= 0)
-+		r = api->sd_bus_message_append(m, "a{sv}", 0);
-+	if (r >= 0)
-+		r = call(api, bus, m);
-+	api->sd_bus_message_unref(m);
-+	return r;
-+}
-+
-+static int append_environment(const struct ls_host_api* api, void* m)
-+{
-+	char storage[3][1024];
-+	char* entries[4];
-+	size_t count = 0;
-+	int r;
-+
-+	for (size_t i = 0; i < sizeof(forwarded_environment) / sizeof(forwarded_environment[0]); i++)
-+	{
-+		const char* value = api->getenv(forwarded_environment[i]);
-+		int n;
-+
-+		if (value == NULL || value[0] == '\0')
-+			continue;
-+		n = snprintf(storage[count], sizeof(storage[count]), "%s=%s", forwarded_environment[i], value);
-+		if (n < 0 || n >= (int) sizeof(storage[count]))
-+			continue;
-+		entries[count] = storage[count];
-+		count++;
-+	}
-+	entries[count] = NULL;
-+	if (count == 0)
-+		return 0;
-+
-+	r = api->sd_bus_message_open_container(m, 'r', "sv");
-+	if (r >= 0)
-+		r = api->sd_bus_message_append(m, "s", "Environment");
-+	if (r >= 0)
-+		r = api->sd_bus_message_open_container(m, 'v', "as");
-+	if (r >= 0)
-+		r = api->sd_bus_message_append_strv(m, entries);
-+	if (r >= 0)
-+		r = api->sd_bus_message_close_container(m);
-+	if (r >= 0)
-+		r = api->sd_bus_message_close_container(m);
-+	return r;
-+}
-+
-+static int open_via_systemd(const struct ls_host_api* api, void* bus, const char* url)
-+{
-+	static unsigned int counter;
-+	struct timespec now;
-+	char unit[128];
-+	const char* opener = _LSHostOpenFindOpener(api);
-+	void* m = NULL;
-+	int r;
-+
-+	/* Bare names are resolved by systemd >= 248. */
-+	if (opener == NULL)
-+		opener = "xdg-open";
-+
-+	clock_gettime(CLOCK_REALTIME, &now);
-+	snprintf(unit, sizeof(unit), "app-darling-openurl-%d-%llx-%u.service", (int) getpid(),
-+		(unsigned long long) now.tv_sec * 1000000000ULL + (unsigned long long) now.tv_nsec,
-+		__atomic_add_fetch(&counter, 1, __ATOMIC_RELAXED));
-+
-+	r = api->sd_bus_message_new_method_call(bus, &m, "org.freedesktop.systemd1",
-+		"/org/freedesktop/systemd1", "org.freedesktop.systemd1.Manager", "StartTransientUnit");
-+	if (r < 0)
-+		return r;
-+
-+	r = api->sd_bus_message_append(m, "ss", unit, "fail");
-+	if (r >= 0)
-+		r = api->sd_bus_message_open_container(m, 'a', "(sv)");
-+	if (r >= 0)
-+		r = api->sd_bus_message_append(m, "(sv)(sv)(sv)(sv)",
-+			"Description", "s", "Open URL from Darling",
-+			/* Keep the handler running after xdg-open exits. */
-+			"KillMode", "s", "process",
-+			"CollectMode", "s", "inactive-or-failed",
-+			"ExecStart", "a(sasb)", 1, opener, 2, "xdg-open", url, 0);
-+	if (r >= 0)
-+		r = append_environment(api, m);
-+	if (r >= 0)
-+		r = api->sd_bus_message_close_container(m);
-+	if (r >= 0)
-+		r = api->sd_bus_message_append(m, "a(sa(sv))", 0);
-+	if (r >= 0)
-+		r = call(api, bus, m);
-+	api->sd_bus_message_unref(m);
-+	return r;
-+}
-+
-+int _LSHostOpenURL(const struct ls_host_api* api, const char* url, int* method)
-+{
-+	void* bus = NULL;
-+	int r;
-+
-+	r = _LSHostOpenValidateURL(url);
-+	if (r < 0)
-+		return r;
-+	if (!api_complete(api))
-+		return -LS_HOST_LINUX_ENOSYS;
-+
-+	r = open_session_bus(api, &bus);
-+	if (r < 0)
-+		return r;
-+
-+	r = open_via_portal(api, bus, url);
-+	if (r >= 0)
-+	{
-+		if (method)
-+			*method = LS_HOST_OPEN_VIA_PORTAL;
-+	}
-+	/* A portal that timed out may still open the URL; don't open it twice. */
-+	else if (r != -LS_HOST_LINUX_ETIMEDOUT)
-+	{
-+		r = open_via_systemd(api, bus, url);
-+		if (r >= 0 && method)
-+			*method = LS_HOST_OPEN_VIA_SYSTEMD;
-+	}
-+
-+	api->sd_bus_flush_close_unref(bus);
-+	return r < 0 ? r : 0;
-+}
-diff --git a/src/frameworks/CoreServices/src/CarbonCore/Gestalt.cpp b/src/frameworks/CoreServices/src/CarbonCore/Gestalt.cpp
-index dffdd4cb2..7430f587b 100644
---- a/src/frameworks/CoreServices/src/CarbonCore/Gestalt.cpp
-+++ b/src/frameworks/CoreServices/src/CarbonCore/Gestalt.cpp
-@@ -25,6 +25,9 @@ along with Darling.  If not, see <http://www.gnu.org/licenses/>.
- 
- OSStatus Gestalt(uint32_t type, int* value)
- {
-+	if (!value)
-+		return paramErr;
-+	*value = 0;
- 	switch (type)
- 	{
- 	case gestaltSystemVersion:
-@@ -32,24 +35,31 @@ OSStatus Gestalt(uint32_t type, int* value)
- 	case gestaltSystemVersionMinor:
- 	case gestaltSystemVersionPatch:
- 	{
--		// We may be mixing the Darwin and OS version, but this API is deprecated anyway
--		int name[2] = { CTL_KERN, KERN_OSRELEASE };
--		char version[32];
--		size_t version_len = sizeof(version) - 1;
--		int maj, min, patch;
--		
--		sysctl(name, 2, version, &version_len, nullptr, 0);
--		sscanf(version, "%d.%d.%d", &maj, &min, &patch);
--		
--		if (type == gestaltSystemVersion)
--			*value = 0x100 * maj + 0x10 * min;
--		else if (type == gestaltSystemVersionMajor)
--			*value = maj;
--		else if (type == gestaltSystemVersionMinor)
--			*value = min;
--		else if (type == gestaltSystemVersionPatch)
--			*value = patch;
--	}
-+        // Darwin's kernel release is not the macOS product version.
-+        char version[64] = {};
-+        size_t version_len = sizeof(version);
-+        int major = 0, minor = 0, patch = 0;
-+        if (sysctlbyname("kern.osproductversion", version, &version_len, nullptr, 0) != 0)
-+            return gestaltUnknownErr;
-+        version[sizeof(version) - 1] = '\0';
-+        if (sscanf(version, "%d.%d.%d", &major, &minor, &patch) < 1 ||
-+            major < 0 || major > 99 || minor < 0 || patch < 0)
-+            return gestaltUnknownErr;
-+
-+        if (type == gestaltSystemVersion) {
-+            // Legacy packed BCD: minor and bug-fix components saturate at 9.
-+            const int packedMajor = ((major / 10) << 4) | (major % 10);
-+            *value = (packedMajor << 8) | ((minor > 9 ? 9 : minor) << 4) |
-+                     (patch > 9 ? 9 : patch);
-+        } else if (type == gestaltSystemVersionMajor)
-+            *value = major;
-+        else if (type == gestaltSystemVersionMinor)
-+            *value = minor;
-+        else
-+            *value = patch;
-+        // Version selectors must not fall through to the architecture case.
-+        return 0;
-+    }
- 	case gestaltSysArchitecture:
- #ifdef __powerpc__
- 		*value = gestaltPowerPC;
-diff --git a/src/frameworks/Accelerate/vecLib/vDSP/CMakeLists.txt b/src/frameworks/Accelerate/vecLib/vDSP/CMakeLists.txt
-index 6ef701609..9bdcace68 100644
---- a/src/frameworks/Accelerate/vecLib/vDSP/CMakeLists.txt
-+++ b/src/frameworks/Accelerate/vecLib/vDSP/CMakeLists.txt
-@@ -7,7 +7,11 @@ set(DYLIB_CURRENT_VERSION "671.250.4")
- add_darling_library(vDSP SHARED
- 	src/vDSP.c
- 	src/extrema.c
-+	src/arith.c
-+	src/fft.c
- )
-+# WebAudio calls these on the realtime render thread.
-+target_compile_options(vDSP PRIVATE -O2)
- make_fat(vDSP)
- target_link_libraries(vDSP system)
- install(TARGETS vDSP DESTINATION libexec/darling/usr/lib)
-diff --git a/src/frameworks/Accelerate/vecLib/vDSP/include/vDSP/vDSP.h b/src/frameworks/Accelerate/vecLib/vDSP/include/vDSP/vDSP.h
-index c6b437c5b..88505eda4 100644
---- a/src/frameworks/Accelerate/vecLib/vDSP/include/vDSP/vDSP.h
-+++ b/src/frameworks/Accelerate/vecLib/vDSP/include/vDSP/vDSP.h
-@@ -24,6 +24,51 @@
- typedef unsigned long vDSP_Length;
- typedef long vDSP_Stride;
- 
-+typedef struct DSPComplex {
-+	float real;
-+	float imag;
-+} DSPComplex;
-+
-+typedef struct DSPSplitComplex {
-+	float *realp;
-+	float *imagp;
-+} DSPSplitComplex;
-+
-+typedef int FFTDirection;
-+typedef int FFTRadix;
-+
-+enum {
-+	kFFTDirection_Forward = 1,
-+	kFFTDirection_Inverse = -1
-+};
-+
-+enum {
-+	kFFTRadix2 = 0,
-+	kFFTRadix3 = 1,
-+	kFFTRadix5 = 2
-+};
-+
-+typedef struct OpaqueFFTSetup *FFTSetup;
-+
-+void vDSP_vadd(const float *__A, vDSP_Stride __IA, const float *__B, vDSP_Stride __IB, float *__C, vDSP_Stride __IC, vDSP_Length __N);
-+void vDSP_vsub(const float *__B, vDSP_Stride __IB, const float *__A, vDSP_Stride __IA, float *__C, vDSP_Stride __IC, vDSP_Length __N);
-+void vDSP_vmul(const float *__A, vDSP_Stride __IA, const float *__B, vDSP_Stride __IB, float *__C, vDSP_Stride __IC, vDSP_Length __N);
-+void vDSP_vsmul(const float *__A, vDSP_Stride __IA, const float *__B, float *__C, vDSP_Stride __IC, vDSP_Length __N);
-+void vDSP_vsadd(const float *__A, vDSP_Stride __IA, const float *__B, float *__C, vDSP_Stride __IC, vDSP_Length __N);
-+void vDSP_vsma(const float *__A, vDSP_Stride __IA, const float *__B, const float *__C, vDSP_Stride __IC, float *__D, vDSP_Stride __ID, vDSP_Length __N);
-+void vDSP_svesq(const float *__A, vDSP_Stride __IA, float *__C, vDSP_Length __N);
-+void vDSP_vclip(const float *__A, vDSP_Stride __IA, const float *__B, const float *__C, float *__D, vDSP_Stride __ID, vDSP_Length __N);
-+void vDSP_maxmgv(const float *__A, vDSP_Stride __IA, float *__C, vDSP_Length __N);
-+void vDSP_conv(const float *__A, vDSP_Stride __IA, const float *__F, vDSP_Stride __IF, float *__C, vDSP_Stride __IC, vDSP_Length __N, vDSP_Length __P);
-+void vDSP_ctoz(const DSPComplex *__C, vDSP_Stride __IC, const DSPSplitComplex *__Z, vDSP_Stride __IZ, vDSP_Length __N);
-+void vDSP_ztoc(const DSPSplitComplex *__Z, vDSP_Stride __IZ, DSPComplex *__C, vDSP_Stride __IC, vDSP_Length __N);
-+void vDSP_zvmul(const DSPSplitComplex *__A, vDSP_Stride __IA, const DSPSplitComplex *__B, vDSP_Stride __IB, const DSPSplitComplex *__C, vDSP_Stride __IC, vDSP_Length __N, int __Conjugate);
-+void vDSP_deq22(const float *__A, vDSP_Stride __IA, const float *__B, float *__C, vDSP_Stride __IC, vDSP_Length __N);
-+void vDSP_deq22D(const double *__A, vDSP_Stride __IA, const double *__B, double *__C, vDSP_Stride __IC, vDSP_Length __N);
-+FFTSetup vDSP_create_fftsetup(vDSP_Length __Log2n, FFTRadix __Radix);
-+void vDSP_destroy_fftsetup(FFTSetup __setup);
-+void vDSP_fft_zrip(FFTSetup __Setup, const DSPSplitComplex *__C, vDSP_Stride __IC, vDSP_Length __Log2N, FFTDirection __Direction);
-+
- void* vDSP_DCT_CreateSetup(void);
- void* vDSP_DCT_Execute(void);
- void* vDSP_DFT_CreateSetup(void);
-@@ -63,17 +108,11 @@ void* vDSP_biquadm_SetTargetsDouble(void);
- void* vDSP_biquadm_SetTargetsSingle(void);
- void* vDSP_blkman_window(void);
- void* vDSP_blkman_windowD(void);
--void* vDSP_conv(void);
- void* vDSP_convD(void);
--void* vDSP_create_fftsetup(void);
- void* vDSP_create_fftsetupD(void);
--void* vDSP_ctoz(void);
- void* vDSP_ctozD(void);
--void* vDSP_deq22(void);
--void* vDSP_deq22D(void);
- void* vDSP_desamp(void);
- void* vDSP_desampD(void);
--void* vDSP_destroy_fftsetup(void);
- void* vDSP_destroy_fftsetupD(void);
- void* vDSP_distancesq(void);
- void* vDSP_distancesqD(void);
-@@ -117,7 +156,6 @@ void* vDSP_fft_zop(void);
- void* vDSP_fft_zopD(void);
- void* vDSP_fft_zopt(void);
- void* vDSP_fft_zoptD(void);
--void* vDSP_fft_zrip(void);
- void* vDSP_fft_zripD(void);
- void* vDSP_fft_zript(void);
- void* vDSP_fft_zriptD(void);
-@@ -194,7 +232,6 @@ void* vDSP_sve_svesq(void);
- void* vDSP_sve_svesqD(void);
- void* vDSP_svemg(void);
- void* vDSP_svemgD(void);
--void* vDSP_svesq(void);
- void* vDSP_svesqD(void);
- void* vDSP_svs(void);
- void* vDSP_svsD(void);
-@@ -203,7 +240,6 @@ void* vDSP_vaamD(void);
- void* vDSP_vabs(void);
- void* vDSP_vabsD(void);
- void* vDSP_vabsi(void);
--void* vDSP_vadd(void);
- void* vDSP_vaddD(void);
- void* vDSP_vaddi(void);
- void* vDSP_vaddsub(void);
-@@ -216,7 +252,6 @@ void* vDSP_vasm(void);
- void* vDSP_vasmD(void);
- void* vDSP_vavlin(void);
- void* vDSP_vavlinD(void);
--void* vDSP_vclip(void);
- void* vDSP_vclipD(void);
- void* vDSP_vclipc(void);
- void* vDSP_vclipcD(void);
-@@ -316,7 +351,6 @@ void* vDSP_vmsa(void);
- void* vDSP_vmsaD(void);
- void* vDSP_vmsb(void);
- void* vDSP_vmsbD(void);
--void* vDSP_vmul(void);
- void* vDSP_vmulD(void);
- void* vDSP_vnabs(void);
- void* vDSP_vnabsD(void);
-@@ -350,7 +384,6 @@ void* vDSP_vrsum(void);
- void* vDSP_vrsumD(void);
- void* vDSP_vrvrs(void);
- void* vDSP_vrvrsD(void);
--void* vDSP_vsadd(void);
- void* vDSP_vsaddD(void);
- void* vDSP_vsaddi(void);
- void* vDSP_vsbm(void);
-@@ -364,7 +397,6 @@ void* vDSP_vsdivD(void);
- void* vDSP_vsdivi(void);
- void* vDSP_vsimps(void);
- void* vDSP_vsimpsD(void);
--void* vDSP_vsma(void);
- void* vDSP_vsmaD(void);
- void* vDSP_vsmfix24(void);
- void* vDSP_vsmfixu24(void);
-@@ -374,7 +406,6 @@ void* vDSP_vsmsb(void);
- void* vDSP_vsmsbD(void);
- void* vDSP_vsmsma(void);
- void* vDSP_vsmsmaD(void);
--void* vDSP_vsmul(void);
- void* vDSP_vsmulD(void);
- void* vDSP_vsort(void);
- void* vDSP_vsortD(void);
-@@ -385,7 +416,6 @@ void* vDSP_vsq(void);
- void* vDSP_vsqD(void);
- void* vDSP_vssq(void);
- void* vDSP_vssqD(void);
--void* vDSP_vsub(void);
- void* vDSP_vsubD(void);
- void* vDSP_vswap(void);
- void* vDSP_vswapD(void);
-@@ -439,7 +469,6 @@ void* vDSP_zrvmul(void);
- void* vDSP_zrvmulD(void);
- void* vDSP_zrvsub(void);
- void* vDSP_zrvsubD(void);
--void* vDSP_ztoc(void);
- void* vDSP_ztocD(void);
- void* vDSP_ztrans(void);
- void* vDSP_ztransD(void);
-@@ -467,7 +496,6 @@ void* vDSP_zvmmaa(void);
- void* vDSP_zvmmaaD(void);
- void* vDSP_zvmov(void);
- void* vDSP_zvmovD(void);
--void* vDSP_zvmul(void);
- void* vDSP_zvmulD(void);
- void* vDSP_zvneg(void);
- void* vDSP_zvnegD(void);
-diff --git a/src/frameworks/Accelerate/vecLib/vDSP/src/arith.c b/src/frameworks/Accelerate/vecLib/vDSP/src/arith.c
-new file mode 100644
-index 000000000..52550fb96
---- /dev/null
-+++ b/src/frameworks/Accelerate/vecLib/vDSP/src/arith.c
-@@ -0,0 +1,226 @@
-+/*
-+ This file is part of Darling.
-+
-+ Copyright (C) 2026 Darling Developers
-+
-+ Darling is free software: you can redistribute it and/or modify
-+ it under the terms of the GNU General Public License as published by
-+ the Free Software Foundation, either version 3 of the License, or
-+ (at your option) any later version.
-+
-+ Darling is distributed in the hope that it will be useful,
-+ but WITHOUT ANY WARRANTY; without even the implied warranty of
-+ MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-+ GNU General Public License for more details.
-+
-+ You should have received a copy of the GNU General Public License
-+ along with Darling.  If not, see <http://www.gnu.org/licenses/>.
-+*/
-+
-+#include <vDSP/vDSP.h>
-+
-+void vDSP_vadd(const float *__A, vDSP_Stride __IA, const float *__B, vDSP_Stride __IB, float *__C, vDSP_Stride __IC, vDSP_Length __N)
-+{
-+	if (__IA == 1 && __IB == 1 && __IC == 1)
-+	{
-+		for (vDSP_Length i = 0; i < __N; i++)
-+			__C[i] = __A[i] + __B[i];
-+	}
-+	else
-+	{
-+		for (vDSP_Length i = 0; i < __N; i++)
-+			__C[i * __IC] = __A[i * __IA] + __B[i * __IB];
-+	}
-+}
-+
-+// Apple's argument order: the subtrahend B comes first, C = A - B.
-+void vDSP_vsub(const float *__B, vDSP_Stride __IB, const float *__A, vDSP_Stride __IA, float *__C, vDSP_Stride __IC, vDSP_Length __N)
-+{
-+	if (__IA == 1 && __IB == 1 && __IC == 1)
-+	{
-+		for (vDSP_Length i = 0; i < __N; i++)
-+			__C[i] = __A[i] - __B[i];
-+	}
-+	else
-+	{
-+		for (vDSP_Length i = 0; i < __N; i++)
-+			__C[i * __IC] = __A[i * __IA] - __B[i * __IB];
-+	}
-+}
-+
-+void vDSP_vmul(const float *__A, vDSP_Stride __IA, const float *__B, vDSP_Stride __IB, float *__C, vDSP_Stride __IC, vDSP_Length __N)
-+{
-+	if (__IA == 1 && __IB == 1 && __IC == 1)
-+	{
-+		for (vDSP_Length i = 0; i < __N; i++)
-+			__C[i] = __A[i] * __B[i];
-+	}
-+	else
-+	{
-+		for (vDSP_Length i = 0; i < __N; i++)
-+			__C[i * __IC] = __A[i * __IA] * __B[i * __IB];
-+	}
-+}
-+
-+void vDSP_vsmul(const float *__A, vDSP_Stride __IA, const float *__B, float *__C, vDSP_Stride __IC, vDSP_Length __N)
-+{
-+	const float b = *__B;
-+
-+	if (__IA == 1 && __IC == 1)
-+	{
-+		for (vDSP_Length i = 0; i < __N; i++)
-+			__C[i] = __A[i] * b;
-+	}
-+	else
-+	{
-+		for (vDSP_Length i = 0; i < __N; i++)
-+			__C[i * __IC] = __A[i * __IA] * b;
-+	}
-+}
-+
-+void vDSP_vsadd(const float *__A, vDSP_Stride __IA, const float *__B, float *__C, vDSP_Stride __IC, vDSP_Length __N)
-+{
-+	const float b = *__B;
-+
-+	if (__IA == 1 && __IC == 1)
-+	{
-+		for (vDSP_Length i = 0; i < __N; i++)
-+			__C[i] = __A[i] + b;
-+	}
-+	else
-+	{
-+		for (vDSP_Length i = 0; i < __N; i++)
-+			__C[i * __IC] = __A[i * __IA] + b;
-+	}
-+}
-+
-+void vDSP_vsma(const float *__A, vDSP_Stride __IA, const float *__B, const float *__C, vDSP_Stride __IC, float *__D, vDSP_Stride __ID, vDSP_Length __N)
-+{
-+	const float b = *__B;
-+
-+	if (__IA == 1 && __IC == 1 && __ID == 1)
-+	{
-+		for (vDSP_Length i = 0; i < __N; i++)
-+			__D[i] = __A[i] * b + __C[i];
-+	}
-+	else
-+	{
-+		for (vDSP_Length i = 0; i < __N; i++)
-+			__D[i * __ID] = __A[i * __IA] * b + __C[i * __IC];
-+	}
-+}
-+
-+void vDSP_svesq(const float *__A, vDSP_Stride __IA, float *__C, vDSP_Length __N)
-+{
-+	float sum = 0;
-+
-+	for (vDSP_Length i = 0; i < __N; i++)
-+		sum += __A[i * __IA] * __A[i * __IA];
-+	*__C = sum;
-+}
-+
-+void vDSP_vclip(const float *__A, vDSP_Stride __IA, const float *__B, const float *__C, float *__D, vDSP_Stride __ID, vDSP_Length __N)
-+{
-+	const float low = *__B, high = *__C;
-+
-+	for (vDSP_Length i = 0; i < __N; i++)
-+	{
-+		float v = __A[i * __IA];
-+		if (v < low)
-+			v = low;
-+		else if (v > high)
-+			v = high;
-+		__D[i * __ID] = v;
-+	}
-+}
-+
-+// Correlation, or convolution when F points at the filter's last tap with a negative stride.
-+void vDSP_conv(const float *__A, vDSP_Stride __IA, const float *__F, vDSP_Stride __IF, float *__C, vDSP_Stride __IC, vDSP_Length __N, vDSP_Length __P)
-+{
-+	for (vDSP_Length n = 0; n < __N; n++)
-+	{
-+		const float *a = __A + n * __IA;
-+		float sum = 0;
-+
-+		for (vDSP_Length p = 0; p < __P; p++)
-+			sum += a[p * __IA] * __F[p * __IF];
-+		__C[n * __IC] = sum;
-+	}
-+}
-+
-+// IC counts floats, so 2 is a contiguous DSPComplex array.
-+void vDSP_ctoz(const DSPComplex *__C, vDSP_Stride __IC, const DSPSplitComplex *__Z, vDSP_Stride __IZ, vDSP_Length __N)
-+{
-+	const float *c = (const float *) __C;
-+
-+	for (vDSP_Length i = 0; i < __N; i++)
-+	{
-+		__Z->realp[i * __IZ] = c[i * __IC];
-+		__Z->imagp[i * __IZ] = c[i * __IC + 1];
-+	}
-+}
-+
-+void vDSP_ztoc(const DSPSplitComplex *__Z, vDSP_Stride __IZ, DSPComplex *__C, vDSP_Stride __IC, vDSP_Length __N)
-+{
-+	float *c = (float *) __C;
-+
-+	for (vDSP_Length i = 0; i < __N; i++)
-+	{
-+		c[i * __IC] = __Z->realp[i * __IZ];
-+		c[i * __IC + 1] = __Z->imagp[i * __IZ];
-+	}
-+}
-+
-+// C may alias A or B. Conjugate is 1 for A * B and -1 for conj(A) * B.
-+void vDSP_zvmul(const DSPSplitComplex *__A, vDSP_Stride __IA, const DSPSplitComplex *__B, vDSP_Stride __IB, const DSPSplitComplex *__C, vDSP_Stride __IC, vDSP_Length __N, int __Conjugate)
-+{
-+	const float sign = __Conjugate == -1 ? -1.0f : 1.0f;
-+
-+	for (vDSP_Length i = 0; i < __N; i++)
-+	{
-+		const float ar = __A->realp[i * __IA], ai = sign * __A->imagp[i * __IA];
-+		const float br = __B->realp[i * __IB], bi = __B->imagp[i * __IB];
-+
-+		__C->realp[i * __IC] = ar * br - ai * bi;
-+		__C->imagp[i * __IC] = ar * bi + ai * br;
-+	}
-+}
-+
-+// Two-pole two-zero filter. A and C hold N + 2 elements; C[0] and C[1] are the initial outputs.
-+void vDSP_deq22D(const double *__A, vDSP_Stride __IA, const double *__B, double *__C, vDSP_Stride __IC, vDSP_Length __N)
-+{
-+	const double b0 = __B[0], b1 = __B[1], b2 = __B[2], a1 = __B[3], a2 = __B[4];
-+	double x1 = __A[__IA], x2 = __A[0];
-+	double y1 = __C[__IC], y2 = __C[0];
-+
-+	for (vDSP_Length n = 2; n < __N + 2; n++)
-+	{
-+		const double x = __A[n * __IA];
-+		const double y = b0 * x + b1 * x1 + b2 * x2 - a1 * y1 - a2 * y2;
-+
-+		__C[n * __IC] = y;
-+		x2 = x1;
-+		x1 = x;
-+		y2 = y1;
-+		y1 = y;
-+	}
-+}
-+
-+void vDSP_deq22(const float *__A, vDSP_Stride __IA, const float *__B, float *__C, vDSP_Stride __IC, vDSP_Length __N)
-+{
-+	const float b0 = __B[0], b1 = __B[1], b2 = __B[2], a1 = __B[3], a2 = __B[4];
-+	float x1 = __A[__IA], x2 = __A[0];
-+	float y1 = __C[__IC], y2 = __C[0];
-+
-+	for (vDSP_Length n = 2; n < __N + 2; n++)
-+	{
-+		const float x = __A[n * __IA];
-+		const float y = b0 * x + b1 * x1 + b2 * x2 - a1 * y1 - a2 * y2;
-+
-+		__C[n * __IC] = y;
-+		x2 = x1;
-+		x1 = x;
-+		y2 = y1;
-+		y1 = y;
-+	}
-+}
-diff --git a/src/frameworks/Accelerate/vecLib/vDSP/src/basic.c b/src/frameworks/Accelerate/vecLib/vDSP/src/basic.c
-deleted file mode 100644
-index ecdd15b23..000000000
---- a/src/frameworks/Accelerate/vecLib/vDSP/src/basic.c
-+++ /dev/null
-@@ -1,36 +0,0 @@
--/*
-- This file is part of Darling.
--
-- Copyright (C) 2020 Lubos Dolezel
--
-- Darling is free software: you can redistribute it and/or modify
-- it under the terms of the GNU General Public License as published by
-- the Free Software Foundation, either version 3 of the License, or
-- (at your option) any later version.
--
-- Darling is distributed in the hope that it will be useful,
-- but WITHOUT ANY WARRANTY; without even the implied warranty of
-- MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-- GNU General Public License for more details.
--
-- You should have received a copy of the GNU General Public License
-- along with Darling.  If not, see <http://www.gnu.org/licenses/>.
--*/
--
--#include <vDSP/vDSP.h>
--
--void vDSP_vsadd(const float *__A, vDSP_Stride __IA, const float *__B, float *__C, vDSP_Stride __IC, vDSP_Length __N)
--{
--	if (__IA == 1 && __IC == 1)
--	{
--		#pragma clang loop vectorize(enable)
--		for (vDSP_Length i = 0; i < __N; i++)
--			__C[i] = __A[i] + __B[i];
--	}
--	else
--	{
--		#pragma clang loop vectorize(enable)
--		for (vDSP_Length i = 0; i < __N; i++)
--			__C[i * __IC] = __A[i * __IA] + __B[i * __IA];
--	}
--}
-diff --git a/src/frameworks/Accelerate/vecLib/vDSP/src/fft.c b/src/frameworks/Accelerate/vecLib/vDSP/src/fft.c
-new file mode 100644
-index 000000000..92873d796
---- /dev/null
-+++ b/src/frameworks/Accelerate/vecLib/vDSP/src/fft.c
-@@ -0,0 +1,162 @@
-+/*
-+ This file is part of Darling.
-+
-+ Copyright (C) 2026 Darling Developers
-+
-+ Darling is free software: you can redistribute it and/or modify
-+ it under the terms of the GNU General Public License as published by
-+ the Free Software Foundation, either version 3 of the License, or
-+ (at your option) any later version.
-+
-+ Darling is distributed in the hope that it will be useful,
-+ but WITHOUT ANY WARRANTY; without even the implied warranty of
-+ MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-+ GNU General Public License for more details.
-+
-+ You should have received a copy of the GNU General Public License
-+ along with Darling.  If not, see <http://www.gnu.org/licenses/>.
-+*/
-+
-+#include <vDSP/vDSP.h>
-+#include <stdlib.h>
-+#include <math.h>
-+
-+// Setups are shared between threads, so only read-only twiddles live here.
-+struct OpaqueFFTSetup
-+{
-+	vDSP_Length log2n;
-+	float *cosine;
-+	float *sine;
-+};
-+
-+FFTSetup vDSP_create_fftsetup(vDSP_Length __Log2n, FFTRadix __Radix)
-+{
-+	if (__Radix != kFFTRadix2 || __Log2n > 30)
-+		return NULL;
-+
-+	const size_t n = (size_t) 1 << __Log2n;
-+	const size_t half = n > 1 ? n / 2 : 1;
-+	struct OpaqueFFTSetup *setup = malloc(sizeof(*setup) + 2 * half * sizeof(float));
-+
-+	if (!setup)
-+		return NULL;
-+	setup->log2n = __Log2n;
-+	setup->cosine = (float *) (setup + 1);
-+	setup->sine = setup->cosine + half;
-+	for (size_t j = 0; j < half; j++)
-+	{
-+		const double angle = 2.0 * M_PI * (double) j / (double) n;
-+		setup->cosine[j] = cos(angle);
-+		setup->sine[j] = sin(angle);
-+	}
-+	return setup;
-+}
-+
-+void vDSP_destroy_fftsetup(FFTSetup __setup)
-+{
-+	free(__setup);
-+}
-+
-+// In-place radix-2 complex FFT of 2^log2m points, e^-i for forward and e^+i for inverse, unscaled.
-+static void complex_fft(const struct OpaqueFFTSetup *setup, float *re, float *im, vDSP_Stride stride, vDSP_Length log2m, int inverse)
-+{
-+	const size_t m = (size_t) 1 << log2m;
-+	const size_t full = (size_t) 1 << setup->log2n;
-+
-+	for (size_t i = 1, j = 0; i < m; i++)
-+	{
-+		size_t bit = m >> 1;
-+		for (; j & bit; bit >>= 1)
-+			j ^= bit;
-+		j ^= bit;
-+		if (i < j)
-+		{
-+			float t = re[i * stride];
-+			re[i * stride] = re[j * stride];
-+			re[j * stride] = t;
-+			t = im[i * stride];
-+			im[i * stride] = im[j * stride];
-+			im[j * stride] = t;
-+		}
-+	}
-+
-+	for (size_t len = 2; len <= m; len <<= 1)
-+	{
-+		const size_t half = len >> 1;
-+		const size_t step = full / len;
-+
-+		for (size_t base = 0; base < m; base += len)
-+		{
-+			for (size_t k = 0; k < half; k++)
-+			{
-+				const float wr = setup->cosine[k * step];
-+				const float wi = inverse ? setup->sine[k * step] : -setup->sine[k * step];
-+				const size_t a = (base + k) * stride, b = (base + k + half) * stride;
-+				const float tr = re[b] * wr - im[b] * wi;
-+				const float ti = re[b] * wi + im[b] * wr;
-+
-+				re[b] = re[a] - tr;
-+				im[b] = im[a] - ti;
-+				re[a] += tr;
-+				im[a] += ti;
-+			}
-+		}
-+	}
-+}
-+
-+// Real FFT on N = 2^Log2N points packed as N/2 complex values (even samples real, odd imaginary).
-+// Forward returns twice the DFT with X[0] in realp[0] and X[N/2] in imagp[0]; inverse is unscaled,
-+// so a round trip multiplies by 2N, as on macOS.
-+void vDSP_fft_zrip(FFTSetup __Setup, const DSPSplitComplex *__C, vDSP_Stride __IC, vDSP_Length __Log2N, FFTDirection __Direction)
-+{
-+	if (!__Setup || __Log2N == 0 || __Log2N > __Setup->log2n)
-+		return;
-+
-+	float *re = __C->realp, *im = __C->imagp;
-+	const vDSP_Stride s = __IC;
-+	const size_t m = (size_t) 1 << (__Log2N - 1);
-+	const size_t step = ((size_t) 1 << __Setup->log2n) >> __Log2N;
-+
-+	if (__Direction != kFFTDirection_Inverse)
-+	{
-+		complex_fft(__Setup, re, im, s, __Log2N - 1, 0);
-+
-+		const float z0r = re[0], z0i = im[0];
-+		re[0] = 2 * (z0r + z0i);
-+		im[0] = 2 * (z0r - z0i);
-+
-+		for (size_t k = 1; k <= m / 2; k++)
-+		{
-+			const size_t j = m - k;
-+			const float c = __Setup->cosine[k * step], sn = __Setup->sine[k * step];
-+			const float ar = re[k * s], ai = im[k * s], br = re[j * s], bi = im[j * s];
-+			const float sr = ar + br, si = ai - bi, dr = ar - br, di = ai + bi;
-+
-+			re[k * s] = sr + (c * di - sn * dr);
-+			im[k * s] = si - (c * dr + sn * di);
-+			re[j * s] = sr - (c * di - sn * dr);
-+			im[j * s] = -si - (c * dr + sn * di);
-+		}
-+	}
-+	else
-+	{
-+		const float p0r = re[0], p0i = im[0];
-+		re[0] = p0r + p0i;
-+		im[0] = p0r - p0i;
-+
-+		for (size_t k = 1; k <= m / 2; k++)
-+		{
-+			const size_t j = m - k;
-+			const float c = __Setup->cosine[k * step], sn = __Setup->sine[k * step];
-+			const float ar = re[k * s], ai = im[k * s], br = re[j * s], bi = im[j * s];
-+			const float sr = ar + br, si = ai - bi, dr = ar - br, di = ai + bi;
-+
-+			re[k * s] = sr - (c * di + sn * dr);
-+			im[k * s] = si + (c * dr - sn * di);
-+			re[j * s] = sr + (c * di + sn * dr);
-+			im[j * s] = -si + (c * dr - sn * di);
-+		}
-+
-+		complex_fft(__Setup, re, im, s, __Log2N - 1, 1);
-+	}
-+}
-diff --git a/src/frameworks/Accelerate/vecLib/vDSP/src/vDSP.c b/src/frameworks/Accelerate/vecLib/vDSP/src/vDSP.c
-index 24c037abc..cc18546ce 100644
---- a/src/frameworks/Accelerate/vecLib/vDSP/src/vDSP.c
-+++ b/src/frameworks/Accelerate/vecLib/vDSP/src/vDSP.c
-@@ -263,54 +263,24 @@ void* vDSP_blkman_windowD(void)
-     return NULL;
- }
- 
--void* vDSP_conv(void)
--{
--    if (verbose) puts("STUB: vDSP_conv called");
--    return NULL;
--}
--
- void* vDSP_convD(void)
- {
-     if (verbose) puts("STUB: vDSP_convD called");
-     return NULL;
- }
- 
--void* vDSP_create_fftsetup(void)
--{
--    if (verbose) puts("STUB: vDSP_create_fftsetup called");
--    return NULL;
--}
--
- void* vDSP_create_fftsetupD(void)
- {
-     if (verbose) puts("STUB: vDSP_create_fftsetupD called");
-     return NULL;
- }
- 
--void* vDSP_ctoz(void)
--{
--    if (verbose) puts("STUB: vDSP_ctoz called");
--    return NULL;
--}
--
- void* vDSP_ctozD(void)
- {
-     if (verbose) puts("STUB: vDSP_ctozD called");
-     return NULL;
- }
- 
--void* vDSP_deq22(void)
--{
--    if (verbose) puts("STUB: vDSP_deq22 called");
--    return NULL;
--}
--
--void* vDSP_deq22D(void)
--{
--    if (verbose) puts("STUB: vDSP_deq22D called");
--    return NULL;
--}
--
- void* vDSP_desamp(void)
- {
-     if (verbose) puts("STUB: vDSP_desamp called");
-@@ -323,12 +293,6 @@ void* vDSP_desampD(void)
-     return NULL;
- }
- 
--void* vDSP_destroy_fftsetup(void)
--{
--    if (verbose) puts("STUB: vDSP_destroy_fftsetup called");
--    return NULL;
--}
--
- void* vDSP_destroy_fftsetupD(void)
- {
-     if (verbose) puts("STUB: vDSP_destroy_fftsetupD called");
-@@ -587,12 +551,6 @@ void* vDSP_fft_zoptD(void)
-     return NULL;
- }
- 
--void* vDSP_fft_zrip(void)
--{
--    if (verbose) puts("STUB: vDSP_fft_zrip called");
--    return NULL;
--}
--
- void* vDSP_fft_zripD(void)
- {
-     if (verbose) puts("STUB: vDSP_fft_zripD called");
-@@ -1057,12 +1015,6 @@ void* vDSP_svemgD(void)
-     return NULL;
- }
- 
--void* vDSP_svesq(void)
--{
--    if (verbose) puts("STUB: vDSP_svesq called");
--    return NULL;
--}
--
- void* vDSP_svesqD(void)
- {
-     if (verbose) puts("STUB: vDSP_svesqD called");
-@@ -1111,12 +1063,6 @@ void* vDSP_vabsi(void)
-     return NULL;
- }
- 
--void* vDSP_vadd(void)
--{
--    if (verbose) puts("STUB: vDSP_vadd called");
--    return NULL;
--}
--
- void* vDSP_vaddD(void)
- {
-     if (verbose) puts("STUB: vDSP_vaddD called");
-@@ -1189,12 +1135,6 @@ void* vDSP_vavlinD(void)
-     return NULL;
- }
- 
--void* vDSP_vclip(void)
--{
--    if (verbose) puts("STUB: vDSP_vclip called");
--    return NULL;
--}
--
- void* vDSP_vclipD(void)
- {
-     if (verbose) puts("STUB: vDSP_vclipD called");
-@@ -1789,12 +1729,6 @@ void* vDSP_vmsbD(void)
-     return NULL;
- }
- 
--void* vDSP_vmul(void)
--{
--    if (verbose) puts("STUB: vDSP_vmul called");
--    return NULL;
--}
--
- void* vDSP_vmulD(void)
- {
-     if (verbose) puts("STUB: vDSP_vmulD called");
-@@ -1993,14 +1927,6 @@ void* vDSP_vrvrsD(void)
-     return NULL;
- }
- 
--/*
--void* vDSP_vsadd(void)
--{
--    if (verbose) puts("STUB: vDSP_vsadd called");
--    return NULL;
--}
--*/
--
- void* vDSP_vsaddD(void)
- {
-     if (verbose) puts("STUB: vDSP_vsaddD called");
-@@ -2079,12 +2005,6 @@ void* vDSP_vsimpsD(void)
-     return NULL;
- }
- 
--void* vDSP_vsma(void)
--{
--    if (verbose) puts("STUB: vDSP_vsma called");
--    return NULL;
--}
--
- void* vDSP_vsmaD(void)
- {
-     if (verbose) puts("STUB: vDSP_vsmaD called");
-@@ -2139,12 +2059,6 @@ void* vDSP_vsmsmaD(void)
-     return NULL;
- }
- 
--void* vDSP_vsmul(void)
--{
--    if (verbose) puts("STUB: vDSP_vsmul called");
--    return NULL;
--}
--
- void* vDSP_vsmulD(void)
- {
-     if (verbose) puts("STUB: vDSP_vsmulD called");
-@@ -2205,12 +2119,6 @@ void* vDSP_vssqD(void)
-     return NULL;
- }
- 
--void* vDSP_vsub(void)
--{
--    if (verbose) puts("STUB: vDSP_vsub called");
--    return NULL;
--}
--
- void* vDSP_vsubD(void)
- {
-     if (verbose) puts("STUB: vDSP_vsubD called");
-@@ -2529,12 +2437,6 @@ void* vDSP_zrvsubD(void)
-     return NULL;
- }
- 
--void* vDSP_ztoc(void)
--{
--    if (verbose) puts("STUB: vDSP_ztoc called");
--    return NULL;
--}
--
- void* vDSP_ztocD(void)
- {
-     if (verbose) puts("STUB: vDSP_ztocD called");
-@@ -2697,12 +2599,6 @@ void* vDSP_zvmovD(void)
-     return NULL;
- }
- 
--void* vDSP_zvmul(void)
--{
--    if (verbose) puts("STUB: vDSP_zvmul called");
--    return NULL;
--}
--
- void* vDSP_zvmulD(void)
- {
-     if (verbose) puts("STUB: vDSP_zvmulD called");
 diff --git a/tools/shutdown-user.sh b/tools/shutdown-user.sh
-index 072a6e2..c804100 100755
+index 072a6e244..c80410087 100755
 --- a/tools/shutdown-user.sh
 +++ b/tools/shutdown-user.sh
 @@ -1,26 +1,34 @@
@@ -10996,64 +9198,3 @@ index 072a6e2..c804100 100755
  done
  
  echo "No instances running now"
-diff --git a/CMakeLists.txt b/CMakeLists.txt
-index 8077b7e..0556080 100644
---- a/CMakeLists.txt
-+++ b/CMakeLists.txt
-@@ -236,7 +236,12 @@ InstallSymlink(/Volumes/SystemRoot/usr/share/zoneinfo ${CMAKE_INSTALL_PREFIX}/li
- install(DIRECTORY DESTINATION libexec/darling/Library/Preferences)
- 
- if(NOT DEBIAN_PACKAGING)
--	install(CODE "execute_process(COMMAND bash ${DARLING_TOP_DIRECTORY}/tools/shutdown-user.sh)")
-+	install(CODE "
-+		execute_process(COMMAND bash \"${DARLING_TOP_DIRECTORY}/tools/shutdown-user.sh\" RESULT_VARIABLE DARLING_SHUTDOWN_RESULT)
-+		if(NOT DARLING_SHUTDOWN_RESULT STREQUAL \"0\")
-+			message(FATAL_ERROR \"Unable to stop old Darling containers; installation stopped\")
-+		endif()
-+	")
- endif(NOT DEBIAN_PACKAGING)
- 
- add_custom_target(uninstall
-diff --git a/src/shellspawn/shellspawn-fds.h b/src/shellspawn/shellspawn-fds.h
-new file mode 100644
-index 0000000..1f3c473
---- /dev/null
-+++ b/src/shellspawn/shellspawn-fds.h
-@@ -0,0 +1,37 @@
-+#ifndef SHELLSPAWN_FDS_H
-+#define SHELLSPAWN_FDS_H
-+#include <errno.h>
-+#include <fcntl.h>
-+#include <unistd.h>
-+
-+// Preserve every source before replacing any standard descriptor: sources can
-+// themselves be 0, 1 or 2 when the daemon was launched with closed stdio.
-+static int shellspawn_remap_stdio(const int streams[3])
-+{
-+    int saved[3] = { -1, -1, -1 };
-+    for (int i = 0; i < 3; ++i) {
-+        saved[i] = fcntl(streams[i], F_DUPFD_CLOEXEC, 3);
-+        if (saved[i] < 0) goto failure;
-+    }
-+    for (int i = 0; i < 3; ++i)
-+        if (dup2(saved[i], i) < 0) goto failure;
-+    for (int i = 0; i < 3; ++i) close(saved[i]);
-+    return 0;
-+failure: {
-+    int error = errno;
-+    for (int i = 0; i < 3; ++i) if (saved[i] >= 0) close(saved[i]);
-+    errno = error;
-+    return -1;
-+}}
-+
-+static void shellspawn_close_streams(int streams[3])
-+{
-+    for (int i = 0; i < 3; ++i) {
-+        int fd = streams[i];
-+        streams[i] = -1;
-+        for (int j = i + 1; j < 3; ++j)
-+            if (streams[j] == fd) streams[j] = -1;
-+        if (fd > STDERR_FILENO) close(fd);
-+    }
-+}
-+#endif

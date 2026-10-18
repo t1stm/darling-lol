@@ -149,8 +149,8 @@ export __GL_SYNC_TO_VBLANK="${__GL_SYNC_TO_VBLANK:-0}"
 export vblank_mode="${vblank_mode:-0}"
 export MESA_VK_WSI_PRESENT_MODE="${MESA_VK_WSI_PRESENT_MODE:-immediate}"
 # NVIDIA proprietary driver: limit pre-rendered frames (default 0 lets driver buffer dynamically)
-export __GL_MaxFramesAllowed="${__GL_MaxFramesAllowed:-0}"
-export __GL_THREADED_OPTIMIZATIONS="${__GL_THREADED_OPTIMIZATIONS:-1}"
+export __GL_MaxFramesAllowed="${__GL_MaxFramesAllowed:-1}"
+export __GL_THREADED_OPTIMIZATIONS="${__GL_THREADED_OPTIMIZATIONS:-0}"
 export __GL_YIELD="${__GL_YIELD:-NOTHING}"
 # Reduce timer slack for tighter scheduling in the game process tree.
 if [ -w /proc/self/timerslack_ns ]; then
