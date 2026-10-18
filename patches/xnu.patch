@@ -3115,7 +3115,7 @@ index be2926c..a25882e 100644
  }
 diff --git a/darling/src/libsystem_kernel/emulation/src/xnu_syscall/bsd/impl/misc/mac_syscall.c b/darling/src/libsystem_kernel/emulation/src/xnu_syscall/bsd/impl/misc/mac_syscall.c
 new file mode 100644
-index 0000000..97443ce
+index 0000000..4fdd1b3
 --- /dev/null
 +++ b/darling/src/libsystem_kernel/emulation/src/xnu_syscall/bsd/impl/misc/mac_syscall.c
 @@ -0,0 +1,60 @@
@@ -3167,7 +3167,7 @@ index 0000000..97443ce
 +        if (call == 95) {
 +            if (!arg) return -EFAULT;
 +            struct trust_query { unsigned char cdhash[20]; uint64_t result; };
-+            /* No Apple-authenticated trust cache is loaded. Clear stale output
++            /* No Darwin-authenticated trust cache is loaded. Clear stale output
 +             * but report unsupported, rather than claiming a successful lookup. */
 +            uint64_t result = 0;
 +            void* output = (void*)((uintptr_t)arg + offsetof(struct trust_query, result));
