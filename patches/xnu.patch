@@ -3298,7 +3298,7 @@ new file mode 100644
 +        if (call == 95) {
 +            if (!arg) return -EFAULT;
 +            struct trust_query { unsigned char cdhash[20]; uint64_t result; };
-+            /* No Apple-authenticated trust cache is loaded. Clear stale output
++            /* No Darwin-authenticated trust cache is loaded. Clear stale output
 +             * but report unsupported, rather than claiming a successful lookup. */
 +            uint64_t result = 0;
 +            void* output = (void*)((uintptr_t)arg + offsetof(struct trust_query, result));

@@ -23,8 +23,8 @@ Those changes removed false positives. They did **not** add enforcement, and the
 privacy/safety boundary is deliberate:
 
 > This is a draft foundation, not a full SIP/AMFI implementation. It does not
-> enforce signing at exec/dlopen, protect running pages, implement Apple's
-> certificate/entitlement/notarization policy, load an authenticated Apple
+> enforce signing at exec/dlopen, protect running pages, implement Darwin
+> certificate/entitlement/notarization policy, load an authenticated Darwin
 > trust cache, or provide kernel-enforced SIP filesystem/debug restrictions.
 > The standalone verifier is not a launch gate and does not establish a task's
 > signing state. Callers that depended on fabricated signing or no-op AMFI
@@ -54,8 +54,8 @@ privacy/safety boundary is deliberate:
 | 2 | Task-owned signing state (`CS_VALID`) | always zero | `mldr.c`, `csops.c` | probe: status reflects the loader's result, not a filename |
 | 3 | Enforce verification at exec / dlopen | not done | `patches/darling.patch` → `src/startup/mldr/mldr.c` | gate test: bad image aborts exec; good image loads |
 | 4 | Protect running pages (page integrity) | not done | xnu VM mapping/seal, `mmap`/write paths | test: writing a sealed page fails; unchanged image runs |
-| 5 | Apple certificate/entitlement/notarization policy | not done | `patches/security.patch` → `libsecurity_codesigning/lib/{StaticCode.cpp,reqparser.cpp}` | test: requirement/OID/EKU/revocation/notarization cases |
-| 6 | Authenticated Apple trust cache | local pin list only | `mac_syscall.c` AMFI, trust-cache source | test: authenticated entry accepted, forged entry rejected |
+| 5 | Darwin certificate/entitlement/notarization policy | not done | `patches/security.patch` → `libsecurity_codesigning/lib/{StaticCode.cpp,reqparser.cpp}` | test: requirement/OID/EKU/revocation/notarization cases |
+| 6 | Authenticated Darwin trust cache | local pin list only | `mac_syscall.c` AMFI, trust-cache source | test: authenticated entry accepted, forged entry rejected |
 | 7 | Kernel-enforced SIP filesystem paths | disabled flag only | `csrctl.c`, xnu VFS (rename/link/mmap/metadata) | test: protected path operations denied under SIP |
 | 8 | Debug/injection restrictions, privileged-op mediation | not done | xnu task/port + privilege paths | test: unauthorized debug/inject denied |
 | 9 | Migrate callers that relied on fabricated success | unknown | call sites of `csops`/AMFI/Security | audit + regression run |
@@ -76,7 +76,7 @@ privacy/safety boundary is deliberate:
   `dlopen`. Covers items 3 and 5 (partial).
 - **Stage 4 — Page integrity.** Seal code pages against later writes/maps;
   handle fork/exec and library loads. Covers item 4.
-- **Stage 5 — Apple policy.** Certificate OIDs/EKUs, designated requirements,
+- **Stage 5 — Darwin policy.** Certificate OIDs/EKUs, designated requirements,
   revocation, timestamping, notarization, resource envelopes. Covers item 5.
 - **Stage 6 — Authenticated trust cache.** Load real, authenticated entries with
   the correct CDHash/generation. Covers item 6.
@@ -88,7 +88,7 @@ privacy/safety boundary is deliberate:
 
 ## Non-goals and honesty constraints
 
-- A local SHA256 pin list is **not** Apple's signed trust cache and must never be
+- A local SHA256 pin list is **not** an authentic Darwin signed trust cache and must never be
   reported as such.
 - A host-side wrapper is **not** kernel-enforced SIP; Stage 1 must say so.
 - The standalone verifier is not a task's signing state; only the loader can set
@@ -101,6 +101,6 @@ privacy/safety boundary is deliberate:
 - `docs/reviews/pr41-cpuid-security-validation.md` — what the current code does.
 - `tools/verify-darling-code-signature.py` — the snapshot verifier.
 - `upstream/manifest.json` — pinned revisions and per-component patch scopes.
-- Apple: [Code Signing Guide](https://developer.apple.com/library/archive/documentation/Security/Conceptual/CodeSigningGuide/AboutCS/AboutCS.html),
+- Darwin reference documentation: [Code Signing Guide](https://developer.apple.com/library/archive/documentation/Security/Conceptual/CodeSigningGuide/AboutCS/AboutCS.html),
   [System Integrity Protection](https://developer.apple.com/library/archive/documentation/Security/Conceptual/System_Integrity_Protection_Guide/FileSystemProtections/FileSystemProtections.html),
   [trust caches](https://support.apple.com/guide/security-pdf/trust-caches-sec7d38fbf97/web).
