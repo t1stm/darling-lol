@@ -1591,7 +1591,7 @@ index 8ac2bbdc..08197fbc 100644
  
          [_subviews
 diff --git a/AppKit/NSWindow.m b/AppKit/NSWindow.m
-index d545120a..b2845478 100644
+index d545120a..1ed1895a 100644
 --- a/AppKit/NSWindow.m
 +++ b/AppKit/NSWindow.m
 @@ -45,6 +45,21 @@ CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE. */
@@ -1642,7 +1642,7 @@ index d545120a..b2845478 100644
  @implementation NSWindow
  
  @synthesize identifier = _identifier;
-@@ -218,7 +252,8 @@ static BOOL _allowsAutomaticWindowTabbing;
+@@ -218,13 +252,18 @@ static BOOL _allowsAutomaticWindowTabbing;
  /* This method is Cococtron specific and can be override by subclasses, do not
   * change method name */
  + (BOOL) hasMainMenuForStyleMask: (NSWindowStyleMask) styleMask {
@@ -1652,7 +1652,18 @@ index d545120a..b2845478 100644
  }
  
  /* This method is Cococtron specific and can be override by subclasses, do not
-@@ -318,6 +353,7 @@ static BOOL _allowsAutomaticWindowTabbing;
+  * change method name. */
+ - (BOOL) hasMainMenu {
+-    return [[self class] hasMainMenuForStyleMask: _styleMask];
++    if (![[self class] hasMainMenuForStyleMask: _styleMask])
++        return NO;
++    if (_titleVisibility == NSWindowTitleVisibilityHidden || _titlebarAppearsTransparent)
++        return NO;
++    return YES;
+ }
+ 
+ + (NSRect) frameRectForContentRect: (NSRect) contentRect
+@@ -318,6 +357,7 @@ static BOOL _allowsAutomaticWindowTabbing;
          [NSApplication sharedApplication];
      }
      _styleMask = styleMask;
@@ -1660,7 +1671,7 @@ index d545120a..b2845478 100644
      _backingType = backing;
      _isDeferred = defer;
  
-@@ -351,7 +387,7 @@ static BOOL _allowsAutomaticWindowTabbing;
+@@ -351,7 +391,7 @@ static BOOL _allowsAutomaticWindowTabbing;
      [_backgroundView _setWindow: self];
      [_backgroundView setNextResponder: self];
  
@@ -1669,7 +1680,7 @@ index d545120a..b2845478 100644
      _contentView = [[NSView alloc] initWithFrame: contentViewFrame];
      [_contentView setAutoresizesSubviews: YES];
      [_contentView
-@@ -399,6 +435,8 @@ static BOOL _allowsAutomaticWindowTabbing;
+@@ -399,6 +439,8 @@ static BOOL _allowsAutomaticWindowTabbing;
  }
  
  - (void) dealloc {
@@ -1678,7 +1689,7 @@ index d545120a..b2845478 100644
      [[NSNotificationCenter defaultCenter] removeObserver: self];
      [_childWindows release];
      [_title release];
-@@ -934,6 +972,22 @@ static BOOL _allowsAutomaticWindowTabbing;
+@@ -934,6 +976,22 @@ static BOOL _allowsAutomaticWindowTabbing;
      return _animationContext;
  }
  
@@ -1701,7 +1712,7 @@ index d545120a..b2845478 100644
  - (void) setFrame: (NSRect) newFrame
            display: (BOOL) display
            animate: (BOOL) animate
-@@ -944,8 +998,19 @@ static BOOL _allowsAutomaticWindowTabbing;
+@@ -944,8 +1002,19 @@ static BOOL _allowsAutomaticWindowTabbing;
      _frame = newFrame;
      _makeSureIsOnAScreen = YES;
  
@@ -1722,7 +1733,7 @@ index d545120a..b2845478 100644
  
      if (didSize) {
          [self resetCursorRects];
-@@ -1025,7 +1090,34 @@ static BOOL _allowsAutomaticWindowTabbing;
+@@ -1025,7 +1094,34 @@ static BOOL _allowsAutomaticWindowTabbing;
  }
  
  - (void) setMovable: (BOOL) movable {
@@ -1758,7 +1769,7 @@ index d545120a..b2845478 100644
  }
  
  - (void) setBackingType: (NSBackingStoreType) value {
-@@ -1234,6 +1326,7 @@ static BOOL _allowsAutomaticWindowTabbing;
+@@ -1234,6 +1330,7 @@ static BOOL _allowsAutomaticWindowTabbing;
  
  - (void) setIgnoresMouseEvents: (BOOL) value {
      _ignoresMouseEvents = value;
@@ -1766,7 +1777,7 @@ index d545120a..b2845478 100644
  }
  
  - (void) setAspectRatio: (NSSize) value {
-@@ -1413,8 +1506,14 @@ static BOOL _allowsAutomaticWindowTabbing;
+@@ -1413,8 +1510,14 @@ static BOOL _allowsAutomaticWindowTabbing;
  }
  
  - (NSButton *) standardWindowButton: (NSWindowButton) value {
@@ -1783,7 +1794,7 @@ index d545120a..b2845478 100644
  }
  
  - (NSButtonCell *) defaultButtonCell {
-@@ -1425,6 +1524,17 @@ static BOOL _allowsAutomaticWindowTabbing;
+@@ -1425,6 +1528,17 @@ static BOOL _allowsAutomaticWindowTabbing;
      return [_sheetContext sheet];
  }
  
@@ -1801,7 +1812,7 @@ index d545120a..b2845478 100644
  - (id) windowController {
      return _windowController;
  }
-@@ -1511,10 +1621,7 @@ static BOOL _allowsAutomaticWindowTabbing;
+@@ -1511,10 +1625,7 @@ static BOOL _allowsAutomaticWindowTabbing;
      return [_platformWindow isMiniaturized];
  }
  
@@ -1813,7 +1824,7 @@ index d545120a..b2845478 100644
  
  - (BOOL) inLiveResize {
      return _isInLiveResize;
-@@ -1561,6 +1668,117 @@ static BOOL _allowsAutomaticWindowTabbing;
+@@ -1561,6 +1672,127 @@ static BOOL _allowsAutomaticWindowTabbing;
      return point;
  }
  
@@ -1843,15 +1854,25 @@ index d545120a..b2845478 100644
 +}
 +
 +- (void) setTitlebarAppearsTransparent: (BOOL) value {
-+    _titlebarAppearsTransparent = value;
++    if (_titlebarAppearsTransparent != value) {
++        _titlebarAppearsTransparent = value;
++        if ([_platformWindow respondsToSelector: @selector(updateDecorations)]) {
++            [(id) _platformWindow updateDecorations];
++        }
++    }
 +}
 +
-+- (NSInteger) titleVisibility {
++- (NSWindowTitleVisibility) titleVisibility {
 +    return _titleVisibility;
 +}
 +
-+- (void) setTitleVisibility: (NSInteger) value {
-+    _titleVisibility = value;
++- (void) setTitleVisibility: (NSWindowTitleVisibility) value {
++    if (_titleVisibility != value) {
++        _titleVisibility = value;
++        if ([_platformWindow respondsToSelector: @selector(updateDecorations)]) {
++            [(id) _platformWindow updateDecorations];
++        }
++    }
 +}
 +
 +- (BOOL) movableByWindowBackground {
@@ -1931,7 +1952,7 @@ index d545120a..b2845478 100644
  - (NSRect) frameRectForContentRect: (NSRect) contentRect {
      // hasMainMenu is an instance method so we can't just use the class method
      //  frameRectForContentRect:styleMask:
-@@ -1580,6 +1798,10 @@ static BOOL _allowsAutomaticWindowTabbing;
+@@ -1580,6 +1812,10 @@ static BOOL _allowsAutomaticWindowTabbing;
  }
  
  - (NSRect) contentRectForFrameRect: (NSRect) frameRect {
@@ -1942,7 +1963,7 @@ index d545120a..b2845478 100644
      NSRect result = [[NSDisplay currentDisplay] insetRect: frameRect
                             forNativeWindowBorderWithStyle: [self styleMask]];
  
-@@ -2155,6 +2377,7 @@ static BOOL _allowsAutomaticWindowTabbing;
+@@ -2155,6 +2391,7 @@ static BOOL _allowsAutomaticWindowTabbing;
  - (void) orderWindow: (NSWindowOrderingMode) place
            relativeTo: (NSInteger) relativeTo
  {
@@ -1950,7 +1971,7 @@ index d545120a..b2845478 100644
      // The move notifications are sent under unknown conditions around
      // orderFront: in the Apple AppKit, we do them all the time here until it's
      // figured out. I suspect it is a side effect of off-screen windows being at
-@@ -2208,6 +2431,8 @@ static BOOL _allowsAutomaticWindowTabbing;
+@@ -2208,6 +2445,8 @@ static BOOL _allowsAutomaticWindowTabbing;
          break;
      }
  
@@ -1959,7 +1980,7 @@ index d545120a..b2845478 100644
      [self postNotificationName: NSWindowDidMoveNotification];
  }
  
-@@ -2257,6 +2482,12 @@ static BOOL _allowsAutomaticWindowTabbing;
+@@ -2257,6 +2496,12 @@ static BOOL _allowsAutomaticWindowTabbing;
  }
  
  - (void) sendEvent: (NSEvent *) event {
@@ -1972,7 +1993,7 @@ index d545120a..b2845478 100644
      // Some events can cause our window to be destroyed
      // So make sure self lives at least through this current run loop...
      [[self retain] autorelease];
-@@ -2300,6 +2531,10 @@ static BOOL _allowsAutomaticWindowTabbing;
+@@ -2300,6 +2545,10 @@ static BOOL _allowsAutomaticWindowTabbing;
  
      case NSLeftMouseDown: {
          NSView *view = [_backgroundView hitTest: [event locationInWindow]];
@@ -1983,7 +2004,7 @@ index d545120a..b2845478 100644
  
          if ([view acceptsFirstResponder]) {
              if ([view needsPanelToBecomeKey]) {
-@@ -2307,6 +2542,27 @@ static BOOL _allowsAutomaticWindowTabbing;
+@@ -2307,6 +2556,27 @@ static BOOL _allowsAutomaticWindowTabbing;
              }
          }
  
@@ -2011,7 +2032,7 @@ index d545120a..b2845478 100644
          // Event goes to view, not first responder.
          [view mouseDown: event];
          _mouseDownLocationInWindow = [event locationInWindow];
-@@ -2330,6 +2586,31 @@ static BOOL _allowsAutomaticWindowTabbing;
+@@ -2330,6 +2600,31 @@ static BOOL _allowsAutomaticWindowTabbing;
          _mouseDownLocationInWindow = NSMakePoint(NAN, NAN);
          break;
  
@@ -2043,7 +2064,7 @@ index d545120a..b2845478 100644
      case NSMouseMoved: {
          NSView *hit = [_backgroundView hitTest: [event locationInWindow]];
  
-@@ -2536,6 +2817,7 @@ static BOOL _allowsAutomaticWindowTabbing;
+@@ -2536,6 +2831,7 @@ static BOOL _allowsAutomaticWindowTabbing;
      } else {
          [[self platformWindow] hideWindow];
      }
@@ -2051,7 +2072,7 @@ index d545120a..b2845478 100644
  }
  
  - (void) orderFront: (id) sender {
-@@ -3064,6 +3346,13 @@ static BOOL _allowsAutomaticWindowTabbing;
+@@ -3064,6 +3360,13 @@ static BOOL _allowsAutomaticWindowTabbing;
      if (didSize) {
          // Don't redraw everything unless we really have to.
          [_backgroundView setFrameSize: _frame.size];
@@ -2065,7 +2086,7 @@ index d545120a..b2845478 100644
          [_backgroundView setNeedsDisplay: YES];
          [self resetCursorRects];
          [self saveFrameUsingName: _autosaveFrameName];
-@@ -3260,8 +3549,7 @@ static BOOL _allowsAutomaticWindowTabbing;
+@@ -3260,8 +3563,7 @@ static BOOL _allowsAutomaticWindowTabbing;
                  mouseWasInside && !mouseIsInside) {
                  [exited addObject: area];
              }
@@ -2075,7 +2096,7 @@ index d545120a..b2845478 100644
                  [moved addObject: area];
              }
              if (options & NSTrackingCursorUpdate && !mouseWasInside &&
-@@ -3459,7 +3747,7 @@ static BOOL _allowsAutomaticWindowTabbing;
+@@ -3459,7 +3761,7 @@ static BOOL _allowsAutomaticWindowTabbing;
  }
  
  - (CGSubWindow *) _createSubWindowWithFrame: (CGRect) frame {
@@ -4506,7 +4527,7 @@ index 0000000..31fa646
 +
 +#endif
 diff --git a/AppKit/X11.backend/X11Window.h b/AppKit/X11.backend/X11Window.h
-index bfe3839a..e8c8828f 100644
+index bfe3839a..51860fdb 100644
 --- a/AppKit/X11.backend/X11Window.h
 +++ b/AppKit/X11.backend/X11Window.h
 @@ -26,7 +26,7 @@
@@ -4518,7 +4539,7 @@ index bfe3839a..e8c8828f 100644
  
  @interface X11Window : CGWindow {
      int _level; // TODO: care about this value
-@@ -47,8 +47,30 @@
+@@ -47,27 +47,51 @@
      BOOL _mapped;
      CGPoint _lastMotionPos;
      BOOL _isModal;
@@ -4549,7 +4570,12 @@ index bfe3839a..e8c8828f 100644
  
  @public
      XIC _xic;
-@@ -60,9 +82,9 @@
+ }
+ 
+++ (void) setDecorations: (BOOL) decorated forWindow: (Window) w onDisplay: (Display *) dpy;
+ + (void) removeDecorationForWindow: (Window) w onDisplay: (Display *) dpy;
+ - (instancetype) initWithDelegate: (NSWindow *) delegate;
+ - (O2Rect) frame;
  - (Visual *) visual;
  - (Drawable) drawable;
  - (NSPoint) transformPoint: (NSPoint) pos;
@@ -4560,8 +4586,14 @@ index bfe3839a..e8c8828f 100644
  
  - (void) frameChanged;
  - (void) setLastKnownCursorPosition: (CGPoint) point;
+ 
+ - (void) setStyleMaskInternal: (NSUInteger) styleMask force: (BOOL) force;
++- (void) updateDecorations;
+ 
+ @end
+ 
 diff --git a/AppKit/X11.backend/X11Window.m b/AppKit/X11.backend/X11Window.m
-index f4925b66..a6629130 100644
+index f4925b66..52250f71 100644
 --- a/AppKit/X11.backend/X11Window.m
 +++ b/AppKit/X11.backend/X11Window.m
 @@ -23,6 +23,7 @@
@@ -4684,7 +4716,15 @@ index f4925b66..a6629130 100644
      XSetWindowBackgroundPixmap(_display, _window, None);
  
      _isModal = [delegate isSheet] || [NSApp modalWindow] == delegate;
-@@ -266,6 +329,13 @@ static NSData *makeWindowIcon() {
+@@ -258,14 +321,17 @@ static NSData *makeWindowIcon() {
+ 
+     [(X11Display *) [NSDisplay currentDisplay] setWindow: self forID: _window];
+ 
+-    // FIXME: Move this call into setStyleMaskInternal below!
+-    if (_styleMask == NSBorderlessWindowMask) {
+-        [[self class] removeDecorationForWindow: _window onDisplay: _display];
+-    }
+     [self setStyleMaskInternal: _styleMask force: YES];
  
      [self setWindowIcon];
  
@@ -4698,7 +4738,7 @@ index f4925b66..a6629130 100644
      return self;
  }
  
-@@ -279,24 +349,30 @@ static NSData *makeWindowIcon() {
+@@ -279,24 +345,30 @@ static NSData *makeWindowIcon() {
      return _styleMask;
  }
  
@@ -4745,7 +4785,7 @@ index f4925b66..a6629130 100644
      if (!_mapped) {
          long states[2];
          int states_cnt = 0;
-@@ -304,7 +380,7 @@ static NSData *makeWindowIcon() {
+@@ -304,7 +376,7 @@ static NSData *makeWindowIcon() {
              states[states_cnt++] =
                      (long) XInternAtom(_display, "_NET_WM_STATE_MODAL", False);
          }
@@ -4754,7 +4794,7 @@ index f4925b66..a6629130 100644
              states[states_cnt++] = (long) XInternAtom(
                      _display, "_NET_WM_STATE_FULLSCREEN", False);
          }
-@@ -312,14 +388,13 @@ static NSData *makeWindowIcon() {
+@@ -312,14 +384,13 @@ static NSData *makeWindowIcon() {
                          XInternAtom(_display, "_NET_WM_STATE", False), XA_ATOM,
                          32, PropModeReplace, (const unsigned char *) states,
                          states_cnt);
@@ -4771,7 +4811,7 @@ index f4925b66..a6629130 100644
          event.data.l[1] =
                  (long) XInternAtom(_display, "_NET_WM_STATE_FULLSCREEN", False);
          event.data.l[3] = 1;
-@@ -327,6 +402,35 @@ static NSData *makeWindowIcon() {
+@@ -327,6 +398,60 @@ static NSData *makeWindowIcon() {
                     SubstructureNotifyMask | SubstructureRedirectMask,
                     (XEvent *) &event);
      }
@@ -4779,7 +4819,28 @@ index f4925b66..a6629130 100644
 +    XFlush(_display);
 +}
 +
++- (BOOL) shouldRemoveDecorationForStyleMask: (NSUInteger) mask {
++    if ((mask & NSTitledWindowMask) == 0) {
++        return YES;
++    }
++    if (mask & NSWindowStyleMaskFullSizeContentView) {
++        return YES;
++    }
++    if ([_delegate respondsToSelector: @selector(titleVisibility)] &&
++        [_delegate titleVisibility] == NSWindowTitleVisibilityHidden) {
++        return YES;
++    }
++    if ([_delegate respondsToSelector: @selector(titlebarAppearsTransparent)] &&
++        [_delegate titlebarAppearsTransparent]) {
++        return YES;
++    }
++    return NO;
++}
++
 +- (void) setStyleMaskInternal: (NSUInteger) mask force: (BOOL) force {
++    BOOL removeDecorations = [self shouldRemoveDecorationForStyleMask: mask];
++    [[self class] setDecorations: !removeDecorations forWindow: _window onDisplay: _display];
++
 +    if (force || (mask & NSWindowStyleMaskResizable) !=
 +                         (_styleMask & NSWindowStyleMaskResizable)) {
 +        XSizeHints *sh = XAllocSizeHints();
@@ -4804,18 +4865,56 @@ index f4925b66..a6629130 100644
 +    }
 +
 +    [self requestFullscreen:[self wantsFullscreenWithStyleMask:mask rootFrame:_frame] force:force];
++}
++
++- (void) updateDecorations {
++    [self setStyleMaskInternal: _styleMask force: YES];
  }
  
  - (void) setStyleMask: (NSUInteger) mask {
-@@ -338,7 +442,6 @@ static NSData *makeWindowIcon() {
+@@ -337,27 +462,35 @@ static NSData *makeWindowIcon() {
+     _styleMask = mask;
  }
  
- + (void) removeDecorationForWindow: (Window) w onDisplay: (Display *) dpy {
+-+ (void) removeDecorationForWindow: (Window) w onDisplay: (Display *) dpy {
 -    return;
-     struct {
-         unsigned long flags;
-         unsigned long functions;
-@@ -358,6 +461,7 @@ static NSData *makeWindowIcon() {
+-    struct {
+-        unsigned long flags;
+-        unsigned long functions;
+-        unsigned long decorations;
+-        long input_mode;
+-        unsigned long status;
+-    } hints = {
+++ (void) setDecorations: (BOOL) decorated forWindow: (Window) w onDisplay: (Display *) dpy {
++    Atom prop = XInternAtom(dpy, "_MOTIF_WM_HINTS", False);
++    if (!decorated) {
++        struct {
++            unsigned long flags;
++            unsigned long functions;
++            unsigned long decorations;
++            long input_mode;
++            unsigned long status;
++        } hints = {
+             2, 0, 0, 0, 0,
+-    };
+-    XChangeProperty(dpy, w, XInternAtom(dpy, "_MOTIF_WM_HINTS", False),
+-                    XInternAtom(dpy, "_MOTIF_WM_HINTS", False), 32,
+-                    PropModeReplace, (const unsigned char *) &hints,
+-                    sizeof(hints) / sizeof(long));
++        };
++        XChangeProperty(dpy, w, prop, prop, 32,
++                        PropModeReplace, (const unsigned char *) &hints,
++                        sizeof(hints) / sizeof(long));
++    } else {
++        XDeleteProperty(dpy, w, prop);
++    }
++}
++
+++ (void) removeDecorationForWindow: (Window) w onDisplay: (Display *) dpy {
++    [self setDecorations: NO forWindow: w onDisplay: dpy];
+ }
+ 
+ - (void) ensureMapped {
      if (!_mapped) {
          XMapWindow(_display, _window);
          _mapped = YES;
@@ -4823,7 +4922,7 @@ index f4925b66..a6629130 100644
      }
  }
  
-@@ -377,15 +481,27 @@ static NSData *makeWindowIcon() {
+@@ -377,15 +510,27 @@ static NSData *makeWindowIcon() {
  - (void) syncDelegateProperties {
      long mask = KeyPressMask | KeyReleaseMask | ExposureMask |
                  StructureNotifyMask | EnterWindowMask | LeaveWindowMask |
@@ -4856,7 +4955,7 @@ index f4925b66..a6629130 100644
      // TODO: background color
  }
  
-@@ -393,6 +509,28 @@ static NSData *makeWindowIcon() {
+@@ -393,6 +538,28 @@ static NSData *makeWindowIcon() {
      // This is essentially dealloc; we release our contexts
      // and windows, but unlike dealloc, this method can be called
      // several times, so set everything to nil/NULL/0.
@@ -4885,7 +4984,7 @@ index f4925b66..a6629130 100644
      [_context release];
      _context = nil;
  
-@@ -421,6 +559,392 @@ static NSData *makeWindowIcon() {
+@@ -421,6 +588,384 @@ static NSData *makeWindowIcon() {
      }
  }
  
@@ -4971,14 +5070,16 @@ index f4925b66..a6629130 100644
 +     * 60 Hz tick: opendir, readdir and stat/open/pread/close per slot file on the main thread. */
 +    if (!_remoteFrameMapping && now < _remoteFrameSelectionRefresh)
 +        return _remoteFrameValid;
-+    if (_remoteFrameMapping && now < _remoteFrameSelectionRefresh) {
++    if (_remoteFrameMapping && now < _remoteFrameSelectionRefresh &&
++        _remoteFrameWidth == (unsigned)frameTargets[0].width &&
++        _remoteFrameHeight == (unsigned)frameTargets[0].height) {
 +        snprintf(path, sizeof(path), "%s", _remoteFrameMappingPath);
 +        goto selectedFrame;
 +    }
 +    _remoteFrameSelectionRefresh = now + 0.25;
 +    bestPath[0] = bestBlackPath[0] = '\0';
 +    uint64_t bestMtime = 0, bestBlackMtime = 0;
-+    BOOL bestSoftware = NO;
++    BOOL bestIsRoot = NO, bestBlackIsRoot = NO;
 +
 +    char prefix[32];
 +    snprintf(prefix, sizeof(prefix), "darling-ca-frame-%u-", getuid());
@@ -5009,8 +5110,10 @@ index f4925b66..a6629130 100644
 +                head.dataSize == (uint64_t)head.bytesPerRow * head.height &&
 +                head.dataSize <= 64u * 1024u * 1024u);
 +            close(cfd);
-+            BOOL matchesWindow = NO;
-+            for (unsigned i = 0; i < frameTargetCount; ++i)
++            BOOL matchesRoot = (head.width == (unsigned)frameTargets[0].width &&
++                                head.height == (unsigned)frameTargets[0].height);
++            BOOL matchesWindow = matchesRoot;
++            for (unsigned i = 1; i < frameTargetCount && !matchesWindow; ++i)
 +                if (head.width == (unsigned)frameTargets[i].width &&
 +                    head.height == (unsigned)frameTargets[i].height)
 +                    matchesWindow = YES;
@@ -5040,40 +5143,28 @@ index f4925b66..a6629130 100644
 +            }
 +
 +            if (hasPixels) {
-+                BOOL software = (head.pixelFormat & 0x80000000u) != 0;
-+                if ((software && !bestSoftware) ||
-+                    (software == bestSoftware && updateTime > bestMtime)) {
-+                    bestSoftware = software;
++                /* Prioritize whole-window root frames over subwindow/popup slots.
++                 * Within the same tier, choose the most recently updated slot. */
++                if (!bestPath[0] ||
++                    (matchesRoot && !bestIsRoot) ||
++                    (matchesRoot == bestIsRoot && updateTime > bestMtime)) {
++                    bestIsRoot = matchesRoot;
 +                    bestMtime = updateTime;
 +                    snprintf(bestPath, sizeof(bestPath), "%s", candidate);
 +                }
 +            } else if (updateTime > bestBlackMtime) {
-+                bestBlackMtime = updateTime;
-+                snprintf(bestBlackPath, sizeof(bestBlackPath), "%s", candidate);
++                if (!bestBlackPath[0] ||
++                    (matchesRoot && !bestBlackIsRoot) ||
++                    (matchesRoot == bestBlackIsRoot && updateTime > bestBlackMtime)) {
++                    bestBlackIsRoot = matchesRoot;
++                    bestBlackMtime = updateTime;
++                    snprintf(bestBlackPath, sizeof(bestBlackPath), "%s", candidate);
++                }
 +            }
 +        }
 +        closedir(dir);
 +    }
 +
-+    /* Keep a software owner across popup updates while the presented size
-+     * still belongs to this window. After a real resize, retaining that owner
-+     * can strand us on its popup slot even though a matching readback frame
-+     * is ready from another publisher. Let normal candidate selection make
-+     * that handoff when the old presentation no longer matches a target. */
-+    BOOL presentationMatchesTarget = NO;
-+    for (unsigned i = 0; i < frameTargetCount; ++i)
-+        if (_remoteFrameWidth == (unsigned)frameTargets[i].width &&
-+            _remoteFrameHeight == (unsigned)frameTargets[i].height)
-+            presentationMatchesTarget = YES;
-+    if (_remoteFrameSoftwarePublisher && _remoteFrameMapping && !bestSoftware &&
-+        presentationMatchesTarget) {
-+        const char *pidText = strrchr(_remoteFrameMappingPath, '-');
-+        int publisher = pidText ? atoi(pidText + 1) : 0;
-+        if (publisher > 0 && (kill(publisher, 0) == 0 || errno != ESRCH)) {
-+            snprintf(path, sizeof(path), "%s", _remoteFrameMappingPath);
-+            goto selectedFrame;
-+        }
-+    }
 +    if (bestPath[0] != '\0')
 +        snprintf(path, sizeof(path), "%s", bestPath);
 +    else if (bestBlackPath[0] != '\0')
@@ -5278,7 +5369,7 @@ index f4925b66..a6629130 100644
  - (Window) windowHandle {
      return _window;
  }
-@@ -470,14 +994,32 @@ static NSData *makeWindowIcon() {
+@@ -470,14 +1015,32 @@ static NSData *makeWindowIcon() {
      const char *text = [title cString];
      XStringListToTextProperty((char **) &text, 1, &prop);
      XSetWMName(_display, _window, &prop);
@@ -5312,7 +5403,7 @@ index f4925b66..a6629130 100644
  }
  
  - (void) setHasShadow: (BOOL) value {
-@@ -488,6 +1030,25 @@ static NSData *makeWindowIcon() {
+@@ -488,6 +1051,25 @@ static NSData *makeWindowIcon() {
      _level = value;
  }
  
@@ -5338,7 +5429,7 @@ index f4925b66..a6629130 100644
  - (void) setOpaque: (BOOL) value {
      _isOpaque = value;
  }
-@@ -543,6 +1104,21 @@ static NSData *makeWindowIcon() {
+@@ -543,6 +1125,21 @@ static NSData *makeWindowIcon() {
  - (void) makeKey {
      [self ensureMapped];
      XRaiseWindow(_display, _window);
@@ -5360,7 +5451,7 @@ index f4925b66..a6629130 100644
  }
  
  - (void) makeMain {
-@@ -559,7 +1135,29 @@ static NSData *makeWindowIcon() {
+@@ -559,7 +1156,29 @@ static NSData *makeWindowIcon() {
      XRaiseWindow(_display, _window);
  }
  
@@ -5390,7 +5481,7 @@ index f4925b66..a6629130 100644
      Atom wmState = XInternAtom(_display, "_NET_WM_STATE", FALSE);
      Atom hiddenState = XInternAtom(_display, "_NET_WM_STATE_HIDDEN", FALSE);
  
-@@ -595,12 +1193,9 @@ static NSData *makeWindowIcon() {
+@@ -595,12 +1214,9 @@ static NSData *makeWindowIcon() {
  
          if ((error = CGLCreateContext(NULL, NULL, &_cglContext)) !=
              kCGLNoError) {
@@ -5405,7 +5496,7 @@ index f4925b66..a6629130 100644
          }
          if ((error = CGLContextMakeCurrentAndAttachToWindow(
                       _cglContext, _cglWindow)) != kCGLNoError)
-@@ -615,6 +1210,12 @@ static NSData *makeWindowIcon() {
+@@ -615,6 +1231,12 @@ static NSData *makeWindowIcon() {
  }
  
  - (void) openGLFlushBuffer {
@@ -5418,7 +5509,7 @@ index f4925b66..a6629130 100644
      CGLError error;
  
      CGLContextObj prevContext = CGLGetCurrentContext();
-@@ -652,7 +1253,7 @@ static NSData *makeWindowIcon() {
+@@ -652,7 +1274,7 @@ static NSData *makeWindowIcon() {
  }
  
  - (O2Rect) frame {
@@ -5427,7 +5518,7 @@ index f4925b66..a6629130 100644
  }
  
  static int ignoreBadWindow(Display *display, XErrorEvent *errorEvent) {
-@@ -666,6 +1267,7 @@ static int ignoreBadWindow(Display *display, XErrorEvent *errorEvent) {
+@@ -666,6 +1288,7 @@ static int ignoreBadWindow(Display *display, XErrorEvent *errorEvent) {
  }
  
  - (void) frameChanged {
@@ -5435,7 +5526,7 @@ index f4925b66..a6629130 100644
      XErrorHandler previousHandler = XSetErrorHandler(ignoreBadWindow);
      @try {
          Window root, parent;
-@@ -710,14 +1312,6 @@ static int ignoreBadWindow(Display *display, XErrorEvent *errorEvent) {
+@@ -710,14 +1333,6 @@ static int ignoreBadWindow(Display *display, XErrorEvent *errorEvent) {
      [_deviceDictionary addEntriesFromDictionary: entries];
  }
  
@@ -5841,16 +5932,36 @@ index edb45627..581991d1 100644
  - (NSSize) convertSize: (NSSize) size toView: (NSView *) viewOrNil;
  - (NSRect) convertRect: (NSRect) rect fromView: (NSView *) viewOrNil;
 diff --git a/AppKit/include/AppKit/NSWindow.h b/AppKit/include/AppKit/NSWindow.h
-index a83c4d75..575c3581 100644
+index a83c4d75..88c03537 100644
 --- a/AppKit/include/AppKit/NSWindow.h
 +++ b/AppKit/include/AppKit/NSWindow.h
-@@ -188,6 +188,16 @@ APPKIT_EXPORT const NSNotificationName NSWindowDidExposeNotification;
+@@ -43,6 +43,7 @@ enum {
+     NSMiniaturizableWindowMask = 0x04,
+     NSResizableWindowMask = 0x08,
+     NSTexturedBackgroundWindowMask = 0x100,
++    NSFullSizeContentViewWindowMask = 0x8000,
+ };
+ 
+ // New NSWindowStyleMask constants
+@@ -118,6 +119,11 @@ typedef NS_ENUM(NSUInteger, NSWindowSharingType) {
+     NSWindowSharingReadWrite = 0x02
+ };
+ 
++typedef NS_ENUM(NSInteger, NSWindowTitleVisibility) {
++    NSWindowTitleVisibilityVisible = 0,
++    NSWindowTitleVisibilityHidden = 1,
++};
++
+ typedef int NSSelectionDirection;
+ 
+ APPKIT_EXPORT const NSNotificationName NSWindowDidBecomeKeyNotification;
+@@ -188,6 +194,16 @@ APPKIT_EXPORT const NSNotificationName NSWindowDidExposeNotification;
      int _cursorRectsDisabled;
      int _flushDisabled;
  
 +    /* darling-lol M57: modern AppKit window properties Chromium reads. */
 +    BOOL _titlebarAppearsTransparent;
-+    NSInteger _titleVisibility;
++    NSWindowTitleVisibility _titleVisibility;
 +    BOOL _restorable;
 +    NSString *_subtitle;
 +    NSInteger _tabbingMode;
@@ -5861,7 +5972,7 @@ index a83c4d75..575c3581 100644
      BOOL _isOpaque;
      BOOL _isVisible;
      BOOL _isDocumentEdited;
-@@ -217,6 +227,7 @@ APPKIT_EXPORT const NSNotificationName NSWindowDidExposeNotification;
+@@ -217,6 +233,7 @@ APPKIT_EXPORT const NSNotificationName NSWindowDidExposeNotification;
      BOOL _showsToolbarButton;
      BOOL _ignoresMouseEvents;
      BOOL _isMovableByWindowBackground;
@@ -5869,7 +5980,7 @@ index a83c4d75..575c3581 100644
      BOOL _allowsToolTipsWhenApplicationIsInactive;
      BOOL _defaultButtonCellKeyEquivalentDisabled;
      BOOL _autorecalculatesKeyViewLoop;
-@@ -240,6 +251,7 @@ APPKIT_EXPORT const NSNotificationName NSWindowDidExposeNotification;
+@@ -240,6 +257,7 @@ APPKIT_EXPORT const NSNotificationName NSWindowDidExposeNotification;
      NSMutableArray *_drawers;
      NSToolbar *_toolbar;
      NSWindowAnimationContext *_animationContext;
@@ -5877,7 +5988,7 @@ index a83c4d75..575c3581 100644
  
      NSRect _savedFrame;
      NSPoint _mouseDownLocationInWindow;
-@@ -425,6 +437,7 @@ APPKIT_EXPORT const NSNotificationName NSWindowDidExposeNotification;
+@@ -425,6 +443,7 @@ APPKIT_EXPORT const NSNotificationName NSWindowDidExposeNotification;
  - (NSButton *) standardWindowButton: (NSWindowButton) value;
  - (NSButtonCell *) defaultButtonCell;
  - (NSWindow *) attachedSheet;
@@ -5885,7 +5996,7 @@ index a83c4d75..575c3581 100644
  
  - (id) windowController;
  - (NSArray *) drawers;
-@@ -450,6 +463,7 @@ APPKIT_EXPORT const NSNotificationName NSWindowDidExposeNotification;
+@@ -450,6 +469,7 @@ APPKIT_EXPORT const NSNotificationName NSWindowDidExposeNotification;
  - (BOOL) isMainWindow;
  - (BOOL) isMiniaturized;
  - (BOOL) isMovable;
@@ -5893,7 +6004,7 @@ index a83c4d75..575c3581 100644
  - (BOOL) inLiveResize;
  - (BOOL) canBecomeKeyWindow;
  - (BOOL) canBecomeMainWindow;
-@@ -458,6 +472,30 @@ APPKIT_EXPORT const NSNotificationName NSWindowDidExposeNotification;
+@@ -458,6 +478,30 @@ APPKIT_EXPORT const NSNotificationName NSWindowDidExposeNotification;
  
  - (NSPoint) convertBaseToScreen: (NSPoint) point;
  - (NSPoint) convertScreenToBase: (NSPoint) point;
@@ -5904,8 +6015,8 @@ index a83c4d75..575c3581 100644
 +
 +- (BOOL) titlebarAppearsTransparent;
 +- (void) setTitlebarAppearsTransparent: (BOOL) value;
-+- (NSInteger) titleVisibility;
-+- (void) setTitleVisibility: (NSInteger) value;
++- (NSWindowTitleVisibility) titleVisibility;
++- (void) setTitleVisibility: (NSWindowTitleVisibility) value;
 +- (BOOL) movableByWindowBackground;
 +- (NSUInteger) occlusionState;
 +- (BOOL) isRestorable;
