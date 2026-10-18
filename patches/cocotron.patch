@@ -1081,6 +1081,60 @@ index 6c3d2688..2a7d078a 100644
  + (NSArray<NSRunningApplication *> *) runningApplicationsWithBundleIdentifier: (NSString *) bundleIdentifier {
      printf("STUB %s\n", __PRETTY_FUNCTION__);
      return [NSArray array];
+diff --git a/AppKit/NSSavePanel.subproj/NSSavePanel.m b/AppKit/NSSavePanel.subproj/NSSavePanel.m
+index 50c3d59e..5872e594 100644
+--- a/AppKit/NSSavePanel.subproj/NSSavePanel.m
++++ b/AppKit/NSSavePanel.subproj/NSSavePanel.m
+@@ -124,8 +124,48 @@ static NSSavePanel *_newPanel = nil;
+     [NSApp stopModalWithCode: NSCancelButton];
+ }
+ 
++// Electron (Riot Client UI) opens its file dialogs through these and waits
++// for the handler; run the panel modally and report the result.
+ - (void) beginWithCompletionHandler: (void (^)(NSModalResponse result)) handler {
+-    NSUnimplementedMethod();
++    NSModalResponse result = [self runModal];
++    if (handler)
++        handler(result);
++}
++
++- (void) beginSheetModalForWindow: (NSWindow *) window
++                completionHandler: (void (^)(NSModalResponse result)) handler
++{
++    [self beginWithCompletionHandler: handler];
++}
++
++// Electron sets these unconditionally; Cocotron's panel has no tag field,
++// name label or extension toggle, so they are accepted and ignored.
++- (void) setNameFieldLabel: (NSString *) label {
++}
++
++- (NSString *) nameFieldLabel {
++    return nil;
++}
++
++- (void) setShowsTagField: (BOOL) flag {
++}
++
++- (BOOL) showsTagField {
++    return NO;
++}
++
++- (void) setExtensionHidden: (BOOL) flag {
++}
++
++- (BOOL) isExtensionHidden {
++    return NO;
++}
++
++- (void) setCanSelectHiddenExtension: (BOOL) flag {
++}
++
++- (BOOL) canSelectHiddenExtension {
++    return NO;
+ }
+ 
+ - (NSInteger) runModalForDirectory: (NSString *) directory
 diff --git a/AppKit/NSScreen.m b/AppKit/NSScreen.m
 index 5ca58772..54b60ef5 100644
 --- a/AppKit/NSScreen.m
@@ -4331,201 +4385,6 @@ index 0e91a5d1..1e4cec1b 100644
  }
  
  - (void) selectionNotify: (XSelectionEvent *) event {
-diff --git a/AppKit/X11.backend/X11RelativeMouse.h b/AppKit/X11.backend/X11RelativeMouse.h
-new file mode 100644
-index 0000000..31fa646
---- /dev/null
-+++ b/AppKit/X11.backend/X11RelativeMouse.h
-@@ -0,0 +1,189 @@
-+/* darling-lol: decision logic for macOS-style relative mouse mode in the X11 backend.
-+ *
-+ * While CGAssociateMouseAndMouseCursorPosition(false) is in effect, macOS freezes the cursor: physical motion
-+ * only produces deltas, events report the frozen cursor position, and CGWarpMouseCursorPosition moves the cursor
-+ * without producing a delta. Here the frozen cursor is the "virtual" position (X root coordinates). Core X motion
-+ * still moves the real pointer, so deltas are measured against the last physical position, and where the server
-+ * honours warps the pointer is warped back to the virtual position after each motion. Every warp (ours or the
-+ * application's) is followed by a MotionNotify at its target; those echoes are recognised by request serial
-+ * and position and dropped. Warps are synchronous (XSync), so an echo can only be among the events already queued at that moment;
-+ * an expected echo expires once that many events have been handled.
-+ *
-+ * On Xwayland a warp only reaches the compositor while the X cursor is hidden. With a visible cursor the echo
-+ * still arrives, but the next real motion reports the unmoved physical pointer, so honoured=false keeps the last
-+ * physical position across echoes and never warps back.
-+ *
-+ * Plain C without X11 or Objective-C dependencies, so tools/test-x11-relative-mouse.c can run it on the host. */
-+#ifndef X11_RELATIVE_MOUSE_H
-+#define X11_RELATIVE_MOUSE_H
-+
-+#include <stdbool.h>
-+#include <stdlib.h>
-+
-+#define X11_RELATIVE_MOUSE_INITIAL_ECHOES 8
-+
-+typedef struct {
-+    int x, y;
-+    unsigned long serial; /* X request that generated the echo; coordinates alone also match real motion */
-+    unsigned remaining; /* X events (of any type) still to be handled before this echo is given up */
-+} X11RelativeMouseEcho;
-+
-+typedef struct {
-+    bool active;              /* relative motion handling is on (the pointer grab is held) */
-+    double virtualX, virtualY; /* the frozen macOS cursor, X root coordinates */
-+    int physicalX, physicalY; /* last physical pointer position, X root coordinates */
-+    unsigned long firstSerial; /* ignore motion queued before the initial XQueryPointer snapshot */
-+    bool bounded;
-+    int minX, minY, maxX, maxY; /* inclusive root coordinates of the confine_to window */
-+    unsigned echoCount;
-+    unsigned echoCapacity;
-+    X11RelativeMouseEcho *echoes; /* oldest first; never discard a pending warp echo on overflow */
-+} X11RelativeMouse;
-+
-+typedef struct {
-+    bool post;             /* deliver a mouse moved/dragged event */
-+    bool echo;             /* the event was the echo of a warp */
-+    double deltaX, deltaY; /* NSEvent convention: positive deltaY is downwards */
-+    bool rewarp;           /* warp the pointer back to (warpX, warpY) */
-+    int warpX, warpY;
-+} X11RelativeMouseMotion;
-+
-+/* X11 warps take integer coordinates; conversions truncate like the original implicit double-to-int argument. */
-+static inline int X11RelativeMouseWarpCoordinate(double value) {
-+    return (int) value;
-+}
-+
-+/* Initialize storage to zero before the first Begin; End releases the pending-echo allocation. */
-+static inline void X11RelativeMouseBegin(X11RelativeMouse *mouse, int rootX, int rootY) {
-+    free(mouse->echoes);
-+    mouse->echoes = NULL;
-+    mouse->echoCapacity = 0;
-+    mouse->firstSerial = 0;
-+    mouse->bounded = false;
-+    mouse->active = true;
-+    mouse->virtualX = rootX;
-+    mouse->virtualY = rootY;
-+    mouse->physicalX = rootX;
-+    mouse->physicalY = rootY;
-+    mouse->echoCount = 0;
-+}
-+
-+static inline void X11RelativeMouseEnd(X11RelativeMouse *mouse) {
-+    free(mouse->echoes);
-+    mouse->echoes = NULL;
-+    mouse->echoCapacity = 0;
-+    mouse->active = false;
-+    mouse->echoCount = 0;
-+}
-+
-+/* Record a warp to (x, y) that was just sent and synced. queuedEvents is the number of X events queued after the
-+ * sync; zero means the warp produced no event (the pointer was already there). */
-+static inline bool X11RelativeMouseExpectEcho(X11RelativeMouse *mouse, int x, int y, unsigned queuedEvents,
-+                                              unsigned long serial) {
-+    if (!queuedEvents) return true;
-+    if (mouse->echoCount) {
-+        X11RelativeMouseEcho *last = &mouse->echoes[mouse->echoCount - 1];
-+        if (last->x == x && last->y == y && last->serial == serial) {
-+            if (last->remaining < queuedEvents) last->remaining = queuedEvents;
-+            return true;
-+        }
-+    }
-+    if (mouse->echoCount == mouse->echoCapacity) {
-+        unsigned capacity = mouse->echoCapacity ? mouse->echoCapacity * 2 : X11_RELATIVE_MOUSE_INITIAL_ECHOES;
-+        if (capacity <= mouse->echoCapacity) return false;
-+        X11RelativeMouseEcho *echoes = realloc(mouse->echoes, (size_t)capacity * sizeof(*echoes));
-+        if (!echoes) return false;
-+        mouse->echoes = echoes;
-+        mouse->echoCapacity = capacity;
-+    }
-+    mouse->echoes[mouse->echoCount++] = (X11RelativeMouseEcho) {x, y, serial, queuedEvents};
-+    return true;
-+}
-+
-+/* CGWarpMouseCursorPosition while relative: the virtual cursor moves to the target; the physical position is
-+ * only updated when the echo arrives (and only if the warp was honoured). */
-+static inline void X11RelativeMouseClamp(const X11RelativeMouse *mouse, double *x, double *y) {
-+    if (!mouse->bounded) return;
-+    if (*x < mouse->minX) *x = mouse->minX;
-+    if (*x > mouse->maxX) *x = mouse->maxX;
-+    if (*y < mouse->minY) *y = mouse->minY;
-+    if (*y > mouse->maxY) *y = mouse->maxY;
-+}
-+
-+static inline bool X11RelativeMouseWarp(X11RelativeMouse *mouse, double x, double y, unsigned queuedEvents,
-+                                       unsigned long serial, bool warpsHonoured) {
-+    if (warpsHonoured) {
-+        mouse->virtualX = x;
-+        mouse->virtualY = y;
-+    }
-+    return X11RelativeMouseExpectEcho(mouse, X11RelativeMouseWarpCoordinate(x), X11RelativeMouseWarpCoordinate(y),
-+                               queuedEvents, serial);
-+}
-+
-+/* One X event has been handled: age the expected echoes. */
-+static inline void X11RelativeMouseTick(X11RelativeMouse *mouse) {
-+    unsigned kept = 0;
-+    for (unsigned i = 0; i < mouse->echoCount; ++i)
-+        if (mouse->echoes[i].remaining > 1) {
-+            mouse->echoes[kept] = mouse->echoes[i];
-+            mouse->echoes[kept++].remaining--;
-+        }
-+    mouse->echoCount = kept;
-+}
-+
-+/* A MotionNotify at root position (rootX, rootY) while relative. Ages the expected echoes. */
-+static inline X11RelativeMouseMotion X11RelativeMouseHandleMotion(X11RelativeMouse *mouse, int rootX, int rootY,
-+                                                                  bool warpsHonoured, unsigned long serial)
-+{
-+    X11RelativeMouseMotion result = {false, false, 0.0, 0.0, false, 0, 0};
-+    if (serial < mouse->firstSerial) {
-+        X11RelativeMouseTick(mouse);
-+        return result;
-+    }
-+    for (unsigned i = 0; i < mouse->echoCount; ++i)
-+        if (mouse->echoes[i].serial == serial && mouse->echoes[i].x == rootX && mouse->echoes[i].y == rootY) {
-+            /* Warps are echoed in order; earlier expected echoes that did not arrive never will. */
-+            for (unsigned j = i + 1; j < mouse->echoCount; ++j)
-+                mouse->echoes[j - i - 1] = mouse->echoes[j];
-+            mouse->echoCount -= i + 1;
-+            if (warpsHonoured) {
-+                mouse->physicalX = rootX;
-+                mouse->physicalY = rootY;
-+            }
-+            result.echo = true;
-+            X11RelativeMouseTick(mouse);
-+            return result;
-+        }
-+    result.deltaX = rootX - mouse->physicalX;
-+    result.deltaY = rootY - mouse->physicalY;
-+    mouse->physicalX = rootX;
-+    mouse->physicalY = rootY;
-+    if (!warpsHonoured) {
-+        mouse->virtualX = rootX;
-+        mouse->virtualY = rootY;
-+    }
-+    result.post = result.deltaX != 0.0 || result.deltaY != 0.0;
-+    int warpX = X11RelativeMouseWarpCoordinate(mouse->virtualX);
-+    int warpY = X11RelativeMouseWarpCoordinate(mouse->virtualY);
-+    if (warpsHonoured && (rootX != warpX || rootY != warpY)) {
-+        /* More physical motion may already be queued before our latest warp. That warp will
-+         * re-anchor it; issuing another one for each queued event creates an echo backlog. */
-+        bool pending = mouse->echoCount && serial < mouse->echoes[mouse->echoCount - 1].serial;
-+        result.rewarp = !pending;
-+        result.warpX = warpX;
-+        result.warpY = warpY;
-+    }
-+    X11RelativeMouseTick(mouse);
-+    return result;
-+}
-+
-+/* NSEvent deltas for absolute (non-relative) motion between two positions in Cocoa window coordinates, which
-+ * are bottom-up while NSEvent's deltaY is positive downwards. */
-+static inline void X11AbsoluteMouseDelta(double lastX, double lastY, double x, double y, double *deltaX,
-+                                         double *deltaY)
-+{
-+    *deltaX = x - lastX;
-+    *deltaY = lastY - y;
-+}
-+
-+#endif
 diff --git a/AppKit/X11.backend/X11Window.h b/AppKit/X11.backend/X11Window.h
 index bfe3839a..51860fdb 100644
 --- a/AppKit/X11.backend/X11Window.h
@@ -5818,6 +5677,29 @@ index c577764b..d8bb21cc 100644
 +- (BOOL) activateWithOptions: (NSUInteger) options;
  
  @end
+diff --git a/AppKit/include/AppKit/NSSavePanel.h b/AppKit/include/AppKit/NSSavePanel.h
+index 53bacc46..3c6adfb7 100644
+--- a/AppKit/include/AppKit/NSSavePanel.h
++++ b/AppKit/include/AppKit/NSSavePanel.h
+@@ -88,6 +88,18 @@ enum {
+ - (void) setPrompt: (NSString *) message;
+ - (NSString *) prompt;
+ 
++- (void) setNameFieldLabel: (NSString *) label;
++- (NSString *) nameFieldLabel;
++- (void) setShowsTagField: (BOOL) flag;
++- (BOOL) showsTagField;
++- (void) setExtensionHidden: (BOOL) flag;
++- (BOOL) isExtensionHidden;
++- (void) setCanSelectHiddenExtension: (BOOL) flag;
++- (BOOL) canSelectHiddenExtension;
++
++- (void) beginSheetModalForWindow: (NSWindow *) window
++                completionHandler: (void (^)(NSModalResponse result)) handler;
++
+ - (void) beginSheetForDirectory: (NSString *) path
+                            file: (NSString *) name
+                  modalForWindow: (NSWindow *) docWindow
 diff --git a/AppKit/include/AppKit/NSScrubberItemView.h b/AppKit/include/AppKit/NSScrubberItemView.h
 index 40042c89..37c1f4b6 100644
 --- a/AppKit/include/AppKit/NSScrubberItemView.h
@@ -8894,10 +8776,10 @@ index 5dcac115..ea5d8421 100644
 +
  @end
 diff --git a/QuartzCore/CALayerContext.m b/QuartzCore/CALayerContext.m
-index 5dce8c56..ab9c757f 100644
+index 5dce8c56..ad5e6207 100644
 --- a/QuartzCore/CALayerContext.m
 +++ b/QuartzCore/CALayerContext.m
-@@ -1,47 +1,132 @@
+@@ -1,47 +1,160 @@
  #import <Foundation/NSString.h>
 +#import <Foundation/NSMutableArray.h>
  #import <QuartzCore/CALayer.h>
@@ -9012,23 +8894,51 @@ index 5dce8c56..ab9c757f 100644
 +@implementation CALayerContext
  
 -    CGLChoosePixelFormat(attributes, &_pixelFormat, &numberOfVirtualScreens);
-+@synthesize glContext = _glContext;
 +@synthesize subwindow = _subwindow;
  
 -    if ((error = CGLCreateContext(_pixelFormat, NULL, &_glContext)) !=
 -        kCGLNoError)
 -        NSLog(@"CGLCreateContext failed with %d in %s %d", error, __FILE__,
 -              __LINE__);
++- (CGRect) frame {
++    return _frame;
++}
+ 
+-    _frame = rect;
++- (CGLContextObj) glContext {
++    if (_glContext == NULL) {
++        configureGPUFromMetalSelector();
++        CGLPixelFormatAttribute attributes[] = { 0 };
++        GLint screens;
++        CGLError error = CGLChoosePixelFormat(attributes, &_pixelFormat, &screens);
++        if (error == kCGLNoError)
++            error = CGLCreateContext(_pixelFormat, NULL, &_glContext);
++        if (error != kCGLNoError) {
++            NSLog(@"CGL context creation failed with %d", error);
++            if (_pixelFormat != NULL) {
++                CGLReleasePixelFormat(_pixelFormat);
++                _pixelFormat = NULL;
++            }
++        } else {
++            if (_renderer == nil) {
++                _renderer = [[CARenderer rendererWithCGLContext: _glContext
++                                                        options: nil] retain];
++                [_renderer setLayer: _layer];
++            }
++        }
++    }
++    return _glContext;
++}
+ 
+-    _renderer = [[CARenderer rendererWithCGLContext: _glContext
+-                                            options: nil] retain];
 +- initWithFrame: (CGRect) rect {
 +    self = [super init];
 +    if (self == nil)
 +        return nil;
- 
++
 +    _deleteTextureIds = [[NSMutableArray alloc] init];
-     _frame = rect;
--
--    _renderer = [[CARenderer rendererWithCGLContext: _glContext
--                                            options: nil] retain];
++    _frame = rect;
 +    /* Views can acquire a backing layer before joining a window. Defer
 +     * expensive native GL resources until there is a drawable. */
  
@@ -9049,7 +8959,7 @@ index 5dce8c56..ab9c757f 100644
      [super dealloc];
  }
  
-@@ -51,12 +136,22 @@
+@@ -51,12 +164,22 @@
  }
  
  - (void) setLayer: (CALayer *) layer {
@@ -9072,31 +8982,15 @@ index 5dce8c56..ab9c757f 100644
  }
  
  - (void) setSubwindow: (CGSubWindow*) subwindow
-@@ -68,16 +163,51 @@
+@@ -68,16 +191,35 @@
      }
  
      _subwindow = [subwindow retain];
 -    _cglWindow = CGLGetWindow([_subwindow nativeWindow]);
 +    _cglWindow = NULL;
 +    if (_subwindow != nil) {
-+        if (_glContext == NULL) {
-+            configureGPUFromMetalSelector();
-+            CGLPixelFormatAttribute attributes[] = { 0 };
-+            GLint screens;
-+            CGLError error = CGLChoosePixelFormat(attributes, &_pixelFormat, &screens);
-+            if (error == kCGLNoError)
-+                error = CGLCreateContext(_pixelFormat, NULL, &_glContext);
-+            if (error != kCGLNoError) {
-+                NSLog(@"CGL context creation failed with %d", error);
-+                CGLReleasePixelFormat(_pixelFormat);
-+                _pixelFormat = NULL;
-+            } else {
-+                _renderer = [[CARenderer rendererWithCGLContext: _glContext
-+                                                        options: nil] retain];
-+                [_renderer setLayer: _layer];
-+            }
-+        }
-+        if (_glContext != NULL)
++        CGLContextObj ctx = [self glContext];
++        if (ctx != NULL)
 +            _cglWindow = CGLGetWindow([_subwindow nativeWindow]);
 +    }
  
@@ -9125,7 +9019,7 @@ index 5dce8c56..ab9c757f 100644
  }
  
  - (void) assignTextureIdsToLayerTree: (CALayer *) layer {
-@@ -93,8 +223,27 @@
+@@ -93,8 +235,27 @@
          [self assignTextureIdsToLayerTree: child];
  }
  
@@ -9153,7 +9047,7 @@ index 5dce8c56..ab9c757f 100644
  
      glEnable(GL_DEPTH_TEST);
      glShadeModel(GL_SMOOTH);
-@@ -118,27 +267,63 @@
+@@ -118,27 +279,63 @@
  
      [_deleteTextureIds removeAllObjects];
  
@@ -9222,7 +9116,7 @@ index 5dce8c56..ab9c757f 100644
  }
  
  - (void) startTimerIfNeeded {
-@@ -147,7 +332,7 @@
+@@ -147,7 +344,7 @@
                                                     target: self
                                                   selector: @selector(timer:)
                                                   userInfo: nil
@@ -9231,7 +9125,7 @@ index 5dce8c56..ab9c757f 100644
  }
  
  - (void) deleteTextureId: (NSNumber *) textureId {
-@@ -155,7 +340,10 @@
+@@ -155,7 +352,10 @@
  }
  
  - (void) flush {
@@ -9244,10 +9138,14 @@ index 5dce8c56..ab9c757f 100644
  
  @end
 diff --git a/QuartzCore/CALayerInternal.h b/QuartzCore/CALayerInternal.h
-index 5ad375f8..c8e83814 100644
+index 5ad375f8..0cc255dc 100644
 --- a/QuartzCore/CALayerInternal.h
 +++ b/QuartzCore/CALayerInternal.h
-@@ -23,4 +23,5 @@
+@@ -20,7 +20,9 @@
+ #import <QuartzCore/CALayer.h>
+ 
+ @interface CALayer (Internal)
++- (CALayerContext *) _context;
  - (void) _setContext: (CALayerContext *) context;
  - (NSNumber *) _textureId;
  - (void) _setTextureId: (NSNumber *) value;
@@ -9711,7 +9609,7 @@ index d6f86b31..687f05d5 100644
  
  static void glDebugCallback(GLenum source, GLenum type, GLuint id, GLenum severity, GLsizei length, const GLchar* message, const void* context) {
 diff --git a/QuartzCore/CAMetalLayer.mm b/QuartzCore/CAMetalLayer.mm
-index b81e2e14..63533444 100644
+index b81e2e14..b71b729a 100644
 --- a/QuartzCore/CAMetalLayer.mm
 +++ b/QuartzCore/CAMetalLayer.mm
 @@ -25,7 +25,79 @@
@@ -9860,14 +9758,93 @@ index b81e2e14..63533444 100644
  @implementation CAMetalLayerInternal
  
  #if DARLING_METAL_ENABLED
-@@ -363,12 +494,15 @@ static void reportGLErrors(void) {
+@@ -226,6 +357,7 @@ static void reportGLErrors(void) {
+ 		_pixelFormat = MTLPixelFormatBGRA8Unorm;
+ 		_framebufferOnly = YES;
+ 		_drawableSize = _bounds.size; // TODO: multiply by contentsScale, once we add that to CALayer
++		_drawableSizeExplicitlySet = NO;
+ 		_displaySyncEnabled = YES;
+ 		_maximumDrawableCount = 3;
+ 		_allowsNextDrawableTimeout = YES;
+@@ -321,6 +453,7 @@ static void reportGLErrors(void) {
+ 
+ - (void)setDrawableSize: (CGSize)drawableSize
+ {
++	_drawableSizeExplicitlySet = YES;
+ 	_drawableSize = drawableSize;
+ 	[self recreateDrawables];
+ }
+@@ -343,18 +476,25 @@ static void reportGLErrors(void) {
+ // overridden properties
+ //
+ 
+-// it appears that the drawable size does NOT change after initially being set
+-#if 0
+ - (void)setBounds: (CGRect)value
+ {
+ 	[super setBounds: value];
++	if (!_drawableSizeExplicitlySet && value.size.width > 0 && value.size.height > 0) {
++		CGFloat scale = self.contentsScale > 0.0 ? self.contentsScale : 1.0;
++		_drawableSize = CGSizeMake(value.size.width * scale, value.size.height * scale);
++		[self recreateDrawables];
++	}
++}
+ 
+-	CGSize drawableSize = value.size;
+-	// TODO: multiply by contentsScale (CALayer doesn't currently have that property)
+-
+-	[self setDrawableSize: drawableSize];
++- (void)setFrame: (CGRect)value
++{
++	[super setFrame: value];
++	if (!_drawableSizeExplicitlySet && value.size.width > 0 && value.size.height > 0) {
++		CGFloat scale = self.contentsScale > 0.0 ? self.contentsScale : 1.0;
++		_drawableSize = CGSizeMake(value.size.width * scale, value.size.height * scale);
++		[self recreateDrawables];
++	}
+ }
+-#endif
+ 
+ //
+ // methods
+@@ -363,12 +503,45 @@ static void reportGLErrors(void) {
  - (id<CAMetalDrawable>)nextDrawable
  {
  	std::shared_ptr<CAMetalDrawableActual> drawable = nullptr;
 +	CFTimeInterval waitStart = CACurrentMediaTime();
++
++	if (!_device) {
++		_device = [self.preferredDevice retain];
++	}
++
++	if (_drawables[0] == nullptr || _usableDrawablesBitmap == 0) {
++		[self recreateDrawables];
++	}
  
  	[_drawableCondition lock];
  
++	if (_usableDrawablesBitmap == 0) {
++		@synchronized(self) {
++			if (_lastPresentedDrawable) {
++				_lastPresentedDrawable->didPresent();
++				_lastPresentedDrawable = nullptr;
++			}
++		}
++	}
++
++	if (_usableDrawablesBitmap == 0 && _queuedDrawableCount > 0 && [NSThread isMainThread] && _context) {
++		[_drawableCondition unlock];
++		[_context render];
++		[_context flush];
++		[_drawableCondition lock];
++		@synchronized(self) {
++			if (_lastPresentedDrawable) {
++				_lastPresentedDrawable->didPresent();
++				_lastPresentedDrawable = nullptr;
++			}
++		}
++	}
++
  	NSDate* endTime = [NSDate dateWithTimeIntervalSinceNow: 1];
  
  	while (_usableDrawablesBitmap == 0) {
@@ -9876,8 +9853,24 @@ index b81e2e14..63533444 100644
  		if (_allowsNextDrawableTimeout) {
  			if (![_drawableCondition waitUntilDate: endTime]) {
  				break;
-@@ -380,6 +514,8 @@ static void reportGLErrors(void) {
+@@ -378,8 +551,24 @@ static void reportGLErrors(void) {
+ 		}
+ 	}
  
++	if (_usableDrawablesBitmap == 0) {
++		@synchronized(self) {
++			if (_lastPresentedDrawable) {
++				_lastPresentedDrawable->didPresent();
++				_lastPresentedDrawable = nullptr;
++			}
++		}
++		if (_usableDrawablesBitmap == 0 && (_drawables[0] == nullptr || _drawableSize.width == 0)) {
++			[_drawableCondition unlock];
++			[self recreateDrawables];
++			[_drawableCondition lock];
++		}
++	}
++
  	if (_usableDrawablesBitmap == 0) {
  		// timeout reached
 +		darlingMetalTiming("nextDrawableTimeout", CACurrentMediaTime() - waitStart);
@@ -9885,7 +9878,7 @@ index b81e2e14..63533444 100644
  		[_drawableCondition unlock];
  		return nil;
  	}
-@@ -400,6 +536,8 @@ static void reportGLErrors(void) {
+@@ -400,6 +589,8 @@ static void reportGLErrors(void) {
  	}
  
  	_usableDrawablesBitmap &= ~(1u << drawableID);
@@ -9894,7 +9887,7 @@ index b81e2e14..63533444 100644
  
  	drawable = _drawables[drawableID];
  
-@@ -410,20 +548,36 @@ static void reportGLErrors(void) {
+@@ -410,20 +601,49 @@ static void reportGLErrors(void) {
  
  - (void)queuePresent: (NSUInteger)drawableID
  {
@@ -9912,7 +9905,7 @@ index b81e2e14..63533444 100644
 -	[self display];
 +    // Present only after the Vulkan/GL synchronization has been prepared, on
 +    // the window thread. display alone does not drive the layer compositor.
-+    dispatch_async(dispatch_get_main_queue(), ^{
++    void (^renderBlock)(void) = ^{
 +        if (intervalSample) intervalSample->renderStart.store(presentIntervalNow());
 +        darlingMetalTrace("present-block-runs", 0, 0);
 +        CFTimeInterval blockStart = CACurrentMediaTime();
@@ -9923,7 +9916,20 @@ index b81e2e14..63533444 100644
 +        [self->_context flush];
 +        if (intervalSample) intervalSample->flushDone.store(presentIntervalNow(), std::memory_order_release);
 +        darlingMetalTiming("mainBlockFlush", CACurrentMediaTime() - renderDone);
-+    });
++
++        @synchronized(self) {
++            if (self->_lastPresentedDrawable) {
++                self->_lastPresentedDrawable->didPresent();
++                self->_lastPresentedDrawable = nullptr;
++            }
++        }
++    };
++
++    if ([NSThread isMainThread]) {
++        renderBlock();
++    } else {
++        dispatch_async(dispatch_get_main_queue(), renderBlock);
++    }
  }
  
  - (void)releaseDrawable: (NSUInteger)drawableID
@@ -9932,27 +9938,88 @@ index b81e2e14..63533444 100644
  	[_drawableCondition lock];
  	_usableDrawablesBitmap |= 1u << drawableID;
  	[_drawableCondition signal];
-@@ -455,7 +609,7 @@ static void reportGLErrors(void) {
+@@ -440,9 +660,10 @@ static void reportGLErrors(void) {
+ 
+ 		// disown it first so it doesn't try to release itself
+ 		// (and end up deadlocking in `releaseDrawable:`)
+-		drawable->disown();
+-
+-		drawable->didDrop();
++		if (drawable) {
++			drawable->disown();
++			drawable->didDrop();
++		}
+ 	}
+ 	_queuedDrawableCount = 0;
+ 
+@@ -455,7 +676,33 @@ static void reportGLErrors(void) {
  	}
  	_usableDrawablesBitmap = 0;
  
 -	if (!_device || !_context || _drawableSize.width == 0 || _drawableSize.height == 0) {
++	if (!_device) {
++		_device = [self.preferredDevice retain];
++	}
++
++	if (!_context && self.superlayer) {
++		_context = [self.superlayer _context];
++	}
++
++	if (_drawableSize.width == 0 || _drawableSize.height == 0) {
++		CGFloat scale = self.contentsScale > 0.0 ? self.contentsScale : 1.0;
++		if (self.bounds.size.width > 0 && self.bounds.size.height > 0) {
++			_drawableSize = CGSizeMake(self.bounds.size.width * scale, self.bounds.size.height * scale);
++		} else if (self.frame.size.width > 0 && self.frame.size.height > 0) {
++			_drawableSize = CGSizeMake(self.frame.size.width * scale, self.frame.size.height * scale);
++		} else if (self.superlayer && self.superlayer.bounds.size.width > 0 && self.superlayer.bounds.size.height > 0) {
++			_drawableSize = CGSizeMake(self.superlayer.bounds.size.width * scale, self.superlayer.bounds.size.height * scale);
++		} else if (self.superlayer && self.superlayer.frame.size.width > 0 && self.superlayer.frame.size.height > 0) {
++			_drawableSize = CGSizeMake(self.superlayer.frame.size.width * scale, self.superlayer.frame.size.height * scale);
++		} else if (_context) {
++			CGRect cf = [_context frame];
++			if (cf.size.width > 0 && cf.size.height > 0) {
++				_drawableSize = CGSizeMake(cf.size.width * scale, cf.size.height * scale);
++			}
++		}
++	}
++
 +	if (!_device || !_context || !_context.glContext || _drawableSize.width == 0 || _drawableSize.height == 0) {
  		// can't create new drawables
  		[_drawableCondition unlock];
  		return;
-@@ -506,6 +660,10 @@ static void reportGLErrors(void) {
- 			glTextureParameteri(_tex, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
- 			glTextureParameteri(_tex, GL_TEXTURE_WRAP_S, GL_REPEAT);
- 			glTextureParameteri(_tex, GL_TEXTURE_WRAP_T, GL_REPEAT);
-+			// The layer is opaque, as on macOS: never let the drawable's alpha reach the compositor (its blending and
-+			// alpha test turned the game's low-alpha effect regions into black quads). The drawable is copied in with
-+			// glCopyImageSubData, so the swizzle has to be on this texture, the one that is actually sampled.
-+			glTextureParameteri(_tex, GL_TEXTURE_SWIZZLE_A, GL_ONE);
+@@ -497,17 +744,22 @@ static void reportGLErrors(void) {
+ 		if (_tex != 0) {
+ 			reportGLErrors();
+ 			glDeleteTextures(1, &_tex);
+-			reportGLErrors();
+-			glCreateTextures(GL_TEXTURE_2D, 1, &_tex);
+-			reportGLErrors();
+-			glTextureStorage2D(_tex, 1, GL_RGBA8, _drawableSize.width, _drawableSize.height);
+-			reportGLErrors();
+-			glTextureParameteri(_tex, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+-			glTextureParameteri(_tex, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+-			glTextureParameteri(_tex, GL_TEXTURE_WRAP_S, GL_REPEAT);
+-			glTextureParameteri(_tex, GL_TEXTURE_WRAP_T, GL_REPEAT);
++			_tex = 0;
  			reportGLErrors();
  		}
++		glCreateTextures(GL_TEXTURE_2D, 1, &_tex);
++		reportGLErrors();
++		glTextureStorage2D(_tex, 1, GL_RGBA8, _drawableSize.width, _drawableSize.height);
++		reportGLErrors();
++		glTextureParameteri(_tex, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
++		glTextureParameteri(_tex, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
++		glTextureParameteri(_tex, GL_TEXTURE_WRAP_S, GL_REPEAT);
++		glTextureParameteri(_tex, GL_TEXTURE_WRAP_T, GL_REPEAT);
++		// The layer is opaque, as on macOS: never let the drawable's alpha reach the compositor (its blending and
++		// alpha test turned the game's low-alpha effect regions into black quads). The drawable is copied in with
++		// glCopyImageSubData, so the swizzle has to be on this texture, the one that is actually sampled.
++		glTextureParameteri(_tex, GL_TEXTURE_SWIZZLE_A, GL_ONE);
++		reportGLErrors();
  	}
-@@ -516,6 +674,10 @@ static void reportGLErrors(void) {
+ 
+ 	CGLSetCurrentContext(prev);
+@@ -516,6 +768,10 @@ static void reportGLErrors(void) {
  - (void)prepareRender
  {
  	std::shared_ptr<CAMetalDrawableActual> drawable = nullptr;
@@ -9963,15 +10030,33 @@ index b81e2e14..63533444 100644
  
  	[_drawableCondition lock];
  	if (_queuedDrawableCount > 0) {
-@@ -528,11 +690,62 @@ static void reportGLErrors(void) {
+@@ -528,11 +784,85 @@ static void reportGLErrors(void) {
  	if (drawable) {
  		// wait for the drawable to be fully rendered before copying it to the render texture
  		// (this is a GPU-side wait)
 +		CFTimeInterval syncStart = CACurrentMediaTime();
  		drawable->synchronizeRender();
 +		darlingMetalTiming("synchronizeRender", CACurrentMediaTime() - syncStart);
++
++		CGLContextObj prevCtx = CGLGetCurrentContext();
++		if (_context && _context.glContext) {
++			CGLSetCurrentContext(_context.glContext);
++		}
++
++		@synchronized(self) {
++			if (_tex == 0 && _drawableSize.width > 0 && _drawableSize.height > 0) {
++				glCreateTextures(GL_TEXTURE_2D, 1, &_tex);
++				glTextureStorage2D(_tex, 1, GL_RGBA8, (GLsizei)_drawableSize.width, (GLsizei)_drawableSize.height);
++				glTextureParameteri(_tex, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
++				glTextureParameteri(_tex, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
++				glTextureParameteri(_tex, GL_TEXTURE_WRAP_S, GL_REPEAT);
++				glTextureParameteri(_tex, GL_TEXTURE_WRAP_T, GL_REPEAT);
++				glTextureParameteri(_tex, GL_TEXTURE_SWIZZLE_A, GL_ONE);
++			}
++		}
  
-+		reportGLErrors();
+ 		reportGLErrors();
+-		glCopyImageSubData(drawable->texture()->glTexture(), GL_TEXTURE_2D, 0, 0, 0, 0, _tex, GL_TEXTURE_2D, 0, 0, 0, 0, _drawableSize.width, _drawableSize.height, 1);
 +		{
 +			// Diagnostic: statistics of the imported Vulkan image itself, before the copy
 +			static unsigned long sourceCounter = 0;
@@ -9988,8 +10073,10 @@ index b81e2e14..63533444 100644
 +				darlingMetalTrace("source-stats", (long) lit, (long) (total / (width * height)));
 +			}
 +		}
- 		reportGLErrors();
- 		glCopyImageSubData(drawable->texture()->glTexture(), GL_TEXTURE_2D, 0, 0, 0, 0, _tex, GL_TEXTURE_2D, 0, 0, 0, 0, _drawableSize.width, _drawableSize.height, 1);
++		reportGLErrors();
++		if (_tex != 0) {
++			glCopyImageSubData(drawable->texture()->glTexture(), GL_TEXTURE_2D, 0, 0, 0, 0, _tex, GL_TEXTURE_2D, 0, 0, 0, 0, _drawableSize.width, _drawableSize.height, 1);
++		}
  		reportGLErrors();
 +
 +		// Diagnostic: every 150th presented frame, log pixel statistics of what is about to be shown
@@ -10023,29 +10110,35 @@ index b81e2e14..63533444 100644
 +				}
 +			}
 +		}
++
++		if (prevCtx) {
++			CGLSetCurrentContext(prevCtx);
++		}
  	}
  
  	@synchronized(self) {
-@@ -575,6 +788,11 @@ static void reportGLErrors(void) {
+@@ -575,7 +905,12 @@ static void reportGLErrors(void) {
  {
  	[super _setContext: context];
  
+-	if (_tex == 0) {
 +    if (!context || !context.glContext) {
 +        [self recreateDrawables];
 +        return;
 +    }
 +
- 	if (_tex == 0) {
++	if (_tex == 0 && _drawableSize.width > 0 && _drawableSize.height > 0) {
  		// create our textures now using the context's CGLContext
  		CGLContextObj prev = CGLGetCurrentContext();
-@@ -589,10 +807,15 @@ static void reportGLErrors(void) {
+ 		CGLSetCurrentContext(context.glContext);
+@@ -589,10 +924,15 @@ static void reportGLErrors(void) {
  		glTextureParameteri(_tex, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
  		glTextureParameteri(_tex, GL_TEXTURE_WRAP_S, GL_REPEAT);
  		glTextureParameteri(_tex, GL_TEXTURE_WRAP_T, GL_REPEAT);
-+			// The layer is opaque, as on macOS: never let the drawable's alpha reach the compositor (its blending and
-+			// alpha test turned the game's low-alpha effect regions into black quads). The drawable is copied in with
-+			// glCopyImageSubData, so the swizzle has to be on this texture, the one that is actually sampled.
-+			glTextureParameteri(_tex, GL_TEXTURE_SWIZZLE_A, GL_ONE);
++		// The layer is opaque, as on macOS: never let the drawable's alpha reach the compositor (its blending and
++		// alpha test turned the game's low-alpha effect regions into black quads). The drawable is copied in with
++		// glCopyImageSubData, so the swizzle has to be on this texture, the one that is actually sampled.
++		glTextureParameteri(_tex, GL_TEXTURE_SWIZZLE_A, GL_ONE);
  		reportGLErrors();
  
  		CGLSetCurrentContext(prev);
@@ -10054,6 +10147,25 @@ index b81e2e14..63533444 100644
  }
  
  #else
+diff --git a/QuartzCore/CAMetalLayerInternal.h b/QuartzCore/CAMetalLayerInternal.h
+index 48693da0..947a9133 100644
+--- a/QuartzCore/CAMetalLayerInternal.h
++++ b/QuartzCore/CAMetalLayerInternal.h
+@@ -32,6 +32,7 @@ class CAMetalDrawableActual;
+ 	CGColorSpaceRef _colorspace;
+ 	BOOL _framebufferOnly;
+ 	CGSize _drawableSize;
++	BOOL _drawableSizeExplicitlySet;
+ 	BOOL _presentsWithTransaction;
+ 	BOOL _displaySyncEnabled;
+ 	BOOL _wantsExtendedDynamicRangeContent;
+@@ -54,5 +55,6 @@ class CAMetalDrawableActual;
+ - (void)releaseDrawable: (NSUInteger)drawableID;
+ 
+ - (void)prepareRender;
++- (void)recreateDrawables;
+ 
+ @end
 diff --git a/QuartzCore/CARenderer.m b/QuartzCore/CARenderer.m
 index dd0a1270..0bbc5a6c 100644
 --- a/QuartzCore/CARenderer.m
@@ -10627,14 +10739,15 @@ index 49b03483..5ebbf535 100644
  - (void) display;
  - (void) displayIfNeeded;
 diff --git a/QuartzCore/include/QuartzCore/CALayerContext.h b/QuartzCore/include/QuartzCore/CALayerContext.h
-index e4b0c342..d61c37ba 100644
+index e4b0c342..739ed3c1 100644
 --- a/QuartzCore/include/QuartzCore/CALayerContext.h
 +++ b/QuartzCore/include/QuartzCore/CALayerContext.h
-@@ -20,6 +20,7 @@
+@@ -20,6 +20,8 @@
  }
  
  @property(readonly) CGLContextObj glContext;
 +@property(readonly) CGSubWindow *subwindow;
++@property(readonly) CGRect frame;
  
  - initWithFrame: (CGRect) rect;
  
@@ -10700,80 +10813,3 @@ index 00000000..19cd9ea9
 +- (instancetype) init;
 +
 +@end
-diff --git a/AppKit/NSSavePanel.subproj/NSSavePanel.m b/AppKit/NSSavePanel.subproj/NSSavePanel.m
-index 50c3d59e..5872e594 100644
---- a/AppKit/NSSavePanel.subproj/NSSavePanel.m
-+++ b/AppKit/NSSavePanel.subproj/NSSavePanel.m
-@@ -124,8 +124,48 @@ static NSSavePanel *_newPanel = nil;
-     [NSApp stopModalWithCode: NSCancelButton];
- }
- 
-+// Electron (Riot Client UI) opens its file dialogs through these and waits
-+// for the handler; run the panel modally and report the result.
- - (void) beginWithCompletionHandler: (void (^)(NSModalResponse result)) handler {
--    NSUnimplementedMethod();
-+    NSModalResponse result = [self runModal];
-+    if (handler)
-+        handler(result);
-+}
-+
-+- (void) beginSheetModalForWindow: (NSWindow *) window
-+                completionHandler: (void (^)(NSModalResponse result)) handler
-+{
-+    [self beginWithCompletionHandler: handler];
-+}
-+
-+// Electron sets these unconditionally; Cocotron's panel has no tag field,
-+// name label or extension toggle, so they are accepted and ignored.
-+- (void) setNameFieldLabel: (NSString *) label {
-+}
-+
-+- (NSString *) nameFieldLabel {
-+    return nil;
-+}
-+
-+- (void) setShowsTagField: (BOOL) flag {
-+}
-+
-+- (BOOL) showsTagField {
-+    return NO;
-+}
-+
-+- (void) setExtensionHidden: (BOOL) flag {
-+}
-+
-+- (BOOL) isExtensionHidden {
-+    return NO;
-+}
-+
-+- (void) setCanSelectHiddenExtension: (BOOL) flag {
-+}
-+
-+- (BOOL) canSelectHiddenExtension {
-+    return NO;
- }
- 
- - (NSInteger) runModalForDirectory: (NSString *) directory
-diff --git a/AppKit/include/AppKit/NSSavePanel.h b/AppKit/include/AppKit/NSSavePanel.h
-index 53bacc46..3c6adfb7 100644
---- a/AppKit/include/AppKit/NSSavePanel.h
-+++ b/AppKit/include/AppKit/NSSavePanel.h
-@@ -88,6 +88,18 @@ enum {
- - (void) setPrompt: (NSString *) message;
- - (NSString *) prompt;
- 
-+- (void) setNameFieldLabel: (NSString *) label;
-+- (NSString *) nameFieldLabel;
-+- (void) setShowsTagField: (BOOL) flag;
-+- (BOOL) showsTagField;
-+- (void) setExtensionHidden: (BOOL) flag;
-+- (BOOL) isExtensionHidden;
-+- (void) setCanSelectHiddenExtension: (BOOL) flag;
-+- (BOOL) canSelectHiddenExtension;
-+
-+- (void) beginSheetModalForWindow: (NSWindow *) window
-+                completionHandler: (void (^)(NSModalResponse result)) handler;
-+
- - (void) beginSheetForDirectory: (NSString *) path
-                            file: (NSString *) name
-                  modalForWindow: (NSWindow *) docWindow
