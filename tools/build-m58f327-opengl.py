@@ -25,7 +25,7 @@ for name in ['context', 'render', 'planes', 'direct', 'resolver']:
     obj = project/f'build/m327-{name}-check.o'
     source = project/'tools/riot-gl-resolver-check.c' if name == 'resolver' else project/'tools/m58f352-cgl-direct-check.c' if name == 'direct' else project/'tools/m58f340-cgl-planes-check.c' if name == 'planes' else project/f'tools/m58f327-cgl-{name}-check.c'
     run([*base, '-c', str(source), '-o', str(obj)])
-    run(['clang', '-target', 'x86_64-apple-macosx11.0', '-fuse-ld=lld', '-nostdlib',
+    run(['clang', '-target', 'x86_64-apple-macosx11.0', '-fuse-ld=lld', '-L@DARLING_SDK@/usr/lib/swift', '-nostdlib',
          '-isysroot', '@DARLING_SDK@', str(obj), '-lSystem', '-framework', 'OpenGL',
          '-framework', 'CoreFoundation', '-framework', 'CoreGraphics', '-framework', 'IOSurface',
          *(['-framework','QuartzCore'] if name == 'planes' else []),

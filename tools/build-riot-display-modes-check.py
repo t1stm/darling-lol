@@ -15,7 +15,7 @@ obj = root / 'build/riot-display-modes-check.o'
 subprocess.run(['clang', *flags['C_DEFINES'], *flags['C_INCLUDES'], *flags['C_FLAGS'],
                 '-Wno-macro-redefined', '-c', str(root / 'tools/riot-display-modes-check.c'),
                 '-o', str(obj)], check=True)
-subprocess.run(['clang', '-target', 'x86_64-apple-macosx11.0', '-fuse-ld=lld', '-nostdlib',
+subprocess.run(['clang', '-target', 'x86_64-apple-macosx11.0', '-fuse-ld=lld', '-L@DARLING_SDK@/usr/lib/swift', '-nostdlib',
                 '-isysroot', '@DARLING_SDK@', str(obj), '-lSystem',
                 '-framework', 'CoreGraphics', '-framework', 'CoreFoundation',
                 '-o', str(root / 'build/riot-display-modes-check')], check=True)

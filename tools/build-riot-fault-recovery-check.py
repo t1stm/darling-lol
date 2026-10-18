@@ -12,7 +12,7 @@ for line in config.read_text().splitlines():
         key, value = line.split(" = ", 1)
         flags[key] = shlex.split(value)
 subprocess.run(["clang", *flags["C_DEFINES"], *flags["C_INCLUDES"], *flags["C_FLAGS"],
-                "-fno-omit-frame-pointer", "-fuse-ld=lld", "-nostdlib",
+                "-fno-omit-frame-pointer", "-fuse-ld=lld", "-L@DARLING_SDK@/usr/lib/swift", "-nostdlib",
                 "-isysroot", "@DARLING_SDK@",
                 str(root / "tools/riot-fault-recovery-check.c"), "-lSystem",
                 "-o", str(root / "build/riot-fault-recovery-check")], check=True)

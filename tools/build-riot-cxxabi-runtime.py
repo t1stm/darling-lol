@@ -25,7 +25,7 @@ subprocess.run(['clang++', *flags['CXX_DEFINES'], *flags['CXX_INCLUDES'],
 rtti = root / 'build/riot-cxx-exception-rtti.o'
 subprocess.run(['clang', '-target', 'x86_64-apple-macosx11.0', '-c',
                 str(root / 'tools/riot-cxx-exception-rtti.s'), '-o', str(rtti)], check=True)
-subprocess.run(['clang++', '-target', 'x86_64-apple-macosx11.0', '-fuse-ld=lld',
+subprocess.run(['clang++', '-target', 'x86_64-apple-macosx11.0', '-fuse-ld=lld', '-L@DARLING_SDK@/usr/lib/swift',
                 '-nostdlib', '-isysroot', '@DARLING_SDK@', str(obj), str(rtti),
                 '-lSystem', '-lc++', '-lc++abi', '-o',
                 str(root / 'build/riot-cxx-exception-check')], check=True)

@@ -17,7 +17,7 @@ cc -shared -fPIC -O3 -march=native -mtune=generic -Wall -Wextra \
   "-Wl,-soname,$project_dir/build/libdarling-xshm.so" \
   "$project_dir/tools/m58f299-xshm.c" -o "$project_dir/build/libdarling-xshm.next.so" \
   -pthread $(pkg-config --cflags --libs x11 x11-xcb xcb-shm xext)
-clang -target x86_64-apple-macosx11.0 -fuse-ld=lld -dynamiclib -nostdlib -O3 -march=native -mtune=generic \
+clang -target x86_64-apple-macosx11.0 -fuse-ld=lld -L@DARLING_SDK@/usr/lib/swift -dynamiclib -nostdlib -O3 -march=native -mtune=generic \
   -isysroot "@DARLING_SDK@" \
   -I"$source_dir/src/startup/mldr/elfcalls" \
   "-DDARLING_XSHM_HOST_LIBRARY=\"$project_dir/build/libdarling-xshm.so\"" \

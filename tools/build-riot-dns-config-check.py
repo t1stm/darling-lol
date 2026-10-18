@@ -14,6 +14,6 @@ for line in flags_file.read_text().splitlines():
 obj = project / 'build/riot-dns-config-check.o'
 subprocess.run(['clang', *flags['C_DEFINES'], *flags['C_INCLUDES'], *flags['C_FLAGS'],
                 '-c', str(project / 'tools/riot-dns-config-check.c'), '-o', str(obj)], check=True)
-subprocess.run(['clang', '-target', 'x86_64-apple-macosx11.0', '-fuse-ld=lld', '-nostdlib',
+subprocess.run(['clang', '-target', 'x86_64-apple-macosx11.0', '-fuse-ld=lld', '-L@DARLING_SDK@/usr/lib/swift', '-nostdlib',
                 '-isysroot', '@DARLING_SDK@', str(obj), '-lSystem',
                 '-o', str(project / 'build/riot-dns-config-check')], check=True)

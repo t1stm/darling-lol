@@ -10,4 +10,4 @@ for line in (root/'build/darling-src/build/src/frameworks/CoreVideo/CMakeFiles/C
         key,value=line.split(' = ',1); flags[key]=[re.sub(r'/usr/lib/clang/\d+/include',res+'/include',v) for v in shlex.split(value)]
 obj=root/'build/riot-local-semaphore-check.o'
 subprocess.run(['clang',*flags['C_DEFINES'],*flags['C_INCLUDES'],*flags['C_FLAGS'],'-I'+str(root/'build/darling-src/src/startup/mldr/elfcalls'),'-O2','-fblocks','-c',str(root/'tools/riot-local-semaphore-check.c'),'-o',str(obj)],check=True)
-subprocess.run(['clang','-target','x86_64-apple-macosx11.0','-fuse-ld=lld','-nostdlib','-isysroot','@DARLING_SDK@',str(obj),'-lSystem','-o',str(root/'build/riot-local-semaphore-check')],check=True)
+subprocess.run(['clang','-target','x86_64-apple-macosx11.0','-fuse-ld=lld', '-L@DARLING_SDK@/usr/lib/swift','-nostdlib','-isysroot','@DARLING_SDK@',str(obj),'-lSystem','-o',str(root/'build/riot-local-semaphore-check')],check=True)

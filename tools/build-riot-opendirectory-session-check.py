@@ -16,7 +16,7 @@ name = "riot-opendirectory-session-check"
 obj = root / f"build/{name}.o"
 subprocess.run(["clang", *flags["C_DEFINES"], *flags["C_INCLUDES"], *flags["C_FLAGS"],
                 "-fblocks", "-c", str(root / f"tools/{name}.m"), "-o", str(obj)], check=True)
-subprocess.run(["clang", "-target", "x86_64-apple-macosx11.0", "-fuse-ld=lld", "-nostdlib",
+subprocess.run(["clang", "-target", "x86_64-apple-macosx11.0", "-fuse-ld=lld", "-L@DARLING_SDK@/usr/lib/swift", "-nostdlib",
                 "-isysroot", "@DARLING_SDK@", str(obj), "-lSystem",
                 "-framework", "Foundation", "-framework", "OpenDirectory",
                 "-framework", "CoreFoundation", "-lobjc", "-o", str(root / f"build/{name}")],

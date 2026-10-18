@@ -14,7 +14,7 @@ for line in flags_file.read_text().splitlines():
 obj = root / 'build/riot-codesign-check.o'
 subprocess.run(['clang', *flags['C_DEFINES'], *flags['C_INCLUDES'], *flags['C_FLAGS'],
                 '-c', str(root / 'tools/riot-codesign-check.c'), '-o', str(obj)], check=True)
-subprocess.run(['clang', '-target', 'x86_64-apple-macosx11.0', '-fuse-ld=lld', '-nostdlib',
+subprocess.run(['clang', '-target', 'x86_64-apple-macosx11.0', '-fuse-ld=lld', '-L@DARLING_SDK@/usr/lib/swift', '-nostdlib',
                 '-isysroot', '@DARLING_SDK@', str(obj), '-lSystem',
                 '-framework', 'Security', '-framework', 'CoreFoundation',
                 '-o', str(root / 'build/riot-codesign-check')], check=True)

@@ -38,7 +38,7 @@ probe = root / 'build/riot-display-geometry-check'
 subprocess.run(['clang', *flags_for(frameworks / 'AppKit', 'X11_backend'),
                 '-O2', '-UNDEBUG', '-Wno-macro-redefined', '-c', str(root / 'tools/riot-display-geometry-check.m'),
                 '-o', str(probe) + '.o'], check=True)
-subprocess.run(['clang', '-target', 'x86_64-apple-macosx11.0', '-fuse-ld=lld',
+subprocess.run(['clang', '-target', 'x86_64-apple-macosx11.0', '-fuse-ld=lld', '-L@DARLING_SDK@/usr/lib/swift',
                 '-nostdlib', '-isysroot', config['sdk'], str(probe) + '.o',
                 '-lSystem', '-framework', 'AppKit', '-framework', 'Foundation',
                 '-framework', 'CoreGraphics', '-lobjc',

@@ -15,7 +15,7 @@ obj = root / 'build/riot-x11-drag-check.o'
 subprocess.run(['clang', *flags['C_DEFINES'], *flags['C_INCLUDES'], *flags['C_FLAGS'],
                 '-O2', '-fblocks', '-Wno-macro-redefined', '-c', str(root / 'tools/riot-x11-drag-check.m'),
                 '-o', str(obj)], check=True)
-subprocess.run(['clang', '-target', 'x86_64-apple-macosx11.0', '-fuse-ld=lld', '-nostdlib',
+subprocess.run(['clang', '-target', 'x86_64-apple-macosx11.0', '-fuse-ld=lld', '-L@DARLING_SDK@/usr/lib/swift', '-nostdlib',
                 '-isysroot', '@DARLING_SDK@', str(obj), '-lSystem', '-lobjc',
                 '-framework', 'AppKit', '-framework', 'CoreFoundation', '-framework', 'Foundation',
                 '-o', str(root / 'build/riot-x11-drag-check')], check=True)

@@ -125,6 +125,6 @@ for probe in ('riot-task-info-check','riot-kqueue-lifetime-check','riot-kqueue-s
     obj = project / f'build/{probe}.o'
     subprocess.run(['clang', *flags['C_DEFINES'], *flags['C_INCLUDES'], *flags['C_FLAGS'],
                     '-O2', '-c', str(project / f'tools/{probe}.c'), '-o', str(obj)], check=True)
-    subprocess.run(['clang', '-target', 'x86_64-apple-macosx11.0', '-fuse-ld=lld', '-nostdlib',
+    subprocess.run(['clang', '-target', 'x86_64-apple-macosx11.0', '-fuse-ld=lld', '-L@DARLING_SDK@/usr/lib/swift', '-nostdlib',
                     '-isysroot', '@DARLING_SDK@', str(obj), '-lSystem', '-o',
                     str(project / f'build/{probe}')], check=True)

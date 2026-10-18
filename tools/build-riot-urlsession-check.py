@@ -25,7 +25,7 @@ output.mkdir(exist_ok=True)
 obj = output / 'riot-urlsession-check.o'
 subprocess.run(['clang', *flags['C_DEFINES'], *flags['C_INCLUDES'], *flags['C_FLAGS'],
                 '-c', str(root / 'tools/riot-urlsession-check.m'), '-o', str(obj)], check=True)
-subprocess.run(['clang', '-target', 'x86_64-apple-macosx11.0', '-fuse-ld=lld', '-nostdlib',
+subprocess.run(['clang', '-target', 'x86_64-apple-macosx11.0', '-fuse-ld=lld', '-L@DARLING_SDK@/usr/lib/swift', '-nostdlib',
                 '-isysroot', str(sdk), str(obj), '-framework', 'Foundation',
                 '-framework', 'CFNetwork', '-lobjc', '-lSystem',
                 '-o', str(output / 'riot-urlsession-check')], check=True)

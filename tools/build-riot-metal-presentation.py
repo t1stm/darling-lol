@@ -31,7 +31,7 @@ for name in ('riot-metal-presentation-check', 'riot-ca-render-policy-check'):
     obj = root / f'build/{name}.o'
     subprocess.run(['clang++', *flags['CXX_DEFINES'], *flags['CXX_INCLUDES'], *flags['CXX_FLAGS'],
                     '-c', str(root / f'tools/{name}.mm'), '-o', str(obj)], check=True)
-    subprocess.run(['clang++', '-target', 'x86_64-apple-macosx11.0', '-fuse-ld=lld', '-nostdlib',
+    subprocess.run(['clang++', '-target', 'x86_64-apple-macosx11.0', '-fuse-ld=lld', '-L@DARLING_SDK@/usr/lib/swift', '-nostdlib',
                     '-isysroot', sdk, str(obj), '-lSystem', '-lc++', '-lobjc',
                     '-framework', 'AppKit', '-framework', 'OpenGL', '-framework', 'Foundation',
                     '-framework', 'IOSurface', str(root / 'build/riot-Metal'),
