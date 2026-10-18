@@ -74,7 +74,7 @@ The probe cycles through 1280×720, 1600×900, 1024×576 and 1280×720. Each sta
 python3 build/runtime/tools/build-riot-carboncore-runtime.py
 ```
 
-After installing and activating CarbonCore, run the independent `build/riot-gestalt-version-check` through Darling with the normal framework/library overrides. Expected on the current kernel: `GESTALT_VERSION product=14.7 version=14.7.0 packed=0x1470 architecture=10 pass=1`. It compares the separate version selectors against `kern.osproductversion`, checks packed BCD, confirms architecture remains a separate result, and covers null outputs and unknown selectors. The previous implementation returned 10 for every version component and the packed selector. The probe does not launch or contact Riot. Passing it establishes the API correction, not Vanguard compatibility.
+After installing and activating CarbonCore, run the independent `build/riot-gestalt-version-check` through Darling with the normal framework/library overrides. Expected on the current kernel: `GESTALT_VERSION product=14.7 version=14.7.0 packed=0x1470 architecture=10 pass=1`. It compares the separate version selectors against `kern.osproductversion`, checks packed BCD, confirms architecture remains a separate result, and covers null outputs and unknown selectors. The previous implementation returned 10 for every version component and the packed selector. The probe does not launch or contact Riot. Passing it establishes the API correction, not full third-party runtime integrity compatibility.
 
 ## Standalone guest probes
 
