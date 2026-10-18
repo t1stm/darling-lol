@@ -36,6 +36,8 @@ def get_darling_pids():
             if entry.stat().st_uid != uid:
                 continue
             pid = int(entry.name)
+            if pid == os.getpid():
+                continue
             cmdline = (entry / "cmdline").read_bytes()
             if not cmdline:
                 continue
@@ -127,9 +129,13 @@ def main():
     child_proc = subprocess.Popen(cmd)
 
     def sig_handler(signum, frame):
+        signal.signal(signal.SIGINT, signal.SIG_IGN)
+        signal.signal(signal.SIGTERM, signal.SIG_IGN)
         pids = get_darling_pids()
         if pids["league_client"] or pids["league_game"]:
             print("[lifecycle] League match or client is currently active. Ignoring signal to preserve gameplay.", flush=True)
+            signal.signal(signal.SIGINT, sig_handler)
+            signal.signal(signal.SIGTERM, sig_handler)
             return
         perform_clean_shutdown(child_proc)
         sys.exit(0)
