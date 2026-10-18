@@ -1305,6 +1305,674 @@ index 8fecc9d6..1b1a5783 100644
  }
  #endif
  
+diff --git a/AppKit/NSStatusBar.m b/AppKit/NSStatusBar.m
+index a9989e14..55cc7c17 100644
+--- a/AppKit/NSStatusBar.m
++++ b/AppKit/NSStatusBar.m
+@@ -75,13 +75,31 @@ static NSStatusBar *_statusBar = nil;
+     return NO;
+ }
+ - (void) removeStatusItem: (NSStatusItem *) item {
++    [item _removeTrayIcon];
++    [_statusItems removeObjectIdenticalTo: item];
+ }
+ - (NSStatusItem *) statusItemWithLength: (CGFloat) length {
+     NSStatusItem *item = [[NSStatusItem alloc] init];
+     [item setLength: length];
+     [_statusItems addObject: item];
++#ifndef WIN32
++    [item _createTrayIcon];
++#endif
+     return [item autorelease];
+ }
++
++- (void) _dockAllStatusItems {
++    for (NSStatusItem *item in _statusItems) {
++        if ([item respondsToSelector: @selector(_ensureTrayDocked)]) {
++            [item _ensureTrayDocked];
++        }
++    }
++}
++
++- (NSArray *) statusItems {
++    return [[_statusItems copy] autorelease];
++}
++
+ - (CGFloat) thickness {
+ #ifdef WIN32
+     HWND hWnd = FindWindow("Shell_TrayWnd", "");
+@@ -97,8 +115,9 @@ static NSStatusBar *_statusBar = nil;
+         // Fall back to Windows XP's default taskbar height
+         return 30;
+     }
++#else
++    return 24.0;
+ #endif
+-    return 42;
+ }
+ 
+ #ifdef WIN32
+@@ -127,12 +146,10 @@ static NSStatusBar *_statusBar = nil;
+ #endif
+ 
+ - (void) handleApplicationClose {
+-#ifdef WIN32
+     for (int i = 0; i < _statusItems.count; i++) {
+         NSStatusItem *item = [_statusItems objectAtIndex: i];
+         [item _removeTrayIcon];
+     }
+-#endif
+ }
+ 
+ @end
+diff --git a/AppKit/NSStatusItem+Private.h b/AppKit/NSStatusItem+Private.h
+index e954fd7b..535e4c08 100644
+--- a/AppKit/NSStatusItem+Private.h
++++ b/AppKit/NSStatusItem+Private.h
+@@ -23,6 +23,11 @@
+                  intoMenu: (HMENU) menu;
+ HWND _eventhWnd;
+ NOTIFYICONDATA niData;
++#else
++- (void) _createTrayIcon;
++- (void) _removeTrayIcon;
++- (void) _drawTrayIcon;
++- (void) handleTrayXEvent: (void *) eventPtr;
+ #endif
+ - (void) _showContextMenu;
+ @end
+\ No newline at end of file
+diff --git a/AppKit/NSStatusItem.m b/AppKit/NSStatusItem.m
+index eb5c7a40..736a1705 100644
+--- a/AppKit/NSStatusItem.m
++++ b/AppKit/NSStatusItem.m
+@@ -26,12 +26,73 @@ CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE. */
+ #import <AppKit/NSStatusItem+Private.h>
+ #import <AppKit/NSStatusItem.h>
+ #import <AppKit/NSWindow.h>
++#import <AppKit/NSEvent.h>
++#import <AppKit/NSApplication.h>
+ #ifdef WIN32
+ #import <AppKit/NSStatusBar_(Private).h>
+ #import <AppKit/Win32Window.h>
+ #import <Foundation/NSPlatform_win32.h>
++#else
++#import "X11Display.h"
++#import <X11/Xlib.h>
++#import <X11/Xatom.h>
++#import <X11/Xutil.h>
+ #endif
+ 
++@implementation NSStatusBarButton
++
++@synthesize appearsDisabled = _appearsDisabled;
++
++- (instancetype) initWithStatusItem: (NSStatusItem *) statusItem {
++    self = [super initWithFrame: NSMakeRect(0, 0, 24, 24)];
++    if (self) {
++        _statusItem = statusItem;
++    }
++    return self;
++}
++
++- (void) setImage: (NSImage *) image {
++    [super setImage: image];
++    if (_syncingToItem || !_statusItem) return;
++    _syncingToItem = YES;
++    [_statusItem setImage: image];
++    _syncingToItem = NO;
++}
++
++- (void) setTitle: (NSString *) title {
++    [super setTitle: title];
++    if (_syncingToItem || !_statusItem) return;
++    _syncingToItem = YES;
++    [_statusItem setTitle: title];
++    _syncingToItem = NO;
++}
++
++- (void) setTarget: (id) target {
++    [super setTarget: target];
++    if (_syncingToItem || !_statusItem) return;
++    _syncingToItem = YES;
++    [_statusItem setTarget: target];
++    _syncingToItem = NO;
++}
++
++- (void) setAction: (SEL) action {
++    [super setAction: action];
++    if (_syncingToItem || !_statusItem) return;
++    _syncingToItem = YES;
++    [_statusItem setAction: action];
++    _syncingToItem = NO;
++}
++
++- (void) setToolTip: (NSString *) toolTip {
++    [super setToolTip: toolTip];
++    if (_syncingToItem || !_statusItem) return;
++    _syncingToItem = YES;
++    [_statusItem setToolTip: toolTip];
++    _syncingToItem = NO;
++}
++
++@end
++
+ @implementation NSStatusItem
+ 
+ #pragma mark Private Methods
+@@ -258,20 +319,319 @@ CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE. */
+ 
+ #endif
+ 
++#ifndef WIN32
++
++- (void) _ensureTrayDocked {
++    if (_x11TrayWindow == 0) {
++        [self _createTrayIcon];
++        return;
++    }
++    if (_x11TrayDocked) return;
++
++    X11Display *d = (X11Display *) [NSDisplay currentDisplay];
++    Display *dpy = [d display];
++    if (dpy == NULL) return;
++
++    int screen = DefaultScreen(dpy);
++    char tray_atom_name[32];
++    snprintf(tray_atom_name, sizeof(tray_atom_name), "_NET_SYSTEM_TRAY_S%d", screen);
++    Atom tray_atom = XInternAtom(dpy, tray_atom_name, False);
++    Window tray_manager = XGetSelectionOwner(dpy, tray_atom);
++
++    if (tray_manager != None) {
++        XClientMessageEvent dock_ev;
++        memset(&dock_ev, 0, sizeof(dock_ev));
++        dock_ev.type = ClientMessage;
++        dock_ev.window = tray_manager;
++        dock_ev.message_type = XInternAtom(dpy, "_NET_SYSTEM_TRAY_OPCODE", False);
++        dock_ev.format = 32;
++        dock_ev.data.l[0] = CurrentTime;
++        dock_ev.data.l[1] = 0; // SYSTEM_TRAY_REQUEST_DOCK
++        dock_ev.data.l[2] = (Window) _x11TrayWindow;
++        dock_ev.data.l[3] = 0;
++        dock_ev.data.l[4] = 0;
++
++        XSendEvent(dpy, tray_manager, False, StructureNotifyMask, (XEvent *) &dock_ev);
++        XSendEvent(dpy, tray_manager, False, NoEventMask, (XEvent *) &dock_ev);
++        XMapRaised(dpy, (Window) _x11TrayWindow);
++        XSync(dpy, False);
++        _x11TrayDocked = YES;
++    }
++}
++
++- (void) _drawTrayIcon {
++    if (_x11TrayWindow == 0) return;
++    X11Display *d = (X11Display *) [NSDisplay currentDisplay];
++    Display *dpy = [d display];
++    if (dpy == NULL) return;
++
++    if (!_x11TrayDocked) {
++        [self _ensureTrayDocked];
++    }
++
++    Window root_ret;
++    int x_ret = 0, y_ret = 0;
++    unsigned int width = 24, height = 24, border_ret = 0, depth_ret = 24;
++    XGetGeometry(dpy, (Window)_x11TrayWindow, &root_ret, &x_ret, &y_ret,
++                 &width, &height, &border_ret, &depth_ret);
++    if (width == 0 || height == 0) {
++        width = 24;
++        height = 24;
++    }
++
++    CGColorSpaceRef colorSpace = CGColorSpaceCreateDeviceRGB();
++    size_t bytesPerRow = width * 4;
++    CGContextRef context = CGBitmapContextCreate(
++            NULL, width, height, 8, bytesPerRow, colorSpace,
++            kCGImageAlphaPremultipliedFirst | kCGBitmapByteOrder32Host);
++    CGColorSpaceRelease(colorSpace);
++    if (context == NULL) return;
++
++    @autoreleasepool {
++        NSGraphicsContext *graphicsContext =
++                [NSGraphicsContext graphicsContextWithGraphicsPort: context
++                                                           flipped: NO];
++
++        [NSGraphicsContext saveGraphicsState];
++        [NSGraphicsContext setCurrentContext: graphicsContext];
++
++        CGContextClearRect(context, CGRectMake(0, 0, width, height));
++
++        NSImage *img = _image ? _image : [_button image];
++        if (img) {
++            NSSize imgSize = [img size];
++            CGFloat drawW = width;
++            CGFloat drawH = height;
++            if (imgSize.width > 0 && imgSize.height > 0) {
++                CGFloat aspect = imgSize.width / imgSize.height;
++                if (aspect >= 1.0) {
++                    drawH = width / aspect;
++                } else {
++                    drawW = height * aspect;
++                }
++            }
++            CGFloat pad = 2.0;
++            if (drawW > width - pad * 2) drawW = width - pad * 2;
++            if (drawH > height - pad * 2) drawH = height - pad * 2;
++            if (drawW < 1.0) drawW = 1.0;
++            if (drawH < 1.0) drawH = 1.0;
++
++            NSRect drawRect = NSMakeRect((width - drawW) / 2.0,
++                                         (height - drawH) / 2.0,
++                                         drawW, drawH);
++            [img drawInRect: drawRect
++                   fromRect: NSZeroRect
++                  operation: NSCompositeSourceOver
++                   fraction: 1.0];
++        }
++
++        [NSGraphicsContext restoreGraphicsState];
++    }
++
++    const uint8_t *rowBytes = CGBitmapContextGetData(context);
++    int screen = DefaultScreen(dpy);
++    Visual *visual = DefaultVisual(dpy, screen);
++
++    XImage *ximage = XCreateImage(dpy, visual, depth_ret, ZPixmap, 0,
++                                  (char *)rowBytes, width, height, 32, bytesPerRow);
++    if (ximage) {
++        GC gc = XCreateGC(dpy, (Window)_x11TrayWindow, 0, NULL);
++        XPutImage(dpy, (Window)_x11TrayWindow, gc, ximage, 0, 0, 0, 0, width, height);
++        XFreeGC(dpy, gc);
++        ximage->data = NULL;
++        XDestroyImage(ximage);
++    }
++
++    CGContextRelease(context);
++    XFlush(dpy);
++}
++
++- (void) _createTrayIcon {
++    if (_x11TrayWindow != 0) {
++        [self _ensureTrayDocked];
++        return;
++    }
++    X11Display *d = (X11Display *) [NSDisplay currentDisplay];
++    Display *dpy = [d display];
++    if (dpy == NULL) return;
++
++    int screen = DefaultScreen(dpy);
++
++    XSetWindowAttributes attr;
++    memset(&attr, 0, sizeof(attr));
++    attr.background_pixel = 0;
++    attr.event_mask = ExposureMask | ButtonPressMask | ButtonReleaseMask |
++                      EnterWindowMask | LeaveWindowMask | StructureNotifyMask;
++
++    Window root = DefaultRootWindow(dpy);
++    Window tray_win = XCreateWindow(dpy, root, 0, 0, 24, 24, 0,
++                                    CopyFromParent, InputOutput, CopyFromParent,
++                                    CWBackPixel | CWEventMask, &attr);
++    if (tray_win == 0) return;
++
++    _x11TrayWindow = (unsigned long) tray_win;
++
++    long xembed_info[2] = { 0, 1 };
++    Atom xembed_atom = XInternAtom(dpy, "_XEMBED_INFO", False);
++    XChangeProperty(dpy, tray_win, xembed_atom, xembed_atom, 32, PropModeReplace,
++                    (unsigned char *) xembed_info, 2);
++
++    const char *name = _toolTip ? [_toolTip UTF8String] : (_title ? [_title UTF8String] : "DarlingTray");
++    XStoreName(dpy, tray_win, name);
++    XChangeProperty(dpy, tray_win, XInternAtom(dpy, "_NET_WM_NAME", False),
++                    XInternAtom(dpy, "UTF8_STRING", False), 8, PropModeReplace,
++                    (const unsigned char *) name, strlen(name));
++
++    [d setWindow: self forID: (XID) tray_win];
++
++    [self _ensureTrayDocked];
++    [self _drawTrayIcon];
++}
++
++- (void) _removeTrayIcon {
++    if (_x11TrayWindow != 0) {
++        X11Display *d = (X11Display *) [NSDisplay currentDisplay];
++        Display *dpy = [d display];
++        if (dpy) {
++            [d setWindow: nil forID: (XID) _x11TrayWindow];
++            XDestroyWindow(dpy, (Window) _x11TrayWindow);
++            XFlush(dpy);
++        }
++        _x11TrayWindow = 0;
++        _x11TrayDocked = NO;
++    }
++}
++
++- (void) _toggleAppWindows {
++    [NSApp activateIgnoringOtherApps: YES];
++    NSArray *windows = [NSApp windows];
++    BOOL anyVisible = NO;
++    for (NSWindow *w in windows) {
++        if ([w isVisible] && ![w isMiniaturized]) {
++            anyVisible = YES;
++            break;
++        }
++    }
++    for (NSWindow *w in windows) {
++        if (anyVisible) {
++            [w orderOut: nil];
++        } else {
++            if ([w isMiniaturized]) {
++                [w deminiaturize: nil];
++            }
++            [w makeKeyAndOrderFront: nil];
++        }
++    }
++}
++
++- (void) handleTrayXEvent: (void *) eventPtr {
++    XEvent *ev = (XEvent *) eventPtr;
++    X11Display *d = (X11Display *) [NSDisplay currentDisplay];
++    Display *dpy = [d display];
++
++    switch (ev->type) {
++    case Expose:
++        if (ev->xexpose.count == 0) {
++            [self _drawTrayIcon];
++        }
++        break;
++
++    case ConfigureNotify:
++    case ReparentNotify:
++        if (dpy && _x11TrayWindow != 0) {
++            XMapWindow(dpy, (Window) _x11TrayWindow);
++        }
++        [self _drawTrayIcon];
++        break;
++
++    case ClientMessage:
++        if (dpy) {
++            Atom xembed = XInternAtom(dpy, "_XEMBED", False);
++            if (ev->xclient.message_type == xembed) {
++                long message = ev->xclient.data.l[1];
++                if (message == 0 /* XEMBED_EMBEDDED_NOTIFY */) {
++                    _x11TrayDocked = YES;
++                    if (_x11TrayWindow != 0) {
++                        XMapWindow(dpy, (Window) _x11TrayWindow);
++                    }
++                    [self _drawTrayIcon];
++                }
++            }
++        }
++        break;
++
++    case ButtonRelease:
++        if (ev->xbutton.button == Button1) {
++            SEL act = _action;
++            id tgt = _target;
++            if (!act && _button) {
++                act = [_button action];
++                tgt = [_button target];
++            }
++            if (act) {
++                id sender = _button ? (id) _button : (id) self;
++                [NSApp sendAction: act to: tgt from: sender];
++            } else if (_menu) {
++                [self _showContextMenu];
++            } else {
++                [self _toggleAppWindows];
++            }
++        } else if (ev->xbutton.button == Button3) {
++            if (_menu) {
++                [self _showContextMenu];
++            } else {
++                SEL act = _action;
++                id tgt = _target;
++                if (!act && _button) {
++                    act = [_button action];
++                    tgt = [_button target];
++                }
++                if (act) {
++                    id sender = _button ? (id) _button : (id) self;
++                    [NSApp sendAction: act to: tgt from: sender];
++                }
++            }
++        }
++        break;
++
++    default:
++        break;
++    }
++}
++
++#endif
++
+ #pragma mark Public Methods
+ 
+ - (id) init {
+     self = [super init];
+     if (self) {
++        _enabled = YES;
+ #ifdef WIN32
+         _trayIcon = NULL;
+         _trayIconID = -1;
+         _win32Menu = NULL;
++#else
++        _x11TrayWindow = 0;
++        _x11TrayDocked = NO;
+ #endif
+     }
+     return self;
+ }
+ 
++- (void) dealloc {
++    [self _removeTrayIcon];
++    [_image release];
++    [_alternateImage release];
++    [_title release];
++    [_atrTitle release];
++    [_view release];
++    [_menu release];
++    [_toolTip release];
++    [_button release];
++    [super dealloc];
++}
++
+ - (NSStatusBar *) statusBar {
+     return [NSStatusBar systemStatusBar];
+ }
+@@ -281,6 +641,11 @@ CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE. */
+ }
+ - (void) setAction: (SEL) action {
+     _action = action;
++    if (_button && !_syncingButton && [_button action] != _action) {
++        _syncingButton = YES;
++        [_button setAction: _action];
++        _syncingButton = NO;
++    }
+ }
+ - (SEL) doubleAction {
+     return _doubleAction;
+@@ -293,6 +658,11 @@ CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE. */
+ }
+ - (void) setTarget: (id) target {
+     _target = target;
++    if (_button && !_syncingButton && [_button target] != _target) {
++        _syncingButton = YES;
++        [_button setTarget: _target];
++        _syncingButton = NO;
++    }
+ }
+ 
+ - (NSImage *) image {
+@@ -307,7 +677,18 @@ CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE. */
+     if (_trayIconID <= -1) {
+         [self _createTrayIcon];
+     }
++#else
++    if (_x11TrayWindow == 0) {
++        [self _createTrayIcon];
++    } else {
++        [self _drawTrayIcon];
++    }
+ #endif
++    if (_button && !_syncingButton && [_button image] != _image) {
++        _syncingButton = YES;
++        [_button setImage: _image];
++        _syncingButton = NO;
++    }
+ }
+ - (NSImage *) alternateImage {
+     return _alternateImage;
+@@ -328,10 +709,48 @@ CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE. */
+     [_title release];
+     _title = nil;
+     _title = [title copy];
++    if (_x11TrayWindow == 0) {
++        [self _createTrayIcon];
++    } else {
++        [self _drawTrayIcon];
++    }
+ #endif
++    if (_button && !_syncingButton && ![[_button title] isEqualToString: _title]) {
++        _syncingButton = YES;
++        [_button setTitle: _title];
++        _syncingButton = NO;
++    }
++}
++
++- (NSString *) toolTip {
++    return _toolTip;
+ }
++
+ - (void) setToolTip: (NSString *) toolTip {
++    [_toolTip release];
++    _toolTip = [toolTip copy];
++#ifndef WIN32
++    if (_x11TrayWindow != 0) {
++        X11Display *d = (X11Display *) [NSDisplay currentDisplay];
++        Display *dpy = [d display];
++        if (dpy) {
++            const char *name = _toolTip ? [_toolTip UTF8String] : "";
++            XStoreName(dpy, (Window)_x11TrayWindow, name);
++            XChangeProperty(dpy, (Window)_x11TrayWindow,
++                            XInternAtom(dpy, "_NET_WM_NAME", False),
++                            XInternAtom(dpy, "UTF8_STRING", False), 8, PropModeReplace,
++                            (const unsigned char *) name, strlen(name));
++            XFlush(dpy);
++        }
++    }
++#endif
++    if (_button && !_syncingButton && ![[_button toolTip] isEqualToString: _toolTip]) {
++        _syncingButton = YES;
++        [_button setToolTip: _toolTip];
++        _syncingButton = NO;
++    }
+ }
++
+ - (NSAttributedString *) attributedTitle {
+     return _atrTitle;
+ }
+@@ -350,7 +769,6 @@ CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE. */
+     [_view release];
+     _view = nil;
+     _view = [view copy];
+-    // Start capture timer
+ }
+ 
+ - (BOOL) highlightMode {
+@@ -371,21 +789,20 @@ CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE. */
+ #ifdef WIN32
+     int traySizeX = GetSystemMetrics(SM_CXSMICON);
+     int traySizeY = GetSystemMetrics(SM_CYSMICON);
+-    // Make sure we return a value that will ensure icon will not be clipped
+-    // with non-standard tray icon sizes
+-    NSLog(@"X:%d Y:%d", traySizeX, traySizeY);
+     if (traySizeX > traySizeY) {
+         return traySizeY;
+     } else {
+         return traySizeX;
+     }
+-#endif
++#else
++    if (_length <= 0) {
++        return 24.0;
++    }
+     return _length;
++#endif
+ }
+ - (void) setLength: (CGFloat) len {
+-#ifndef WIN32
+     _length = len;
+-#endif
+ }
+ 
+ - (NSMenu *) menu {
+@@ -411,7 +828,54 @@ CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE. */
+ #endif
+ }
+ 
++- (NSStatusBarButton *) button {
++    if (_button == nil) {
++        _button = [[NSStatusBarButton alloc] initWithStatusItem: self];
++        _syncingButton = YES;
++        if (_image) [_button setImage: _image];
++        if (_title) [_button setTitle: _title];
++        if (_target) [_button setTarget: _target];
++        if (_action) [_button setAction: _action];
++        if (_toolTip) [_button setToolTip: _toolTip];
++        _syncingButton = NO;
++#ifndef WIN32
++        if (_x11TrayWindow == 0) {
++            [self _createTrayIcon];
++        }
++#endif
++    }
++    return _button;
++}
++
+ - (void) popUpStatusItemMenu: (NSMenu *) menu {
++    if (menu == nil) return;
++#ifndef WIN32
++    X11Display *d = (X11Display *) [NSDisplay currentDisplay];
++    Display *dpy = [d display];
++    if (dpy == NULL) return;
++
++    Window root_ret, child_ret;
++    int root_x = 0, root_y = 0, win_x = 0, win_y = 0;
++    unsigned int mask_ret = 0;
++    XQueryPointer(dpy, DefaultRootWindow(dpy), &root_ret, &child_ret,
++                  &root_x, &root_y, &win_x, &win_y, &mask_ret);
++
++    NSRect mouseRect = NSMakeRect(root_x, root_y, 1, 1);
++    NSRect cocoaRect = [d frameForRootRect: mouseRect];
++    NSPoint mouseLoc = cocoaRect.origin;
++
++    NSEvent *event = [NSEvent mouseEventWithType: NSRightMouseDown
++                                        location: mouseLoc
++                                   modifierFlags: 0
++                                       timestamp: [NSDate timeIntervalSinceReferenceDate]
++                                    windowNumber: 0
++                                         context: [NSGraphicsContext currentContext]
++                                     eventNumber: 0
++                                      clickCount: 1
++                                        pressure: 1.0];
++
++    [NSMenu popUpContextMenu: menu withEvent: event forView: nil];
++#endif
+ }
+ 
+ - (void) _showContextMenu {
+@@ -426,6 +890,10 @@ CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE. */
+     } else {
+         NSLog(@"win32Menu is null!");
+     }
++#else
++    if (_menu) {
++        [self popUpStatusItemMenu: _menu];
++    }
+ #endif
+ }
+ 
 diff --git a/AppKit/NSTextInput.m b/AppKit/NSTextInput.m
 index 9177a986..9c3c5ca3 100644
 --- a/AppKit/NSTextInput.m
@@ -1431,7 +2099,7 @@ index c3f5d056..dbd93174 100644
          @"NSTouchBarItemIdentifierCharacterPicker";
  
 diff --git a/AppKit/NSView.m b/AppKit/NSView.m
-index 8ac2bbdc..08197fbc 100644
+index 8ac2bbdc..03b32e54 100644
 --- a/AppKit/NSView.m
 +++ b/AppKit/NSView.m
 @@ -46,6 +46,12 @@ CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE. */
@@ -1455,7 +2123,18 @@ index 8ac2bbdc..08197fbc 100644
  @end
  
  @implementation NSView
-@@ -955,6 +962,54 @@ static inline void buildTransformsIfNeeded(NSView *self) {
+@@ -790,6 +797,10 @@ static inline void buildTransformsIfNeeded(NSView *self) {
+             [self viewDidHide];
+         else
+             [self viewDidUnhide];
++
++        if ([_window respondsToSelector: @selector(updateDecorationsForStandardWindowButtons)]) {
++            [_window updateDecorationsForStandardWindowButtons];
++        }
+     }
+ }
+ 
+@@ -955,6 +966,54 @@ static inline void buildTransformsIfNeeded(NSView *self) {
              CGPointApplyAffineTransform(point, toWindow), fromWindow);
  }
  
@@ -1510,7 +2189,7 @@ index 8ac2bbdc..08197fbc 100644
  - (NSSize) convertSize: (NSSize) size fromView: (NSView *) viewOrNil {
      NSView *fromView =
              (viewOrNil != nil) ? viewOrNil : [[self window] _backgroundView];
-@@ -1029,6 +1084,16 @@ static inline void buildTransformsIfNeeded(NSView *self) {
+@@ -1029,6 +1088,16 @@ static inline void buildTransformsIfNeeded(NSView *self) {
  }
  
  - (void) setFrame: (NSRect) frame {
@@ -1527,7 +2206,7 @@ index 8ac2bbdc..08197fbc 100644
      // Cocoa does not post the notification if the frames are equal
      // Possible that resizeSubviewsWithOldSize is not called if the sizes are
      // equal
-@@ -1052,6 +1117,12 @@ static inline void buildTransformsIfNeeded(NSView *self) {
+@@ -1052,6 +1121,12 @@ static inline void buildTransformsIfNeeded(NSView *self) {
      }
      _frame = frame;
  
@@ -1540,7 +2219,7 @@ index 8ac2bbdc..08197fbc 100644
      [_window invalidateCursorRectsForView: self]; // this also invalidates
                                                    // tracking areas
  
-@@ -1068,6 +1139,14 @@ static inline void buildTransformsIfNeeded(NSView *self) {
+@@ -1068,6 +1143,14 @@ static inline void buildTransformsIfNeeded(NSView *self) {
  
      invalidateTransform(self);
  
@@ -1555,7 +2234,7 @@ index 8ac2bbdc..08197fbc 100644
      if (_postsNotificationOnFrameChange)
          [[NSNotificationCenter defaultCenter]
                  postNotificationName: NSViewFrameDidChangeNotification
-@@ -1078,14 +1157,14 @@ static inline void buildTransformsIfNeeded(NSView *self) {
+@@ -1078,14 +1161,14 @@ static inline void buildTransformsIfNeeded(NSView *self) {
      NSRect frame = _frame;
  
      frame.size = size;
@@ -1572,7 +2251,7 @@ index 8ac2bbdc..08197fbc 100644
  }
  
  - (void) setFrameRotation: (CGFloat) angle {
-@@ -1100,6 +1179,7 @@ static inline void buildTransformsIfNeeded(NSView *self) {
+@@ -1100,6 +1183,7 @@ static inline void buildTransformsIfNeeded(NSView *self) {
      if (!NSEqualRects(bounds, _bounds)) {
          _bounds = bounds;
          invalidateTransform(self);
@@ -1580,7 +2259,7 @@ index 8ac2bbdc..08197fbc 100644
  
          [_window invalidateCursorRectsForView: self]; // this also invalidates
                                                        // tracking areas
-@@ -1254,7 +1334,11 @@ static inline void buildTransformsIfNeeded(NSView *self) {
+@@ -1254,7 +1338,11 @@ static inline void buildTransformsIfNeeded(NSView *self) {
                   (NSComparisonResult (*)(id, id, void *)) compareFunction
                             context: (void *) context
  {
@@ -1593,7 +2272,7 @@ index 8ac2bbdc..08197fbc 100644
  }
  
  - (void) didAddSubview: (NSView *) subview {
-@@ -1511,8 +1595,16 @@ static inline void buildTransformsIfNeeded(NSView *self) {
+@@ -1511,8 +1599,16 @@ static inline void buildTransformsIfNeeded(NSView *self) {
  }
  
  - (NSTextInputContext *) inputContext {
@@ -1612,7 +2291,7 @@ index 8ac2bbdc..08197fbc 100644
  }
  
  - (void) registerForDraggedTypes: (NSArray *) types {
-@@ -1819,15 +1911,21 @@ static inline void buildTransformsIfNeeded(NSView *self) {
+@@ -1819,15 +1915,21 @@ static inline void buildTransformsIfNeeded(NSView *self) {
  
  - (void) _createLayerContextIfNeeded {
      if ([_superview layer] == nil) {
@@ -1636,7 +2315,7 @@ index 8ac2bbdc..08197fbc 100644
      [[_superview layer] addSublayer: _layer];
      [self _createLayerContextIfNeeded];
  }
-@@ -1905,6 +2003,7 @@ static inline void buildTransformsIfNeeded(NSView *self) {
+@@ -1905,6 +2007,7 @@ static inline void buildTransformsIfNeeded(NSView *self) {
              [[_superview layer] replaceSublayer: _layer with: value];
              [_layer release];
              _layer = value;
@@ -1645,7 +2324,7 @@ index 8ac2bbdc..08197fbc 100644
  
          [_subviews
 diff --git a/AppKit/NSWindow.m b/AppKit/NSWindow.m
-index d545120a..1ed1895a 100644
+index d545120a..847b6e15 100644
 --- a/AppKit/NSWindow.m
 +++ b/AppKit/NSWindow.m
 @@ -45,6 +45,21 @@ CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE. */
@@ -1787,7 +2466,7 @@ index d545120a..1ed1895a 100644
  
      if (didSize) {
          [self resetCursorRects];
-@@ -1025,7 +1094,34 @@ static BOOL _allowsAutomaticWindowTabbing;
+@@ -1025,7 +1094,43 @@ static BOOL _allowsAutomaticWindowTabbing;
  }
  
  - (void) setMovable: (BOOL) movable {
@@ -1805,7 +2484,16 @@ index d545120a..1ed1895a 100644
 +        FILE *trace=fopen("/tmp/rclol-window-drag.log","a");
 +        if(trace) {fprintf(trace,"DRAG pid=%d movable=%d type=%ld\n",getpid(),_isMovable,(long)[event type]);fclose(trace);}
 +    }
-+    if (!_isMovable || [event type] != NSLeftMouseDown) return;
++    if (!_isMovable) return;
++    if (event == nil) event = [NSApp currentEvent];
++
++    if ([_platformWindow respondsToSelector: @selector(beginWindowDragWithEvent:)]) {
++        if ([(id) _platformWindow beginWindowDragWithEvent: event]) {
++            return;
++        }
++    }
++
++    if ([event type] != NSLeftMouseDown && [event type] != NSLeftMouseDragged) return;
 +    /* darling-lol: follow the pointer in absolute screen coordinates. The window-relative location of every drag event is
 +     * measured against where the window really is, which lags behind setFrameOrigin: (the compositor moves the window
 +     * later), so converting it back with the new frame fed the lag into the next position and the window jumped (League's
@@ -1823,7 +2511,7 @@ index d545120a..1ed1895a 100644
  }
  
  - (void) setBackingType: (NSBackingStoreType) value {
-@@ -1234,6 +1330,7 @@ static BOOL _allowsAutomaticWindowTabbing;
+@@ -1234,6 +1339,7 @@ static BOOL _allowsAutomaticWindowTabbing;
  
  - (void) setIgnoresMouseEvents: (BOOL) value {
      _ignoresMouseEvents = value;
@@ -1831,7 +2519,7 @@ index d545120a..1ed1895a 100644
  }
  
  - (void) setAspectRatio: (NSSize) value {
-@@ -1413,8 +1510,14 @@ static BOOL _allowsAutomaticWindowTabbing;
+@@ -1413,8 +1519,34 @@ static BOOL _allowsAutomaticWindowTabbing;
  }
  
  - (NSButton *) standardWindowButton: (NSWindowButton) value {
@@ -1845,10 +2533,30 @@ index d545120a..1ed1895a 100644
 +		[_standardWindowButtons[value] setBordered: NO];
 +	}
 +	return _standardWindowButtons[value];
++}
++
++- (BOOL) areStandardWindowButtonsHidden {
++    BOOL anyCreated = NO;
++    for (int i = 0; i < 3; i++) {
++        if (_standardWindowButtons[i] != nil) {
++            anyCreated = YES;
++            if (![_standardWindowButtons[i] isHidden])
++                return NO;
++        }
++    }
++    return anyCreated;
++}
++
++- (void) updateDecorationsForStandardWindowButtons {
++    if ([self areStandardWindowButtonsHidden]) {
++        if ([_platformWindow respondsToSelector: @selector(updateDecorations)]) {
++            [(id) _platformWindow updateDecorations];
++        }
++    }
  }
  
  - (NSButtonCell *) defaultButtonCell {
-@@ -1425,6 +1528,17 @@ static BOOL _allowsAutomaticWindowTabbing;
+@@ -1425,6 +1557,17 @@ static BOOL _allowsAutomaticWindowTabbing;
      return [_sheetContext sheet];
  }
  
@@ -1866,7 +2574,7 @@ index d545120a..1ed1895a 100644
  - (id) windowController {
      return _windowController;
  }
-@@ -1511,10 +1625,7 @@ static BOOL _allowsAutomaticWindowTabbing;
+@@ -1511,10 +1654,7 @@ static BOOL _allowsAutomaticWindowTabbing;
      return [_platformWindow isMiniaturized];
  }
  
@@ -1878,7 +2586,7 @@ index d545120a..1ed1895a 100644
  
  - (BOOL) inLiveResize {
      return _isInLiveResize;
-@@ -1561,6 +1672,127 @@ static BOOL _allowsAutomaticWindowTabbing;
+@@ -1561,6 +1701,127 @@ static BOOL _allowsAutomaticWindowTabbing;
      return point;
  }
  
@@ -2006,7 +2714,7 @@ index d545120a..1ed1895a 100644
  - (NSRect) frameRectForContentRect: (NSRect) contentRect {
      // hasMainMenu is an instance method so we can't just use the class method
      //  frameRectForContentRect:styleMask:
-@@ -1580,6 +1812,10 @@ static BOOL _allowsAutomaticWindowTabbing;
+@@ -1580,6 +1841,10 @@ static BOOL _allowsAutomaticWindowTabbing;
  }
  
  - (NSRect) contentRectForFrameRect: (NSRect) frameRect {
@@ -2017,7 +2725,7 @@ index d545120a..1ed1895a 100644
      NSRect result = [[NSDisplay currentDisplay] insetRect: frameRect
                             forNativeWindowBorderWithStyle: [self styleMask]];
  
-@@ -2155,6 +2391,7 @@ static BOOL _allowsAutomaticWindowTabbing;
+@@ -2155,6 +2420,7 @@ static BOOL _allowsAutomaticWindowTabbing;
  - (void) orderWindow: (NSWindowOrderingMode) place
            relativeTo: (NSInteger) relativeTo
  {
@@ -2025,7 +2733,7 @@ index d545120a..1ed1895a 100644
      // The move notifications are sent under unknown conditions around
      // orderFront: in the Apple AppKit, we do them all the time here until it's
      // figured out. I suspect it is a side effect of off-screen windows being at
-@@ -2208,6 +2445,8 @@ static BOOL _allowsAutomaticWindowTabbing;
+@@ -2208,6 +2474,8 @@ static BOOL _allowsAutomaticWindowTabbing;
          break;
      }
  
@@ -2034,7 +2742,7 @@ index d545120a..1ed1895a 100644
      [self postNotificationName: NSWindowDidMoveNotification];
  }
  
-@@ -2257,6 +2496,12 @@ static BOOL _allowsAutomaticWindowTabbing;
+@@ -2257,6 +2525,12 @@ static BOOL _allowsAutomaticWindowTabbing;
  }
  
  - (void) sendEvent: (NSEvent *) event {
@@ -2047,7 +2755,7 @@ index d545120a..1ed1895a 100644
      // Some events can cause our window to be destroyed
      // So make sure self lives at least through this current run loop...
      [[self retain] autorelease];
-@@ -2300,6 +2545,10 @@ static BOOL _allowsAutomaticWindowTabbing;
+@@ -2300,6 +2574,10 @@ static BOOL _allowsAutomaticWindowTabbing;
  
      case NSLeftMouseDown: {
          NSView *view = [_backgroundView hitTest: [event locationInWindow]];
@@ -2058,7 +2766,7 @@ index d545120a..1ed1895a 100644
  
          if ([view acceptsFirstResponder]) {
              if ([view needsPanelToBecomeKey]) {
-@@ -2307,6 +2556,27 @@ static BOOL _allowsAutomaticWindowTabbing;
+@@ -2307,6 +2585,27 @@ static BOOL _allowsAutomaticWindowTabbing;
              }
          }
  
@@ -2086,7 +2794,7 @@ index d545120a..1ed1895a 100644
          // Event goes to view, not first responder.
          [view mouseDown: event];
          _mouseDownLocationInWindow = [event locationInWindow];
-@@ -2330,6 +2600,31 @@ static BOOL _allowsAutomaticWindowTabbing;
+@@ -2330,6 +2629,31 @@ static BOOL _allowsAutomaticWindowTabbing;
          _mouseDownLocationInWindow = NSMakePoint(NAN, NAN);
          break;
  
@@ -2118,7 +2826,7 @@ index d545120a..1ed1895a 100644
      case NSMouseMoved: {
          NSView *hit = [_backgroundView hitTest: [event locationInWindow]];
  
-@@ -2536,6 +2831,7 @@ static BOOL _allowsAutomaticWindowTabbing;
+@@ -2536,6 +2860,7 @@ static BOOL _allowsAutomaticWindowTabbing;
      } else {
          [[self platformWindow] hideWindow];
      }
@@ -2126,7 +2834,7 @@ index d545120a..1ed1895a 100644
  }
  
  - (void) orderFront: (id) sender {
-@@ -3064,6 +3360,13 @@ static BOOL _allowsAutomaticWindowTabbing;
+@@ -3064,6 +3389,13 @@ static BOOL _allowsAutomaticWindowTabbing;
      if (didSize) {
          // Don't redraw everything unless we really have to.
          [_backgroundView setFrameSize: _frame.size];
@@ -2140,7 +2848,7 @@ index d545120a..1ed1895a 100644
          [_backgroundView setNeedsDisplay: YES];
          [self resetCursorRects];
          [self saveFrameUsingName: _autosaveFrameName];
-@@ -3260,8 +3563,7 @@ static BOOL _allowsAutomaticWindowTabbing;
+@@ -3260,8 +3592,7 @@ static BOOL _allowsAutomaticWindowTabbing;
                  mouseWasInside && !mouseIsInside) {
                  [exited addObject: area];
              }
@@ -2150,7 +2858,7 @@ index d545120a..1ed1895a 100644
                  [moved addObject: area];
              }
              if (options & NSTrackingCursorUpdate && !mouseWasInside &&
-@@ -3459,7 +3761,7 @@ static BOOL _allowsAutomaticWindowTabbing;
+@@ -3459,7 +3790,7 @@ static BOOL _allowsAutomaticWindowTabbing;
  }
  
  - (CGSubWindow *) _createSubWindowWithFrame: (CGRect) frame {
@@ -2420,10 +3128,18 @@ index 18189404..12cde429 100644
 +- (NSRect) frameForRootRect: (NSRect) rect;
  @end
 diff --git a/AppKit/X11.backend/X11Display.m b/AppKit/X11.backend/X11Display.m
-index 5ae29bf4..a4e7095b 100644
+index 5ae29bf4..c0dda032 100644
 --- a/AppKit/X11.backend/X11Display.m
 +++ b/AppKit/X11.backend/X11Display.m
-@@ -48,12 +48,271 @@
+@@ -39,6 +39,7 @@
+ #import <AppKit/NSImage.h>
+ #import <AppKit/NSRaise.h>
+ #import <AppKit/NSWindow.h>
++#import <AppKit/NSStatusBar.h>
+ 
+ #import <Onyx2D/O2Font_freetype.h>
+ 
+@@ -48,12 +49,271 @@
  #import "X11KeySymToUCS.h"
  #import <X11/XKBlib.h>
  #import <X11/Xutil.h>
@@ -2695,7 +3411,7 @@ index 5ae29bf4..a4e7095b 100644
  
  void NSColorSetCatalogColor(NSColorListName catalogName, NSColorName colorName, NSColor *color);
  
-@@ -75,6 +334,15 @@ static void socketCallback(CFSocketRef s, CFSocketCallBackType type,
+@@ -75,6 +335,15 @@ static void socketCallback(CFSocketRef s, CFSocketCallBackType type,
  - init {
      if (self = [super init]) {
  
@@ -2711,10 +3427,11 @@ index 5ae29bf4..a4e7095b 100644
          _display = XOpenDisplay(NULL);
  
          if (_display == NULL) {
-@@ -136,6 +404,10 @@ static void socketCallback(CFSocketRef s, CFSocketCallBackType type,
+@@ -136,6 +405,11 @@ static void socketCallback(CFSocketRef s, CFSocketCallBackType type,
          if (XRRQueryExtension(_display, &_rrEventBase, &errorBase)) {
              XRRSelectInput(_display, DefaultRootWindow(_display), RRScreenChangeNotifyMask | RRCrtcChangeNotifyMask | RROutputChangeNotifyMask | RROutputPropertyNotifyMask);
          }
++        XSelectInput(_display, DefaultRootWindow(_display), StructureNotifyMask | PropertyChangeMask);
 +        /* Xwayland forwards pointer warps to the compositor only while the X cursor is hidden. */
 +        int xwaylandOpcode, xwaylandEvent, xwaylandError;
 +        _isXwayland = XQueryExtension(_display, "XWAYLAND", &xwaylandOpcode, &xwaylandEvent, &xwaylandError);
@@ -2722,7 +3439,7 @@ index 5ae29bf4..a4e7095b 100644
  
          lastFocusedWindow = nil;
          lastClickTimeStamp = 0.0;
-@@ -145,17 +417,21 @@ static void socketCallback(CFSocketRef s, CFSocketCallBackType type,
+@@ -145,17 +419,21 @@ static void socketCallback(CFSocketRef s, CFSocketCallBackType type,
  }
  
  - (void) dealloc {
@@ -2747,7 +3464,7 @@ index 5ae29bf4..a4e7095b 100644
      if (_cfSocket != NULL)
          CFRelease(_cfSocket);
  #endif
-@@ -172,6 +448,56 @@ static void socketCallback(CFSocketRef s, CFSocketCallBackType type,
+@@ -172,6 +450,56 @@ static void socketCallback(CFSocketRef s, CFSocketCallBackType type,
      return _display;
  }
  
@@ -2804,7 +3521,7 @@ index 5ae29bf4..a4e7095b 100644
  - (void) _enableDetectableAutoRepeat {
      int major = XkbMajorVersion, minor = XkbMinorVersion;
      XkbStateRec state;
-@@ -190,6 +516,35 @@ static void socketCallback(CFSocketRef s, CFSocketCallBackType type,
+@@ -190,6 +518,35 @@ static void socketCallback(CFSocketRef s, CFSocketCallBackType type,
          [_lastScreens release];
          _lastScreens = nil;
      }
@@ -2840,7 +3557,7 @@ index 5ae29bf4..a4e7095b 100644
  }
  
  - (NSArray *) screens {
-@@ -201,25 +556,60 @@ static void socketCallback(CFSocketRef s, CFSocketCallBackType type,
+@@ -201,25 +558,60 @@ static void socketCallback(CFSocketRef s, CFSocketCallBackType type,
  
      int eventBase, errorBase;
  
@@ -2911,7 +3628,7 @@ index 5ae29bf4..a4e7095b 100644
  
                  nsscreen =
                          [[[NSScreen alloc] initWithFrame: frame
-@@ -228,18 +618,17 @@ static void socketCallback(CFSocketRef s, CFSocketCallBackType type,
+@@ -228,18 +620,17 @@ static void socketCallback(CFSocketRef s, CFSocketCallBackType type,
                  Atom actualType;
                  unsigned long nitems, bytesAfter;
                  int actualFormat;
@@ -2933,7 +3650,7 @@ index 5ae29bf4..a4e7095b 100644
              } else {
                  nsscreen = [[[NSScreen alloc] initWithFrame: NSZeroRect
                                                 visibleFrame: NSZeroRect]
-@@ -247,25 +636,35 @@ static void socketCallback(CFSocketRef s, CFSocketCallBackType type,
+@@ -247,25 +638,35 @@ static void socketCallback(CFSocketRef s, CFSocketCallBackType type,
              }
              [nsscreen setCgDirectDisplayID: (i + 1)];
  
@@ -2980,7 +3697,7 @@ index 5ae29bf4..a4e7095b 100644
  }
  
  static NSDictionary *modeInfoToDictionary(const XRRModeInfo *mi, int depth) {
-@@ -536,12 +935,109 @@ static NSDictionary *modeInfoToDictionary(const XRRModeInfo *mi, int depth) {
+@@ -536,12 +937,109 @@ static NSDictionary *modeInfoToDictionary(const XRRModeInfo *mi, int depth) {
      return &layout->layout;
  }
  
@@ -3092,7 +3809,7 @@ index 5ae29bf4..a4e7095b 100644
  }
  
  - (NSPasteboard *) pasteboardWithName: (NSString *) name {
-@@ -675,6 +1171,15 @@ static NSDictionary *modeInfoToDictionary(const XRRModeInfo *mi, int depth) {
+@@ -675,6 +1173,15 @@ static NSDictionary *modeInfoToDictionary(const XRRModeInfo *mi, int depth) {
                                      blue: 0.60f
                                      alpha: 1.0f];
  
@@ -3108,7 +3825,7 @@ index 5ae29bf4..a4e7095b 100644
      NSLog(@"missing color for %@", colorName);
      return [NSColor redColor];
  }
-@@ -688,6 +1193,10 @@ static NSDictionary *modeInfoToDictionary(const XRRModeInfo *mi, int depth) {
+@@ -688,6 +1195,10 @@ static NSDictionary *modeInfoToDictionary(const XRRModeInfo *mi, int depth) {
  }
  
  - (void) hideCursor {
@@ -3119,7 +3836,7 @@ index 5ae29bf4..a4e7095b 100644
      if (!_blankCursor)
          _blankCursor = [[X11Cursor alloc] initBlank];
      [self setCursor: _blankCursor];
-@@ -695,6 +1204,10 @@ static NSDictionary *modeInfoToDictionary(const XRRModeInfo *mi, int depth) {
+@@ -695,6 +1206,10 @@ static NSDictionary *modeInfoToDictionary(const XRRModeInfo *mi, int depth) {
  
  - (void) unhideCursor {
      NSCursor *current = [NSCursor currentCursor];
@@ -3130,7 +3847,7 @@ index 5ae29bf4..a4e7095b 100644
      if (current != nil) {
          [current push];
          [current pop];
-@@ -747,12 +1260,28 @@ static NSDictionary *modeInfoToDictionary(const XRRModeInfo *mi, int depth) {
+@@ -747,12 +1262,28 @@ static NSDictionary *modeInfoToDictionary(const XRRModeInfo *mi, int depth) {
  
  - (void) setCursor: (id) cursor {
      CGWindow *window = [[NSApp keyWindow] platformWindow];
@@ -3164,7 +3881,7 @@ index 5ae29bf4..a4e7095b 100644
      }
  }
  
-@@ -921,15 +1450,22 @@ static NSDictionary *modeInfoToDictionary(const XRRModeInfo *mi, int depth) {
+@@ -921,15 +1452,22 @@ static NSDictionary *modeInfoToDictionary(const XRRModeInfo *mi, int depth) {
  }
  
  - (NSPoint) mouseLocation {
@@ -3196,7 +3913,7 @@ index 5ae29bf4..a4e7095b 100644
  }
  
  - (void) setWindow: (id) window forID: (XID) i {
-@@ -948,6 +1484,19 @@ static NSDictionary *modeInfoToDictionary(const XRRModeInfo *mi, int depth) {
+@@ -948,6 +1486,19 @@ static NSDictionary *modeInfoToDictionary(const XRRModeInfo *mi, int depth) {
          // retaining the window causes it to keep popping back up endlessly even after dismissing it
          if (lastFocusedWindow && [[lastFocusedWindow platformWindow] windowHandle] == i)
              lastFocusedWindow = nil;
@@ -3216,7 +3933,7 @@ index 5ae29bf4..a4e7095b 100644
      }
  }
  
-@@ -962,20 +1511,86 @@ static NSDictionary *modeInfoToDictionary(const XRRModeInfo *mi, int depth) {
+@@ -962,20 +1513,86 @@ static NSDictionary *modeInfoToDictionary(const XRRModeInfo *mi, int depth) {
  {
  #ifndef DARLING
      [[NSRunLoop currentRunLoop] addInputSource: _inputSource forMode: mode];
@@ -3308,7 +4025,7 @@ index 5ae29bf4..a4e7095b 100644
  }
  
  - (NSEventModifierFlags) modifierFlagsForState: (unsigned int) state {
-@@ -1010,17 +1625,101 @@ static NSDictionary *modeInfoToDictionary(const XRRModeInfo *mi, int depth) {
+@@ -1010,17 +1627,101 @@ static NSDictionary *modeInfoToDictionary(const XRRModeInfo *mi, int depth) {
      return result;
  }
  
@@ -3363,15 +4080,15 @@ index 5ae29bf4..a4e7095b 100644
 +        return;
 +    }
 +    X11Window* window = (X11Window*) rawWindow;
- 
--    id delegate = [window delegate];
++
 +    id delegate = [window respondsToSelector: @selector(delegate)] ? [window delegate] : nil;
 +    static int inputTrace = -1;
 +    if (inputTrace < 0) inputTrace = getenv("RCLOL_INPUT_TRACE") != NULL;
 +    if (inputTrace && (ev->type == KeyPress || ev->type == KeyRelease || ev->type == ButtonPress))
 +        NSLog(@"LOLINPUT X type=%d window=%lu mapped=%@ number=%ld", ev->type,
 +            (unsigned long)ev->xany.window, [delegate class], (long)[delegate windowNumber]);
-+
+ 
+-    id delegate = [window delegate];
 +    switch (ev->type) {
 +    case MotionNotify:
 +        rclolRootX = ev->xmotion.x_root;
@@ -3412,7 +4129,7 @@ index 5ae29bf4..a4e7095b 100644
          NSEventModifierFlags modifierFlags = [self modifierFlagsForState: ev->xkey.state];
          char buf[20] = {0};
          KeySym keySym;
-@@ -1030,7 +1729,11 @@ static NSDictionary *modeInfoToDictionary(const XRRModeInfo *mi, int depth) {
+@@ -1030,7 +1731,11 @@ static NSDictionary *modeInfoToDictionary(const XRRModeInfo *mi, int depth) {
              break;
  
          if (ev->type == KeyPress) {
@@ -3425,7 +4142,7 @@ index 5ae29bf4..a4e7095b 100644
              buf[strLen] = 0;
          } else {
              // Xutf8LookupString() may not be used with KeyRelease
-@@ -1038,6 +1741,18 @@ static NSDictionary *modeInfoToDictionary(const XRRModeInfo *mi, int depth) {
+@@ -1038,6 +1743,18 @@ static NSDictionary *modeInfoToDictionary(const XRRModeInfo *mi, int depth) {
              buf[strLen] = 0;
          }
  
@@ -3444,12 +4161,27 @@ index 5ae29bf4..a4e7095b 100644
          id str = [[NSString alloc] initWithCString: buf
                                            encoding: NSUTF8StringEncoding];
          NSPoint pos =
-@@ -1077,6 +1792,32 @@ static NSDictionary *modeInfoToDictionary(const XRRModeInfo *mi, int depth) {
+@@ -1077,6 +1794,47 @@ static NSDictionary *modeInfoToDictionary(const XRRModeInfo *mi, int depth) {
          break;
  
      case ButtonPress:;
 +        if (window && !_confinedWindow)
 +            [self updateMouseConfinementForWindow: window];
++
++        if (ev->xbutton.button == Button1 && window && [window shouldRemoveDecorationForStyleMask: [window styleMask]]) {
++            if (![window isModal] && !X11IsLeagueGameWindow(_display, [window windowHandle], [window delegate])) {
++                O2Rect winFrame = [window frame];
++                int clickX = ev->xbutton.x;
++                int clickY = ev->xbutton.y;
++                int winWidth = (int) winFrame.size.width;
++                BOOL inDragZone = (clickY >= 0 && clickY < 48 && clickX >= 0 && clickX < (winWidth - 130));
++                if ((inDragZone || [[window delegate] isMovableByWindowBackground]) &&
++                    [window beginWindowDragAtRootX: ev->xbutton.x_root rootY: ev->xbutton.y_root button: Button1]) {
++                    break;
++                }
++            }
++        }
++
 +        if (ev->xbutton.button >= Button4 && ev->xbutton.button <= 7) {
 +            pos = [self locationInWindow: window x: ev->xbutton.x y: ev->xbutton.y
 +                                   rootX: ev->xbutton.x_root rootY: ev->xbutton.y_root];
@@ -3477,7 +4209,7 @@ index 5ae29bf4..a4e7095b 100644
          NSTimeInterval now = [[NSDate date] timeIntervalSinceReferenceDate];
  
          if (now - lastClickTimeStamp < [self doubleClickInterval]) {
-@@ -1086,8 +1827,8 @@ static NSDictionary *modeInfoToDictionary(const XRRModeInfo *mi, int depth) {
+@@ -1086,8 +1844,8 @@ static NSDictionary *modeInfoToDictionary(const XRRModeInfo *mi, int depth) {
          }
          lastClickTimeStamp = now;
  
@@ -3488,7 +4220,7 @@ index 5ae29bf4..a4e7095b 100644
  
          switch (ev->xbutton.button) {
          case Button1:
-@@ -1096,10 +1837,6 @@ static NSDictionary *modeInfoToDictionary(const XRRModeInfo *mi, int depth) {
+@@ -1096,10 +1854,6 @@ static NSDictionary *modeInfoToDictionary(const XRRModeInfo *mi, int depth) {
          case Button3:
              type = NSRightMouseDown;
              break;
@@ -3499,7 +4231,7 @@ index 5ae29bf4..a4e7095b 100644
          default:
              type = NSOtherMouseDown;
          }
-@@ -1113,14 +1850,22 @@ static NSDictionary *modeInfoToDictionary(const XRRModeInfo *mi, int depth) {
+@@ -1113,14 +1867,22 @@ static NSDictionary *modeInfoToDictionary(const XRRModeInfo *mi, int depth) {
                          clickCount: clickCount
                              deltaX: 0.0
                              deltaY: 0.0];
@@ -3526,7 +4258,7 @@ index 5ae29bf4..a4e7095b 100644
          CGFloat deltaY = 0.0;
  
          switch (ev->xbutton.button) {
-@@ -1130,14 +1875,6 @@ static NSDictionary *modeInfoToDictionary(const XRRModeInfo *mi, int depth) {
+@@ -1130,14 +1892,6 @@ static NSDictionary *modeInfoToDictionary(const XRRModeInfo *mi, int depth) {
          case Button3:
              type = NSRightMouseUp;
              break;
@@ -3541,7 +4273,7 @@ index 5ae29bf4..a4e7095b 100644
          default:
              type = NSOtherMouseUp;
          }
-@@ -1151,7 +1888,9 @@ static NSDictionary *modeInfoToDictionary(const XRRModeInfo *mi, int depth) {
+@@ -1151,7 +1905,9 @@ static NSDictionary *modeInfoToDictionary(const XRRModeInfo *mi, int depth) {
                          clickCount: clickCount
                              deltaX: 0.0
                              deltaY: deltaY];
@@ -3552,7 +4284,7 @@ index 5ae29bf4..a4e7095b 100644
          [self postEvent: event atStart: NO];
          break;
  
-@@ -1160,49 +1899,95 @@ static NSDictionary *modeInfoToDictionary(const XRRModeInfo *mi, int depth) {
+@@ -1160,49 +1916,95 @@ static NSDictionary *modeInfoToDictionary(const XRRModeInfo *mi, int depth) {
              // ev->xmotion.x, ev->xmotion.y, ev->xmotion.x_root,
              // ev->xmotion.y_root);
  
@@ -3674,7 +4406,7 @@ index 5ae29bf4..a4e7095b 100644
                      mouseEventWithType: type
                                location: pos
                           modifierFlags:
-@@ -1211,28 +1996,58 @@ static NSDictionary *modeInfoToDictionary(const XRRModeInfo *mi, int depth) {
+@@ -1211,28 +2013,58 @@ static NSDictionary *modeInfoToDictionary(const XRRModeInfo *mi, int depth) {
                              clickCount: 1
                                  deltaX: deltaX
                                  deltaY: deltaY];
@@ -3735,7 +4467,7 @@ index 5ae29bf4..a4e7095b 100644
          NSLog(@"FocusIn");
          if ([delegate attachedSheet]) {
              [[delegate attachedSheet] makeKeyAndOrderFront: delegate];
-@@ -1243,28 +2058,62 @@ static NSDictionary *modeInfoToDictionary(const XRRModeInfo *mi, int depth) {
+@@ -1243,28 +2075,62 @@ static NSDictionary *modeInfoToDictionary(const XRRModeInfo *mi, int depth) {
                                   checkForAppDeactivation: NO];
              lastFocusedWindow = nil;
          }
@@ -3800,7 +4532,7 @@ index 5ae29bf4..a4e7095b 100644
          O2Rect rect = NSMakeRect(ev->xexpose.x, ev->xexpose.y,
                                   ev->xexpose.width, ev->xexpose.height);
  
-@@ -1301,11 +2150,23 @@ static NSDictionary *modeInfoToDictionary(const XRRModeInfo *mi, int depth) {
+@@ -1301,11 +2167,23 @@ static NSDictionary *modeInfoToDictionary(const XRRModeInfo *mi, int depth) {
          break;
  
      case UnmapNotify:
@@ -3828,7 +4560,7 @@ index 5ae29bf4..a4e7095b 100644
          break;
  
      case MapRequest:
-@@ -1317,10 +2178,21 @@ static NSDictionary *modeInfoToDictionary(const XRRModeInfo *mi, int depth) {
+@@ -1317,10 +2195,21 @@ static NSDictionary *modeInfoToDictionary(const XRRModeInfo *mi, int depth) {
          break;
  
      case ConfigureNotify:
@@ -3850,7 +4582,7 @@ index 5ae29bf4..a4e7095b 100644
          break;
  
      case ConfigureRequest:
-@@ -1344,6 +2216,8 @@ static NSDictionary *modeInfoToDictionary(const XRRModeInfo *mi, int depth) {
+@@ -1344,6 +2233,8 @@ static NSDictionary *modeInfoToDictionary(const XRRModeInfo *mi, int depth) {
          break;
  
      case PropertyNotify:
@@ -3859,7 +4591,18 @@ index 5ae29bf4..a4e7095b 100644
          if ([window respondsToSelector: @selector(propertyNotify:)]) {
              [window propertyNotify: &ev->xproperty];
          }
-@@ -1399,7 +2273,9 @@ static NSDictionary *modeInfoToDictionary(const XRRModeInfo *mi, int depth) {
+@@ -1372,6 +2263,10 @@ static NSDictionary *modeInfoToDictionary(const XRRModeInfo *mi, int depth) {
+         break;
+ 
+     case ClientMessage:
++        if (ev->xclient.message_type == XInternAtom(_display, "MANAGER", False)) {
++            [[NSStatusBar systemStatusBar] _dockAllStatusItems];
++            break;
++        }
+         if (ev->xclient.format == 32 &&
+             ev->xclient.data.l[0] ==
+                     XInternAtom(_display, "WM_DELETE_WINDOW", False)) {
+@@ -1399,7 +2294,9 @@ static NSDictionary *modeInfoToDictionary(const XRRModeInfo *mi, int depth) {
          break;
  
      default:
@@ -3870,7 +4613,7 @@ index 5ae29bf4..a4e7095b 100644
              [self _invalidateRRCache];
              break;
          }
-@@ -1433,6 +2309,10 @@ static NSDictionary *modeInfoToDictionary(const XRRModeInfo *mi, int depth) {
+@@ -1433,6 +2330,10 @@ static NSDictionary *modeInfoToDictionary(const XRRModeInfo *mi, int depth) {
      NSLog(@"Request code: %d:%d", errorEvent->request_code,
            errorEvent->minor_code);
      NSLog(@"Error code: %d", errorEvent->error_code);
@@ -3881,7 +4624,7 @@ index 5ae29bf4..a4e7095b 100644
      return 0;
  }
  
-@@ -1476,54 +2356,279 @@ void CGNativeBorderFrameWidthsForStyle(NSUInteger styleMask, CGFloat *top,
+@@ -1476,54 +2377,279 @@ void CGNativeBorderFrameWidthsForStyle(NSUInteger styleMask, CGFloat *top,
      return frame;
  }
  
@@ -4393,7 +5136,7 @@ index 0e91a5d1..1e4cec1b 100644
  
  - (void) selectionNotify: (XSelectionEvent *) event {
 diff --git a/AppKit/X11.backend/X11Window.h b/AppKit/X11.backend/X11Window.h
-index bfe3839a..51860fdb 100644
+index bfe3839a..c91f8ceb 100644
 --- a/AppKit/X11.backend/X11Window.h
 +++ b/AppKit/X11.backend/X11Window.h
 @@ -26,7 +26,7 @@
@@ -4405,7 +5148,7 @@ index bfe3839a..51860fdb 100644
  
  @interface X11Window : CGWindow {
      int _level; // TODO: care about this value
-@@ -47,27 +47,51 @@
+@@ -47,27 +47,55 @@
      BOOL _mapped;
      CGPoint _lastMotionPos;
      BOOL _isModal;
@@ -4455,11 +5198,15 @@ index bfe3839a..51860fdb 100644
  
  - (void) setStyleMaskInternal: (NSUInteger) styleMask force: (BOOL) force;
 +- (void) updateDecorations;
++- (BOOL) isModal;
++- (BOOL) shouldRemoveDecorationForStyleMask: (NSUInteger) mask;
++- (BOOL) beginWindowDragWithEvent: (NSEvent *) event;
++- (BOOL) beginWindowDragAtRootX: (int) root_x rootY: (int) root_y button: (int) button;
  
  @end
  
 diff --git a/AppKit/X11.backend/X11Window.m b/AppKit/X11.backend/X11Window.m
-index f4925b66..52250f71 100644
+index f4925b66..051182d3 100644
 --- a/AppKit/X11.backend/X11Window.m
 +++ b/AppKit/X11.backend/X11Window.m
 @@ -23,6 +23,7 @@
@@ -4677,12 +5424,41 @@ index f4925b66..52250f71 100644
          event.data.l[1] =
                  (long) XInternAtom(_display, "_NET_WM_STATE_FULLSCREEN", False);
          event.data.l[3] = 1;
-@@ -327,6 +398,60 @@ static NSData *makeWindowIcon() {
+@@ -327,6 +398,144 @@ static NSData *makeWindowIcon() {
                     SubstructureNotifyMask | SubstructureRedirectMask,
                     (XEvent *) &event);
      }
 +    _fullscreenRequested = fullscreen;
 +    XFlush(_display);
++}
++
++- (BOOL) isModal {
++    return _isModal;
++}
++
++static BOOL X11IsCSDClientWindow(Display *display, Window window, NSWindow *delegate) {
++    static Class panelClass, menuClass, popUpClass, toolTipClass;
++    if (!panelClass) {
++        panelClass = NSClassFromString(@"NSPanel");
++        menuClass = NSClassFromString(@"NSMenuWindow");
++        popUpClass = NSClassFromString(@"NSPopUpWindow");
++        toolTipClass = NSClassFromString(@"NSToolTipWindow");
++    }
++    if (delegate && ((panelClass && [delegate isKindOfClass: panelClass]) ||
++                     (menuClass && [delegate isKindOfClass: menuClass]) ||
++                     (popUpClass && [delegate isKindOfClass: popUpClass]) ||
++                     (toolTipClass && [delegate isKindOfClass: toolTipClass])))
++        return NO;
++
++    static int isClient = -1;
++    if (isClient < 0) {
++        NSString *name = [[NSProcessInfo processInfo] processName];
++        isClient = (name && (([name rangeOfString:@"Riot" options:NSCaseInsensitiveSearch].location != NSNotFound &&
++                              [name rangeOfString:@"Client" options:NSCaseInsensitiveSearch].location != NSNotFound) ||
++                             ([name rangeOfString:@"League" options:NSCaseInsensitiveSearch].location != NSNotFound &&
++                              [name rangeOfString:@"Client" options:NSCaseInsensitiveSearch].location != NSNotFound))) ? 1 : 0;
++    }
++    return isClient == 1;
 +}
 +
 +- (BOOL) shouldRemoveDecorationForStyleMask: (NSUInteger) mask {
@@ -4700,7 +5476,62 @@ index f4925b66..52250f71 100644
 +        [_delegate titlebarAppearsTransparent]) {
 +        return YES;
 +    }
++    if ([_delegate respondsToSelector: @selector(areStandardWindowButtonsHidden)] &&
++        [_delegate areStandardWindowButtonsHidden]) {
++        return YES;
++    }
++    if (X11IsCSDClientWindow(_display, _window, _delegate)) {
++        return YES;
++    }
 +    return NO;
++}
++
++- (BOOL) beginWindowDragAtRootX: (int) root_x rootY: (int) root_y button: (int) button {
++    if (_overrideRedirect) return NO;
++    if (X11IsLeagueGameWindow(_display, _window, _delegate)) return NO;
++
++    Atom moveresize = XInternAtom(_display, "_NET_WM_MOVERESIZE", False);
++    if (moveresize == None) return NO;
++
++    if (root_x == 0 && root_y == 0) {
++        Window root_ret = None, child_ret = None;
++        int rx = 0, ry = 0, wx = 0, wy = 0;
++        unsigned int mask_ret = 0;
++        if (XQueryPointer(_display, DefaultRootWindow(_display),
++                          &root_ret, &child_ret,
++                          &rx, &ry, &wx, &wy, &mask_ret)) {
++            root_x = rx;
++            root_y = ry;
++        }
++    }
++
++    XUngrabPointer(_display, CurrentTime);
++
++    XEvent xev = {0};
++    xev.xclient.type = ClientMessage;
++    xev.xclient.window = _window;
++    xev.xclient.message_type = moveresize;
++    xev.xclient.format = 32;
++    xev.xclient.data.l[0] = root_x;
++    xev.xclient.data.l[1] = root_y;
++    xev.xclient.data.l[2] = 8; /* _NET_WM_MOVERESIZE_MOVE */
++    xev.xclient.data.l[3] = button > 0 ? button : Button1;
++    xev.xclient.data.l[4] = 1; /* source indication: normal application */
++
++    XSendEvent(_display, DefaultRootWindow(_display), False,
++               SubstructureRedirectMask | SubstructureNotifyMask, &xev);
++    XFlush(_display);
++    return YES;
++}
++
++- (BOOL) beginWindowDragWithEvent: (NSEvent *) event {
++    Window root_ret = None, child_ret = None;
++    int rx = 0, ry = 0, wx = 0, wy = 0;
++    unsigned int mask_ret = 0;
++    XQueryPointer(_display, DefaultRootWindow(_display),
++                  &root_ret, &child_ret,
++                  &rx, &ry, &wx, &wy, &mask_ret);
++    return [self beginWindowDragAtRootX: rx rootY: ry button: Button1];
 +}
 +
 +- (void) setStyleMaskInternal: (NSUInteger) mask force: (BOOL) force {
@@ -4738,7 +5569,7 @@ index f4925b66..52250f71 100644
  }
  
  - (void) setStyleMask: (NSUInteger) mask {
-@@ -337,27 +462,35 @@ static NSData *makeWindowIcon() {
+@@ -337,27 +546,35 @@ static NSData *makeWindowIcon() {
      _styleMask = mask;
  }
  
@@ -4788,7 +5619,7 @@ index f4925b66..52250f71 100644
      }
  }
  
-@@ -377,15 +510,27 @@ static NSData *makeWindowIcon() {
+@@ -377,15 +594,27 @@ static NSData *makeWindowIcon() {
  - (void) syncDelegateProperties {
      long mask = KeyPressMask | KeyReleaseMask | ExposureMask |
                  StructureNotifyMask | EnterWindowMask | LeaveWindowMask |
@@ -4821,7 +5652,7 @@ index f4925b66..52250f71 100644
      // TODO: background color
  }
  
-@@ -393,6 +538,28 @@ static NSData *makeWindowIcon() {
+@@ -393,6 +622,28 @@ static NSData *makeWindowIcon() {
      // This is essentially dealloc; we release our contexts
      // and windows, but unlike dealloc, this method can be called
      // several times, so set everything to nil/NULL/0.
@@ -4850,7 +5681,7 @@ index f4925b66..52250f71 100644
      [_context release];
      _context = nil;
  
-@@ -421,6 +588,384 @@ static NSData *makeWindowIcon() {
+@@ -421,6 +672,384 @@ static NSData *makeWindowIcon() {
      }
  }
  
@@ -5235,7 +6066,7 @@ index f4925b66..52250f71 100644
  - (Window) windowHandle {
      return _window;
  }
-@@ -470,14 +1015,32 @@ static NSData *makeWindowIcon() {
+@@ -470,14 +1099,32 @@ static NSData *makeWindowIcon() {
      const char *text = [title cString];
      XStringListToTextProperty((char **) &text, 1, &prop);
      XSetWMName(_display, _window, &prop);
@@ -5269,7 +6100,7 @@ index f4925b66..52250f71 100644
  }
  
  - (void) setHasShadow: (BOOL) value {
-@@ -488,6 +1051,25 @@ static NSData *makeWindowIcon() {
+@@ -488,6 +1135,25 @@ static NSData *makeWindowIcon() {
      _level = value;
  }
  
@@ -5295,7 +6126,7 @@ index f4925b66..52250f71 100644
  - (void) setOpaque: (BOOL) value {
      _isOpaque = value;
  }
-@@ -543,6 +1125,21 @@ static NSData *makeWindowIcon() {
+@@ -543,6 +1209,21 @@ static NSData *makeWindowIcon() {
  - (void) makeKey {
      [self ensureMapped];
      XRaiseWindow(_display, _window);
@@ -5317,8 +6148,8 @@ index f4925b66..52250f71 100644
  }
  
  - (void) makeMain {
-@@ -559,7 +1156,29 @@ static NSData *makeWindowIcon() {
-     XRaiseWindow(_display, _window);
+@@ -551,15 +1232,60 @@ static NSData *makeWindowIcon() {
+ - (void) captureEvents {
  }
  
 +/* darling-lol: AppKit asks every window whether it is miniaturized on every event poll (NSWindow
@@ -5328,6 +6159,38 @@ index f4925b66..52250f71 100644
 +#define RCLOL_MINI_SLOTS 32
 +static struct { Window window; uint64_t stamp; BOOL value; } rclolMini[RCLOL_MINI_SLOTS];
 +
+ - (void) miniaturize {
+     XIconifyWindow(_display, _window, DefaultScreen(_display));
++    unsigned slot = (unsigned) (_window % RCLOL_MINI_SLOTS);
++    if (rclolMini[slot].window == _window) {
++        rclolMini[slot].stamp = 0;
++        rclolMini[slot].value = YES;
++    }
+ }
+ 
+ - (void) deminiaturize {
+-    XRaiseWindow(_display, _window);
++    [self ensureMapped];
++    XMapRaised(_display, _window);
++    Atom netActive = XInternAtom(_display, "_NET_ACTIVE_WINDOW", False);
++    XEvent act = {0};
++    act.xclient.type = ClientMessage;
++    act.xclient.window = _window;
++    act.xclient.message_type = netActive;
++    act.xclient.format = 32;
++    act.xclient.data.l[0] = 1; /* source: normal application */
++    act.xclient.data.l[1] = CurrentTime;
++    XSendEvent(_display, DefaultRootWindow(_display), False,
++               SubstructureRedirectMask | SubstructureNotifyMask, &act);
++    XFlush(_display);
++
++    unsigned slot = (unsigned) (_window % RCLOL_MINI_SLOTS);
++    if (rclolMini[slot].window == _window) {
++        rclolMini[slot].stamp = 0;
++        rclolMini[slot].value = NO;
++    }
+ }
+ 
  - (BOOL) isMiniaturized {
 +    static mach_timebase_info_data_t tb;
 +    if (tb.denom == 0) mach_timebase_info(&tb);
@@ -5347,7 +6210,7 @@ index f4925b66..52250f71 100644
      Atom wmState = XInternAtom(_display, "_NET_WM_STATE", FALSE);
      Atom hiddenState = XInternAtom(_display, "_NET_WM_STATE_HIDDEN", FALSE);
  
-@@ -595,12 +1214,9 @@ static NSData *makeWindowIcon() {
+@@ -595,12 +1321,9 @@ static NSData *makeWindowIcon() {
  
          if ((error = CGLCreateContext(NULL, NULL, &_cglContext)) !=
              kCGLNoError) {
@@ -5362,7 +6225,7 @@ index f4925b66..52250f71 100644
          }
          if ((error = CGLContextMakeCurrentAndAttachToWindow(
                       _cglContext, _cglWindow)) != kCGLNoError)
-@@ -615,6 +1231,12 @@ static NSData *makeWindowIcon() {
+@@ -615,6 +1338,12 @@ static NSData *makeWindowIcon() {
  }
  
  - (void) openGLFlushBuffer {
@@ -5375,7 +6238,7 @@ index f4925b66..52250f71 100644
      CGLError error;
  
      CGLContextObj prevContext = CGLGetCurrentContext();
-@@ -652,7 +1274,7 @@ static NSData *makeWindowIcon() {
+@@ -652,7 +1381,7 @@ static NSData *makeWindowIcon() {
  }
  
  - (O2Rect) frame {
@@ -5384,7 +6247,7 @@ index f4925b66..52250f71 100644
  }
  
  static int ignoreBadWindow(Display *display, XErrorEvent *errorEvent) {
-@@ -666,6 +1288,7 @@ static int ignoreBadWindow(Display *display, XErrorEvent *errorEvent) {
+@@ -666,6 +1395,7 @@ static int ignoreBadWindow(Display *display, XErrorEvent *errorEvent) {
  }
  
  - (void) frameChanged {
@@ -5392,7 +6255,7 @@ index f4925b66..52250f71 100644
      XErrorHandler previousHandler = XSetErrorHandler(ignoreBadWindow);
      @try {
          Window root, parent;
-@@ -710,14 +1333,6 @@ static int ignoreBadWindow(Display *display, XErrorEvent *errorEvent) {
+@@ -710,14 +1440,6 @@ static int ignoreBadWindow(Display *display, XErrorEvent *errorEvent) {
      [_deviceDictionary addEntriesFromDictionary: entries];
  }
  
@@ -5748,6 +6611,89 @@ index aaf2083b..41386be3 100644
  - (NSInteger) requestCheckingOfString: (NSString *) stringToCheck
                                  range: (NSRange) range
                                  types: (NSTextCheckingTypes) checkingTypes
+diff --git a/AppKit/include/AppKit/NSStatusBar.h b/AppKit/include/AppKit/NSStatusBar.h
+index 1bea8abf..fb9a833a 100644
+--- a/AppKit/include/AppKit/NSStatusBar.h
++++ b/AppKit/include/AppKit/NSStatusBar.h
+@@ -36,4 +36,6 @@ CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE. */
+ - (void) removeStatusItem: (NSStatusItem *) item;
+ - (NSStatusItem *) statusItemWithLength: (CGFloat) length;
+ - (CGFloat) thickness;
++- (void) _dockAllStatusItems;
++- (NSArray *) statusItems;
+ @end
+diff --git a/AppKit/include/AppKit/NSStatusItem.h b/AppKit/include/AppKit/NSStatusItem.h
+index 3d80edb5..32fd6370 100644
+--- a/AppKit/include/AppKit/NSStatusItem.h
++++ b/AppKit/include/AppKit/NSStatusItem.h
+@@ -19,10 +19,22 @@ CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE. */
+ 
+ #import <CoreFoundation/CFBase.h>
+ #import <Foundation/Foundation.h>
++#import <AppKit/NSButton.h>
+ #ifdef WIN32
+ #import <windows.h>
+ #endif
+-@class NSStatusBar, NSImage, NSAttributedString, NSMenu, NSView, NSWindow;
++
++@class NSStatusBar, NSImage, NSAttributedString, NSMenu, NSView, NSWindow, NSStatusItem;
++
++@interface NSStatusBarButton : NSButton {
++    BOOL _appearsDisabled;
++    NSStatusItem *_statusItem;
++    BOOL _syncingToItem;
++}
++@property BOOL appearsDisabled;
++- (instancetype) initWithStatusItem: (NSStatusItem *) statusItem;
++@end
++
+ @interface NSStatusItem : NSObject {
+     SEL _action;
+     SEL _doubleAction;
+@@ -41,10 +53,16 @@ CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE. */
+     CGFloat _length;
+     NSMenu *_menu;
+     NSInteger _actionMask;
++    NSString *_toolTip;
++    NSStatusBarButton *_button;
++    BOOL _syncingButton;
+ #ifdef WIN32
+     int _trayIconID;
+     HICON _trayIcon;
+     HMENU _win32Menu;
++#else
++    unsigned long _x11TrayWindow;
++    BOOL _x11TrayDocked;
+ #endif
+ }
+ - (NSStatusBar *) statusBar;
+@@ -63,6 +81,7 @@ CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE. */
+ 
+ - (NSString *) title;
+ - (void) setTitle: (NSString *) title;
++- (NSString *) toolTip;
+ - (void) setToolTip: (NSString *) toolTip;
+ - (NSAttributedString *) attributedTitle;
+ - (void) setAttributedTitle: (NSAttributedString *) title;
+@@ -82,10 +101,18 @@ CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE. */
+ - (NSMenu *) menu;
+ - (void) setMenu: (NSMenu *) menu;
+ 
++- (NSStatusBarButton *) button;
++
+ - (void) popUpStatusItemMenu: (NSMenu *) menu;
+ - (NSInteger) sendActionOn: (NSInteger) mask;
+ 
+ - (void) drawStatusBarBackgroundInRect: (NSRect) rect
+                          withHighlight: (BOOL) highlight;
+ 
++- (void) _ensureTrayDocked;
++- (void) _createTrayIcon;
++- (void) _removeTrayIcon;
++- (void) _drawTrayIcon;
++- (void) handleTrayXEvent: (void *) eventPtr;
++
+ @end
 diff --git a/AppKit/include/AppKit/NSTextInput.h b/AppKit/include/AppKit/NSTextInput.h
 index c9dfd7c7..413f5ac1 100644
 --- a/AppKit/include/AppKit/NSTextInput.h
@@ -5821,7 +6767,7 @@ index edb45627..581991d1 100644
  - (NSSize) convertSize: (NSSize) size toView: (NSView *) viewOrNil;
  - (NSRect) convertRect: (NSRect) rect fromView: (NSView *) viewOrNil;
 diff --git a/AppKit/include/AppKit/NSWindow.h b/AppKit/include/AppKit/NSWindow.h
-index a83c4d75..88c03537 100644
+index a83c4d75..de7bf559 100644
 --- a/AppKit/include/AppKit/NSWindow.h
 +++ b/AppKit/include/AppKit/NSWindow.h
 @@ -43,6 +43,7 @@ enum {
@@ -5885,15 +6831,17 @@ index a83c4d75..88c03537 100644
  
  - (id) windowController;
  - (NSArray *) drawers;
-@@ -450,6 +469,7 @@ APPKIT_EXPORT const NSNotificationName NSWindowDidExposeNotification;
+@@ -450,6 +469,9 @@ APPKIT_EXPORT const NSNotificationName NSWindowDidExposeNotification;
  - (BOOL) isMainWindow;
  - (BOOL) isMiniaturized;
  - (BOOL) isMovable;
 +- (void) performWindowDragWithEvent:(NSEvent *)event;
++- (BOOL) areStandardWindowButtonsHidden;
++- (void) updateDecorationsForStandardWindowButtons;
  - (BOOL) inLiveResize;
  - (BOOL) canBecomeKeyWindow;
  - (BOOL) canBecomeMainWindow;
-@@ -458,6 +478,30 @@ APPKIT_EXPORT const NSNotificationName NSWindowDidExposeNotification;
+@@ -458,6 +480,30 @@ APPKIT_EXPORT const NSNotificationName NSWindowDidExposeNotification;
  
  - (NSPoint) convertBaseToScreen: (NSPoint) point;
  - (NSPoint) convertScreenToBase: (NSPoint) point;
@@ -8783,10 +9731,10 @@ index 5dcac115..ea5d8421 100644
 +
  @end
 diff --git a/QuartzCore/CALayerContext.m b/QuartzCore/CALayerContext.m
-index 5dce8c56..ad5e6207 100644
+index 5dce8c56..a6087f14 100644
 --- a/QuartzCore/CALayerContext.m
 +++ b/QuartzCore/CALayerContext.m
-@@ -1,47 +1,160 @@
+@@ -1,47 +1,159 @@
  #import <Foundation/NSString.h>
 +#import <Foundation/NSMutableArray.h>
  #import <QuartzCore/CALayer.h>
@@ -8798,17 +9746,21 @@ index 5dce8c56..ad5e6207 100644
 +#include <stdio.h>
  #import <OpenGL/CGLInternal.h>
  
- @class CAMetalLayerInternal;
+-@class CAMetalLayerInternal;
++@class CAMetalLayer;
++@interface CAMetalLayerInternal : CALayer
++- (void) prepareRender;
++@end
  
 -@implementation CALayerContext
 +/* A flattened IOSurface only replaces local rendering for trees without
-+ * Metal content. Skipping a mixed tree also skips prepareRender, exhausting
-+ * its drawable pool even though presentation callbacks continue to run. */
++ * Metal content. Pure Vulkan presentation handles CAMetalLayer trees directly. */
 +static BOOL hasMetalLayer(CALayer *layer) {
++    if (!layer) return NO;
 +    if ([[layer class] isSubclassOfClass: [CAMetalLayerInternal class]])
 +        return YES;
 +    for (CALayer *child in layer.sublayers)
-+        if (hasMetalLayer(child))return YES;
++        if (hasMetalLayer(child)) return YES;
 +    return NO;
 +}
  
@@ -8855,8 +9807,6 @@ index 5dce8c56..ad5e6207 100644
 +            setenv("__NV_PRIME_RENDER_OFFLOAD", "1", 1);
 +            setenv("__GLX_VENDOR_LIBRARY_NAME", "nvidia", 1);
 +            setenv("__VK_LAYER_NV_optimus", "NVIDIA_only", 1);
-+            if (access("/usr/share/glvnd/egl_vendor.d/10_nvidia.json", F_OK) == 0)
-+                setenv("__EGL_VENDOR_LIBRARY_FILENAMES", "/usr/share/glvnd/egl_vendor.d/10_nvidia.json", 0);
 +            if (access("/usr/share/vulkan/icd.d/nvidia_icd.x86_64.json", F_OK) == 0)
 +                setenv("VK_DRIVER_FILES", "/usr/share/vulkan/icd.d/nvidia_icd.x86_64.json", 0);
 +        } else if (strcasestr(selector, "intel") || strcasestr(selector, "integrated") || strcasestr(selector, "mesa") || strcasestr(selector, "llvmpipe") || strcmp(selector, "0") == 0) {
@@ -8873,15 +9823,9 @@ index 5dce8c56..ad5e6207 100644
 +        setenv("__NV_PRIME_RENDER_OFFLOAD", "1", 1);
 +        setenv("__GLX_VENDOR_LIBRARY_NAME", "nvidia", 1);
 +        setenv("__VK_LAYER_NV_optimus", "NVIDIA_only", 1);
-+        if (access("/usr/share/glvnd/egl_vendor.d/10_nvidia.json", F_OK) == 0)
-+            setenv("__EGL_VENDOR_LIBRARY_FILENAMES", "/usr/share/glvnd/egl_vendor.d/10_nvidia.json", 0);
 +    }
 +}
- 
--    CGLPixelFormatAttribute attributes[1] = {
--            0,
--    };
--    GLint numberOfVirtualScreens;
++
 +/* The X11 transport presents Chromium's flattened full-window surface.
 + * Avoid uploading and compositing that same window again into a covered GL
 + * child. Restrict this to the explicitly configured native presentation path. */
@@ -8900,18 +9844,21 @@ index 5dce8c56..ad5e6207 100644
 +}
 +@implementation CALayerContext
  
--    CGLChoosePixelFormat(attributes, &_pixelFormat, &numberOfVirtualScreens);
+-    CGLPixelFormatAttribute attributes[1] = {
+-            0,
+-    };
+-    GLint numberOfVirtualScreens;
 +@synthesize subwindow = _subwindow;
+ 
+-    CGLChoosePixelFormat(attributes, &_pixelFormat, &numberOfVirtualScreens);
++- (CGRect) frame {
++    return _frame;
++}
  
 -    if ((error = CGLCreateContext(_pixelFormat, NULL, &_glContext)) !=
 -        kCGLNoError)
 -        NSLog(@"CGLCreateContext failed with %d in %s %d", error, __FILE__,
 -              __LINE__);
-+- (CGRect) frame {
-+    return _frame;
-+}
- 
--    _frame = rect;
 +- (CGLContextObj) glContext {
 +    if (_glContext == NULL) {
 +        configureGPUFromMetalSelector();
@@ -8937,13 +9884,14 @@ index 5dce8c56..ad5e6207 100644
 +    return _glContext;
 +}
  
--    _renderer = [[CARenderer rendererWithCGLContext: _glContext
--                                            options: nil] retain];
+-    _frame = rect;
 +- initWithFrame: (CGRect) rect {
 +    self = [super init];
 +    if (self == nil)
 +        return nil;
-+
+ 
+-    _renderer = [[CARenderer rendererWithCGLContext: _glContext
+-                                            options: nil] retain];
 +    _deleteTextureIds = [[NSMutableArray alloc] init];
 +    _frame = rect;
 +    /* Views can acquire a backing layer before joining a window. Defer
@@ -8966,7 +9914,7 @@ index 5dce8c56..ad5e6207 100644
      [super dealloc];
  }
  
-@@ -51,12 +164,22 @@
+@@ -51,12 +163,30 @@
  }
  
  - (void) setLayer: (CALayer *) layer {
@@ -8983,19 +9931,27 @@ index 5dce8c56..ad5e6207 100644
      [_layer _setContext: self];
      [_renderer setLayer: layer];
 +
++    if (_subwindow != nil && _cglWindow == NULL && !hasMetalLayer(_layer)) {
++        CGLContextObj ctx = [self glContext];
++        if (ctx != NULL)
++            _cglWindow = CGLGetWindow([_subwindow nativeWindow]);
++    }
++
 +    /* darling-lol M57: the layer compositor must be driven even when no
 +     * CAAnimation is ever added (e.g. Chromium's compositor output). */
-+    [self startTimerIfNeeded];
++    if (!hasMetalLayer(_layer)) {
++        [self startTimerIfNeeded];
++    }
  }
  
  - (void) setSubwindow: (CGSubWindow*) subwindow
-@@ -68,16 +191,35 @@
+@@ -68,16 +198,37 @@
      }
  
      _subwindow = [subwindow retain];
 -    _cglWindow = CGLGetWindow([_subwindow nativeWindow]);
 +    _cglWindow = NULL;
-+    if (_subwindow != nil) {
++    if (_subwindow != nil && _layer != nil && !hasMetalLayer(_layer)) {
 +        CGLContextObj ctx = [self glContext];
 +        if (ctx != NULL)
 +            _cglWindow = CGLGetWindow([_subwindow nativeWindow]);
@@ -9011,7 +9967,9 @@ index 5dce8c56..ad5e6207 100644
 +    // Notify the whole layer tree now that drawable resources can be created.
 +    [_layer _setContext: self];
 +    /* darling-lol M57: begin compositing once a drawable exists. */
-+    [self startTimerIfNeeded];
++    if (!hasMetalLayer(_layer)) {
++        [self startTimerIfNeeded];
++    }
  }
  
  - (void) invalidate {
@@ -9026,7 +9984,7 @@ index 5dce8c56..ad5e6207 100644
  }
  
  - (void) assignTextureIdsToLayerTree: (CALayer *) layer {
-@@ -93,8 +235,27 @@
+@@ -93,8 +244,27 @@
          [self assignTextureIdsToLayerTree: child];
  }
  
@@ -9054,7 +10012,7 @@ index 5dce8c56..ad5e6207 100644
  
      glEnable(GL_DEPTH_TEST);
      glShadeModel(GL_SMOOTH);
-@@ -118,27 +279,63 @@
+@@ -118,27 +288,70 @@
  
      [_deleteTextureIds removeAllObjects];
  
@@ -9076,10 +10034,17 @@ index 5dce8c56..ad5e6207 100644
  }
  
  - (void) render {
-+    if (_cglWindow == NULL || _layer == nil)
++    if (_layer == nil)
++        return;
++    if (hasMetalLayer(_layer)) {
++        // Pure Vulkan presentation: CAMetalLayer presents directly via VkSurfaceKHR/VkSwapchainKHR.
++        // Do not initialize _glContext or invoke CARenderer.
++        return;
++    }
++    if (_cglWindow == NULL)
 +        return;
 +    if(getenv("DARLING_CA_SKIP_LOCAL_IOSURFACE_RENDER") &&
-+       !hasMetalLayer(_layer) && !hasOtherVisibleContent(_layer) && hasFullWindowSurface(_layer,_frame.size))return;
++       !hasOtherVisibleContent(_layer) && hasFullWindowSurface(_layer,_frame.size))return;
      [self renderLayer: _layer];
  }
  
@@ -9096,7 +10061,7 @@ index 5dce8c56..ad5e6207 100644
 +    [_timer release];
 +    _timer = nil;
 +
-+    if (_layer == nil || _cglWindow == NULL)
++    if (_layer == nil || hasMetalLayer(_layer) || _cglWindow == NULL)
 +        return;
 +
 +    static CFTimeInterval lastTimer = 0;
@@ -9123,22 +10088,24 @@ index 5dce8c56..ad5e6207 100644
  }
  
  - (void) startTimerIfNeeded {
-@@ -147,7 +344,7 @@
+@@ -147,7 +360,7 @@
                                                     target: self
                                                   selector: @selector(timer:)
                                                   userInfo: nil
 -                                                  repeats: YES] retain];
-+                                                  repeats: NO] retain];
++                                                   repeats: NO] retain];
  }
  
  - (void) deleteTextureId: (NSNumber *) textureId {
-@@ -155,7 +352,10 @@
+@@ -155,7 +368,12 @@
  }
  
  - (void) flush {
 -    CGLFlushDrawable(_glContext);
++    if (hasMetalLayer(_layer))
++        return;
 +    if(getenv("DARLING_CA_SKIP_LOCAL_IOSURFACE_RENDER") && _layer &&
-+       !hasMetalLayer(_layer) && !hasOtherVisibleContent(_layer) && hasFullWindowSurface(_layer,_frame.size))return;
++       !hasOtherVisibleContent(_layer) && hasFullWindowSurface(_layer,_frame.size))return;
 +    if (_glContext != NULL && _cglWindow != NULL)
 +        CGLFlushDrawable(_glContext);
  }
@@ -9159,140 +10126,92 @@ index 5ad375f8..0cc255dc 100644
 +- (BOOL) _treeHasAnimations;
  @end
 diff --git a/QuartzCore/CAMetalDrawable.mm b/QuartzCore/CAMetalDrawable.mm
-index d6f86b31..687f05d5 100644
+index d6f86b31..ca19f2c4 100644
 --- a/QuartzCore/CAMetalDrawable.mm
 +++ b/QuartzCore/CAMetalDrawable.mm
-@@ -31,6 +31,13 @@
- #include <OpenGL/glext.h>
+@@ -17,8 +17,6 @@
+  * along with Darling.  If not, see <http://www.gnu.org/licenses/>.
+  */
+ 
+-#define GL_GLEXT_PROTOTYPES 1
+-
+ #import "CAMetalDrawableInternal.h"
+ #import "CAMetalLayerInternal.h"
+ #import <QuartzCore/CAMetalLayer.h>
+@@ -27,41 +25,28 @@
+ 
+ #if DARLING_METAL_ENABLED
+ 
+-#include <OpenGL/gl.h>
+-#include <OpenGL/glext.h>
  #include <indium/indium.private.hpp>
  
+-namespace DynamicVK = Indium::DynamicVK;
 +#include <atomic>
 +#include <cstdio>
 +#include <cstring>
 +#include <mutex>
 +#include <string>
 +#include <unistd.h>
-+
- namespace DynamicVK = Indium::DynamicVK;
  
- static void reportGLErrors(void) {
-@@ -50,8 +57,111 @@ static void reportGLErrors(void) {
- namespace Indium::DynamicVK {
- 	static DynamicFunction<PFN_vkGetSemaphoreFdKHR> vkGetSemaphoreFdKHR("vkGetSemaphoreFdKHR");
- 	static DynamicFunction<PFN_vkGetMemoryFdKHR> vkGetMemoryFdKHR("vkGetMemoryFdKHR");
-+	static DynamicFunction<PFN_vkGetPhysicalDeviceProperties2> vkGetPhysicalDeviceProperties2Local("vkGetPhysicalDeviceProperties2");
- };
+-static void reportGLErrors(void) {
+-#if 0
+-	GLenum err;
++namespace DynamicVK = Indium::DynamicVK;
  
-+//
-+// GPU selection diagnostics
-+//
-+
-+// The drawable's memory and semaphores are exported as OPAQUE_FD and imported into
-+// this layer's OpenGL context. That only works when Vulkan and OpenGL run on the
-+// same physical device/driver, and until now nothing checked it: a mismatch would
-+// silently break. Record which GL renderer actually presents and whether its
-+// device UUID matches the Vulkan device's, once per process, in
-+// /tmp/metal-device.log (alongside the device list Indium logs at startup).
-+// Clears pending GL errors (bounded: without a current context glGetError may never
-+// report GL_NO_ERROR).
-+static void drainGLErrors() {
-+	for (int i = 0; i < 16 && glGetError() != GL_NO_ERROR; ++i) {
-+	}
-+}
-+
-+// Same line format as Indium's device log.
+-	while ((err = glGetError()) != GL_NO_ERROR) {
+-		printf("*** OPENGL ERROR: %d ***\n", err);
 +static void appendDeviceLog(const std::string& line) {
 +	if (FILE* log = fopen("/tmp/metal-device.log", "a")) {
 +		fprintf(log, "[MetalDevice] pid=%d %s\n", getpid(), line.c_str());
 +		fclose(log);
-+	}
+ 	}
+-#endif
+-};
+-
+-//
+-// dynamically imported
+-//
+-
+-namespace Indium::DynamicVK {
+-	static DynamicFunction<PFN_vkGetSemaphoreFdKHR> vkGetSemaphoreFdKHR("vkGetSemaphoreFdKHR");
+-	static DynamicFunction<PFN_vkGetMemoryFdKHR> vkGetMemoryFdKHR("vkGetMemoryFdKHR");
+-};
+-
+-//
+-// helper classes
+-//
 +}
-+
-+static std::string darlingUuidString(const GLubyte* uuid) {
-+	static const char* digits = "0123456789abcdef";
-+	std::string out;
-+	out.reserve(32);
-+	for (int i = 0; i < GL_UUID_SIZE_EXT; ++i) {
-+		out += digits[(uuid[i] >> 4) & 0xf];
-+		out += digits[uuid[i] & 0xf];
-+	}
-+	return out;
-+}
-+
-+static void reportGpuDeviceMatch(std::shared_ptr<Indium::PrivateDevice> device) {
-+	if (!device) {
-+		return;
-+	}
-+	static std::once_flag once;
-+	std::call_once(once, [device]() {
-+		const GLubyte* renderer = glGetString(GL_RENDERER);
-+		const GLubyte* vendor = glGetString(GL_VENDOR);
-+
-+		GLubyte glDeviceUUID[GL_UUID_SIZE_EXT] = {0};
-+		GLubyte glDriverUUID[GL_UUID_SIZE_EXT] = {0};
-+		GLint uuidCount = 0;
-+		glGetIntegerv(GL_NUM_DEVICE_UUIDS_EXT, &uuidCount);
-+		if (uuidCount > 0) {
-+			glGetUnsignedBytei_vEXT(GL_DEVICE_UUID_EXT, 0, glDeviceUUID);
-+			glGetUnsignedBytevEXT(GL_DRIVER_UUID_EXT, glDriverUUID);
-+		}
-+
-+		// Queried here rather than through a new libindium export, so this QuartzCore
-+		// still loads against a libindium built before the device log.
-+		VkPhysicalDeviceIDProperties idProperties {};
-+		idProperties.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_ID_PROPERTIES;
-+		VkPhysicalDeviceProperties2 properties2 {};
-+		properties2.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2;
-+		properties2.pNext = &idProperties;
-+		bool haveVkUUID = false;
-+		if (DynamicVK::vkGetPhysicalDeviceProperties2Local) {
-+			DynamicVK::vkGetPhysicalDeviceProperties2Local(device->physicalDevice(), &properties2);
-+			haveVkUUID = true;
-+		}
-+		const uint8_t* vkDeviceUUID = idProperties.deviceUUID;
-+		const uint8_t* vkDriverUUID = idProperties.driverUUID;
-+
-+		std::string line = "presenting GL renderer=\"" + std::string(renderer ? reinterpret_cast<const char*>(renderer) : "(null)") + "\""
-+			+ " vendor=\"" + std::string(vendor ? reinterpret_cast<const char*>(vendor) : "(null)") + "\""
-+			+ " glDeviceUUID=" + (uuidCount > 0 ? darlingUuidString(glDeviceUUID) : std::string("none"))
-+			+ " glDriverUUID=" + (uuidCount > 0 ? darlingUuidString(glDriverUUID) : std::string("none"))
-+			+ " vulkanDeviceUUID=" + (haveVkUUID ? darlingUuidString(vkDeviceUUID) : std::string("none"))
-+			+ " vulkanDriverUUID=" + (haveVkUUID ? darlingUuidString(vkDriverUUID) : std::string("none"));
-+
-+		if (uuidCount > 0 && haveVkUUID && memcmp(glDeviceUUID, vkDeviceUUID, GL_UUID_SIZE_EXT) != 0) {
-+			line += " MISMATCH: OpenGL and Vulkan are on different GPUs; the opaque-FD import cannot work."
-+				" Run the launcher under prime-run so both use the same GPU.";
-+		} else if (uuidCount > 0 && haveVkUUID) {
-+			line += " match=yes";
-+		} else {
-+			line += " match=unknown";
-+		}
-+
-+		appendDeviceLog(line);
-+	});
-+}
-+
-+// The internal image is shared with OpenGL as linear memory because of a Mesa bug with
-+// optimal tiling on AMD. NVIDIA's proprietary GL rejects GL_LINEAR_TILING_EXT
-+// (GL_INVALID_VALUE), leaving the texture optimal and its storage import failing, which
-+// shows as a black window. Only NVIDIA's own driver takes the optimal path; the check
-+// runs once, with the presenting GL context current.
-+static bool interopUsesLinearTiling() {
-+	static const bool linear = []() {
-+		const GLubyte* vendor = glGetString(GL_VENDOR);
-+		return !(vendor && strstr(reinterpret_cast<const char*>(vendor), "NVIDIA"));
-+	}();
-+	return linear;
-+}
-+
- //
- // helper classes
- //
-@@ -129,27 +239,109 @@ public:
- // texture
- //
  
--static size_t findSharedMemory(const VkMemoryRequirements& reqs, std::shared_ptr<Indium::PrivateDevice> device, bool framebufferOnly) {
+ // used to store a weak reference to an objc object within a C++ object (so it can be passed around in C++ code)
+ template<typename T>
+ class ObjcppWeakWrapper {
+ private:
+-	// needs to be mutable so we can use it in the copy constructor and the copy assignment operator.
+-	// plus, it's also modified externally, so it can never be truly const.
+ 	mutable id _ref = nil;
+ 
+ public:
+@@ -112,48 +97,96 @@ public:
+ 	};
+ };
+ 
+-//
+-// ideally, we would use a Vulkan surface + swapchain here to render directly to the screen.
+-// however, CALayers can also be rendered offscreen (e.g. with a CARenderer) and our current implementation of rendering
+-// in most places is to render to an OpenGL buffer (per window) and display that.
+-// plus, we don't have an easy way to get a surface here; we would need access to an X11 window/subwindow,
+-// which we don't have direct access to here (our delegate might). therefore, we follow suit
+-// with the existing CALayer implementation and just render to an image/texture.
+-//
+-// additionally, to avoid refactoring/reworking the existing CARenderer and CALayerContext code,
+-// we render to a Vulkan image with exportable memory that we can import into an OpenGL texture,
+-// along with a semaphore to synchronize the Vulkan rendering with OpenGL.
+-//
+-
+-//
+-// texture
+-//
 +static std::string memoryFlagsString(VkMemoryPropertyFlags flags) {
 +	char buffer[16];
 +	snprintf(buffer, sizeof(buffer), "0x%x(", (unsigned) flags);
@@ -9309,23 +10228,8 @@ index d6f86b31..687f05d5 100644
 +	else out += "none)";
 +	return out;
 +}
-+
-+// Vulkan orders memory types so a flag-less type (system RAM, which NVIDIA
-+// exposes) precedes every DEVICE_LOCAL type, and first fit put framebufferOnly
-+// drawables there. Both images are only touched by the GPU then -- the internal
-+// one is imported by the presenting OpenGL context, which runs on the same GPU
-+// (see reportGpuDeviceMatch) -- so they take the first allowed DEVICE_LOCAL type,
-+// falling back to first fit. Without framebufferOnly they still need host-visible,
-+// coherent memory and keep first fit. On RADV type 0 is DEVICE_LOCAL: unchanged.
-+//
-+// League sets framebufferOnly=NO, so its drawables lived in system RAM and crossed
-+// PCIe every frame. framebufferOnly=NO lets Metal sample or blit the texture; it
-+// does not make it CPU-mapped, and nothing here maps either image (replaceRegion
-+// aborts, getBytes is a stub), so those drawables are placed like framebufferOnly
-+// ones too. On the RX 6600 that gave about 20 FPS more in a practice-tool fight and
-+// the same FPS when idle. The guest flag file /tmp/metal-no-drawable-vram restores
-+// host-visible memory. Read once per process, when the first drawable is created.
-+static size_t findSharedMemory(const VkMemoryRequirements& reqs, std::shared_ptr<Indium::PrivateDevice> device, bool framebufferOnly, bool internal) {
+ 
+ static size_t findSharedMemory(const VkMemoryRequirements& reqs, std::shared_ptr<Indium::PrivateDevice> device, bool framebufferOnly) {
 +	static const bool drawableVram = access("/tmp/metal-no-drawable-vram", F_OK) != 0;
 +	static std::once_flag logSwitch;
 +	std::call_once(logSwitch, []() {
@@ -9336,7 +10240,7 @@ index d6f86b31..687f05d5 100644
 +	const bool gpuOnly = framebufferOnly || vramDrawable;
 +	const auto& memory = device->memoryProperties();
 +	size_t firstFit = SIZE_MAX;
-+	size_t legacy = SIZE_MAX; // the choice before 2026-10-16 (host-visible drawables), for the log
++	size_t legacy = SIZE_MAX;
  	size_t targetIndex = SIZE_MAX;
  
 -	for (size_t i = 0; i < device->memoryProperties().memoryTypeCount; ++i) {
@@ -9368,7 +10272,6 @@ index d6f86b31..687f05d5 100644
 +			firstFit = i;
 +		}
 +
-+		// no early exit: the scan continues to find the legacy choice for the log
 +		if (targetIndex == SIZE_MAX && (!gpuOnly || (type.propertyFlags & VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT) != 0)) {
 +			targetIndex = i;
 +		}
@@ -9381,10 +10284,9 @@ index d6f86b31..687f05d5 100644
 +		return targetIndex;
 +	}
 +
-+	// Once per (image, storage, type) in the process, in Indium's device log.
 +	static std::atomic<uint64_t> logged[3] {};
 +	const size_t storage = vramDrawable ? 2 : (framebufferOnly ? 1 : 0);
-+	const size_t bit = ((internal ? 3u : 0u) + storage) * 32 + targetIndex;
++	const size_t bit = storage * 32 + targetIndex;
 +	const uint64_t mask = uint64_t(1) << (bit & 63);
 +	if ((logged[bit >> 6].load(std::memory_order_relaxed) & mask) == 0 && (logged[bit >> 6].fetch_or(mask) & mask) == 0) {
 +		auto describe = [&](size_t index) {
@@ -9399,7 +10301,7 @@ index d6f86b31..687f05d5 100644
 +		static const char* storageNames[] = { "hostVisible", "framebufferOnly", "vram" };
 +		char typeBits[16];
 +		snprintf(typeBits, sizeof(typeBits), "0x%08x", (unsigned) reqs.memoryTypeBits);
-+		appendDeviceLog(std::string("memory alloc kind=") + (internal ? "drawable-internal" : "drawable")
++		appendDeviceLog(std::string("memory alloc kind=drawable")
 +			+ " storage=" + storageNames[storage]
 +			+ " typeBits=" + typeBits
 +			+ " type=" + describe(targetIndex)
@@ -9408,138 +10310,497 @@ index d6f86b31..687f05d5 100644
  	}
  
  	return targetIndex;
-@@ -161,6 +353,11 @@ CAMetalDrawableTexture::CAMetalDrawableTexture(CGSize size, Indium::PixelFormat
+-};
++}
+ 
+ CAMetalDrawableTexture::CAMetalDrawableTexture(CGSize size, Indium::PixelFormat pixelFormat, bool framebufferOnly, std::shared_ptr<Indium::PrivateDevice> privateDevice):
+ 	Indium::PrivateTexture(privateDevice),
+@@ -161,13 +194,13 @@ CAMetalDrawableTexture::CAMetalDrawableTexture(CGSize size, Indium::PixelFormat
  	_pixelFormat(pixelFormat),
  	_framebufferOnly(framebufferOnly)
  {
-+	// The layer's GL context is current here (recreateDrawables / _setContext set
-+	// it), so this is the first point where the presenting GL device can be
-+	// compared with the Vulkan device. Logged once per process.
-+	reportGpuDeviceMatch(privateDevice);
-+
- 	//
- 	// create the images
- 	//
-@@ -195,7 +392,7 @@ CAMetalDrawableTexture::CAMetalDrawableTexture(CGSize size, Indium::PixelFormat
- 	// some drivers (e.g. AMD's drivers) don't play nice when sharing
- 	// Vulkan images and OpenGL textures with optimal tiling
- 	// (https://gitlab.freedesktop.org/mesa/mesa/-/issues/7657)
--	imgInfo.tiling = VK_IMAGE_TILING_LINEAR;
-+	imgInfo.tiling = interopUsesLinearTiling() ? VK_IMAGE_TILING_LINEAR : VK_IMAGE_TILING_OPTIMAL;
+-	//
+-	// create the images
+-	//
++	static std::once_flag directLogOnce;
++	std::call_once(directLogOnce, []() {
++		appendDeviceLog("presenting via direct Vulkan swapchain (zero-OpenGL pipeline)");
++	});
  
- 	VkExternalMemoryImageCreateInfo extMemInfo {};
+ 	// create the public Vulkan image
+ 	VkImageCreateInfo imgInfo {};
+-
+ 	imgInfo.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
+ 	imgInfo.imageType = VK_IMAGE_TYPE_2D;
+ 	imgInfo.format = Indium::pixelFormatToVkFormat(_pixelFormat);
+@@ -185,96 +218,29 @@ CAMetalDrawableTexture::CAMetalDrawableTexture(CGSize size, Indium::PixelFormat
+ 	imgInfo.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
  
-@@ -219,7 +416,7 @@ CAMetalDrawableTexture::CAMetalDrawableTexture(CGSize size, Indium::PixelFormat
- 
- 	DynamicVK::vkGetImageMemoryRequirements(_device->device(), _image, &reqs);
- 
--	size_t targetIndex = findSharedMemory(reqs, _device, _framebufferOnly);
-+	size_t targetIndex = findSharedMemory(reqs, _device, _framebufferOnly, false);
- 
- 	if (targetIndex == SIZE_MAX) {
- 		throw std::runtime_error("No suitable memory region found for image");
-@@ -242,7 +439,7 @@ CAMetalDrawableTexture::CAMetalDrawableTexture(CGSize size, Indium::PixelFormat
- 
- 	DynamicVK::vkGetImageMemoryRequirements(_device->device(), _internalImage, &reqs);
- 
--	targetIndex = findSharedMemory(reqs, _device, _framebufferOnly);
-+	targetIndex = findSharedMemory(reqs, _device, _framebufferOnly, true);
- 
- 	if (targetIndex == SIZE_MAX) {
- 		throw std::runtime_error("No suitable memory region found for internal image");
-@@ -380,31 +577,70 @@ CAMetalDrawableTexture::CAMetalDrawableTexture(CGSize size, Indium::PixelFormat
+ 	if (DynamicVK::vkCreateImage(_device->device(), &imgInfo, nullptr, &_image) != VK_SUCCESS) {
+-		// TODO
  		abort();
  	}
  
--	reportGLErrors();
-+	// reportGLErrors() is compiled out, so a failed import used to be silent (a black
-+	// window). Clear errors left by earlier calls; the import is checked below.
-+	drainGLErrors();
+-	// now create the internal image (with exportable memory)
+-	imgInfo.format = VK_FORMAT_R8G8B8A8_UNORM;
+-
+-	// some drivers (e.g. AMD's drivers) don't play nice when sharing
+-	// Vulkan images and OpenGL textures with optimal tiling
+-	// (https://gitlab.freedesktop.org/mesa/mesa/-/issues/7657)
+-	imgInfo.tiling = VK_IMAGE_TILING_LINEAR;
+-
+-	VkExternalMemoryImageCreateInfo extMemInfo {};
+-
+-	extMemInfo.sType = VK_STRUCTURE_TYPE_EXTERNAL_MEMORY_IMAGE_CREATE_INFO;
+-	extMemInfo.handleTypes = VK_EXTERNAL_MEMORY_HANDLE_TYPE_OPAQUE_FD_BIT;
+-
+-	imgInfo.pNext = &extMemInfo;
+-
+-	if (DynamicVK::vkCreateImage(_device->device(), &imgInfo, nullptr, &_internalImage) != VK_SUCCESS) {
+-		// TODO
+-		abort();
+-	}
+-
+-	//
+-	// allocate some memory for the images
+-	//
+-
+ 	VkMemoryRequirements reqs {};
+-
+-	// first, the public image
+-
+ 	DynamicVK::vkGetImageMemoryRequirements(_device->device(), _image, &reqs);
  
- 	// import the memory into OpenGL
- 	glCreateMemoryObjectsEXT(1, &_memoryObject);
- 	reportGLErrors();
+ 	size_t targetIndex = findSharedMemory(reqs, _device, _framebufferOnly);
+-
+ 	if (targetIndex == SIZE_MAX) {
+ 		throw std::runtime_error("No suitable memory region found for image");
+ 	}
  
-+	// _internalMemory is a dedicated allocation (VkMemoryDedicatedAllocateInfo above),
-+	// and EXT_external_objects requires DEDICATED_MEMORY_OBJECT_EXT to be TRUE when the
-+	// memory was created as one. Mesa ignores the flag; NVIDIA enforces it. It has to be
-+	// set before the import, after which the memory object is immutable.
-+	GLint dedicated = GL_TRUE;
-+	glMemoryObjectParameterivEXT(_memoryObject, GL_DEDICATED_MEMORY_OBJECT_EXT, &dedicated);
-+	const GLenum dedicatedError = glGetError();
+ 	VkMemoryAllocateInfo allocInfo {};
+-
+ 	allocInfo.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+ 	allocInfo.allocationSize = reqs.size;
+ 	allocInfo.memoryTypeIndex = targetIndex;
+ 
+ 	if (DynamicVK::vkAllocateMemory(_device->device(), &allocInfo, nullptr, &_memory) != VK_SUCCESS) {
+-		// TODO
+ 		abort();
+ 	}
+ 
+ 	DynamicVK::vkBindImageMemory(_device->device(), _image, _memory, 0);
+ 
+-	// now, the internal image
+-
+-	DynamicVK::vkGetImageMemoryRequirements(_device->device(), _internalImage, &reqs);
+-
+-	targetIndex = findSharedMemory(reqs, _device, _framebufferOnly);
+-
+-	if (targetIndex == SIZE_MAX) {
+-		throw std::runtime_error("No suitable memory region found for internal image");
+-	}
+-
+-	VkExportMemoryAllocateInfo exportAllocInfo {};
+-	VkMemoryDedicatedAllocateInfo dedicatedInfo {};
+-
+-	allocInfo.allocationSize = reqs.size;
+-	allocInfo.memoryTypeIndex = targetIndex;
+-
+-	exportAllocInfo.sType = VK_STRUCTURE_TYPE_EXPORT_MEMORY_ALLOCATE_INFO;
+-	exportAllocInfo.handleTypes = VK_EXTERNAL_MEMORY_HANDLE_TYPE_OPAQUE_FD_BIT;
+-
+-	allocInfo.pNext = &exportAllocInfo;
+-
+-	dedicatedInfo.sType = VK_STRUCTURE_TYPE_MEMORY_DEDICATED_ALLOCATE_INFO;
+-	dedicatedInfo.image = _internalImage;
+-
+-	exportAllocInfo.pNext = &dedicatedInfo;
+-
+-	if (DynamicVK::vkAllocateMemory(_device->device(), &allocInfo, nullptr, &_internalMemory) != VK_SUCCESS) {
+-		// TODO
+-		abort();
+-	}
+-
+-	DynamicVK::vkBindImageMemory(_device->device(), _internalImage, _internalMemory, 0);
+-
+-	//
+-	// transition the images into the general layout
+-	//
+-
++	// transition the image into the general layout
+ 	VkCommandBufferAllocateInfo cmdBufAllocInfo {};
+ 	cmdBufAllocInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
+ 	cmdBufAllocInfo.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+@@ -283,7 +249,6 @@ CAMetalDrawableTexture::CAMetalDrawableTexture(CGSize size, Indium::PixelFormat
+ 
+ 	VkCommandBuffer cmdBuf;
+ 	if (DynamicVK::vkAllocateCommandBuffers(_device->device(), &cmdBufAllocInfo, &cmdBuf) != VK_SUCCESS) {
+-		// TODO
+ 		abort();
+ 	}
+ 
+@@ -293,37 +258,29 @@ CAMetalDrawableTexture::CAMetalDrawableTexture(CGSize size, Indium::PixelFormat
+ 
+ 	DynamicVK::vkBeginCommandBuffer(cmdBuf, &cmdBufBeginInfo);
+ 
+-	VkImageMemoryBarrier barriers[2];
+-
+-	barriers[0] = {};
+-	barriers[0].sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+-	barriers[0].srcAccessMask = VK_ACCESS_NONE;
+-	barriers[0].dstAccessMask = VK_ACCESS_MEMORY_READ_BIT | VK_ACCESS_MEMORY_WRITE_BIT;
+-	barriers[0].oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+-	barriers[0].newLayout = VK_IMAGE_LAYOUT_GENERAL;
+-	barriers[0].srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+-	barriers[0].dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+-	barriers[0].image = _image;
+-	barriers[0].subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+-	barriers[0].subresourceRange.baseMipLevel = 0;
+-	barriers[0].subresourceRange.levelCount = 1;
+-	barriers[0].subresourceRange.baseArrayLayer = 0;
+-	barriers[0].subresourceRange.layerCount = 1;
+-
+-	barriers[1] = barriers[0];
+-	barriers[1].image = _internalImage;
+-
+-	DynamicVK::vkCmdPipelineBarrier(cmdBuf, VK_PIPELINE_STAGE_NONE, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, 0, 0, nullptr, 0, nullptr, sizeof(barriers) / sizeof(*barriers), barriers);
+-
++	VkImageMemoryBarrier barrier {};
++	barrier.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
++	barrier.srcAccessMask = VK_ACCESS_NONE;
++	barrier.dstAccessMask = VK_ACCESS_MEMORY_READ_BIT | VK_ACCESS_MEMORY_WRITE_BIT;
++	barrier.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
++	barrier.newLayout = VK_IMAGE_LAYOUT_GENERAL;
++	barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
++	barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
++	barrier.image = _image;
++	barrier.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
++	barrier.subresourceRange.baseMipLevel = 0;
++	barrier.subresourceRange.levelCount = 1;
++	barrier.subresourceRange.baseArrayLayer = 0;
++	barrier.subresourceRange.layerCount = 1;
 +
- 	// this transfers ownership of the FD to OpenGL
- 	glImportMemoryFdEXT(_memoryObject, reqs.size, GL_HANDLE_TYPE_OPAQUE_FD_EXT, fd);
- 	fd = -1;
++	DynamicVK::vkCmdPipelineBarrier(cmdBuf, VK_PIPELINE_STAGE_NONE, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, 0, 0, nullptr, 0, nullptr, 1, &barrier);
+ 	DynamicVK::vkEndCommandBuffer(cmdBuf);
+ 
+ 	VkFenceCreateInfo fenceCreateInfo {};
+ 	fenceCreateInfo.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO;
+-
+ 	VkFence theFence = VK_NULL_HANDLE;
+ 
+ 	if (DynamicVK::vkCreateFence(_device->device(), &fenceCreateInfo, nullptr, &theFence) != VK_SUCCESS) {
+-		// TODO
+ 		abort();
+ 	}
+ 
+@@ -333,19 +290,14 @@ CAMetalDrawableTexture::CAMetalDrawableTexture(CGSize size, Indium::PixelFormat
+ 	submitInfo.pCommandBuffers = &cmdBuf;
+ 
+ 	DynamicVK::vkQueueSubmit(_device->graphicsQueue(), 1, &submitInfo, theFence);
+-	if (DynamicVK::vkWaitForFences(_device->device(), 1, &theFence, VK_TRUE, /* 1s */ 1ull * 1000 * 1000 * 1000) != VK_SUCCESS) {
+-		// TODO
++	if (DynamicVK::vkWaitForFences(_device->device(), 1, &theFence, VK_TRUE, 1ull * 1000 * 1000 * 1000) != VK_SUCCESS) {
+ 		abort();
+ 	}
+ 
+ 	DynamicVK::vkDestroyFence(_device->device(), theFence, nullptr);
+-
+ 	DynamicVK::vkFreeCommandBuffers(_device->device(), _device->oneshotCommandPool(), 1, &cmdBuf);
+ 
+-	//
+ 	// create an image view for the public image
+-	//
+-
+ 	VkImageViewCreateInfo imgViewInfo {};
+ 	imgViewInfo.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
+ 	imgViewInfo.image = _image;
+@@ -355,226 +307,120 @@ CAMetalDrawableTexture::CAMetalDrawableTexture(CGSize size, Indium::PixelFormat
+ 	imgViewInfo.components.g = VK_COMPONENT_SWIZZLE_G;
+ 	imgViewInfo.components.b = VK_COMPONENT_SWIZZLE_B;
+ 	imgViewInfo.components.a = VK_COMPONENT_SWIZZLE_A;
+-	imgViewInfo.subresourceRange = barriers[0].subresourceRange;
++	imgViewInfo.subresourceRange = barrier.subresourceRange;
+ 
+ 	if (DynamicVK::vkCreateImageView(_device->device(), &imgViewInfo, nullptr, &_imageView) != VK_SUCCESS) {
+-		// TODO
+-		abort();
+-	}
+-
+-	//
+-	// import the internal image into an OpenGL texture
+-	//
+-
+-	// get an FD for the memory
+-	VkMemoryGetFdInfoKHR getFDInfo {};
+-
+-	getFDInfo.sType = VK_STRUCTURE_TYPE_MEMORY_GET_FD_INFO_KHR;
+-	getFDInfo.memory = _internalMemory;
+-	getFDInfo.handleType = VK_EXTERNAL_MEMORY_HANDLE_TYPE_OPAQUE_FD_BIT;
+-
+-	int fd = -1;
+-
+-	if (DynamicVK::vkGetMemoryFdKHR(_device->device(), &getFDInfo, &fd) != VK_SUCCESS) {
+-		// TODO
+ 		abort();
+ 	}
+-
 -	reportGLErrors();
-+	const GLenum importError = glGetError();
- 
- 	GLint prevTex = 0;
- 	glGetIntegerv(GL_TEXTURE_BINDING_2D, &prevTex);
- 
- 	glCreateTextures(GL_TEXTURE_2D, 1, &_textureID);
- 	reportGLErrors();
+-
+-	// import the memory into OpenGL
+-	glCreateMemoryObjectsEXT(1, &_memoryObject);
+-	reportGLErrors();
+-
+-	// this transfers ownership of the FD to OpenGL
+-	glImportMemoryFdEXT(_memoryObject, reqs.size, GL_HANDLE_TYPE_OPAQUE_FD_EXT, fd);
+-	fd = -1;
+-	reportGLErrors();
+-
+-	GLint prevTex = 0;
+-	glGetIntegerv(GL_TEXTURE_BINDING_2D, &prevTex);
+-
+-	glCreateTextures(GL_TEXTURE_2D, 1, &_textureID);
+-	reportGLErrors();
 -	glTextureParameteri(_textureID, GL_TEXTURE_TILING_EXT, GL_LINEAR_TILING_EXT /*GL_OPTIMAL_TILING_EXT*/);
-+	if (interopUsesLinearTiling()) {
-+		glTextureParameteri(_textureID, GL_TEXTURE_TILING_EXT, GL_LINEAR_TILING_EXT);
-+	}
- 	glTextureParameteri(_textureID, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
- 	glTextureParameteri(_textureID, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
- 	glTextureParameteri(_textureID, GL_TEXTURE_WRAP_S, GL_REPEAT);
- 	glTextureParameteri(_textureID, GL_TEXTURE_WRAP_T, GL_REPEAT);
+-	glTextureParameteri(_textureID, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+-	glTextureParameteri(_textureID, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+-	glTextureParameteri(_textureID, GL_TEXTURE_WRAP_S, GL_REPEAT);
+-	glTextureParameteri(_textureID, GL_TEXTURE_WRAP_T, GL_REPEAT);
 -	reportGLErrors();
-+	// A Metal layer is opaque: macOS ignores the drawable's alpha channel. The game's blended effects lower destination
-+	// alpha as a side effect, and the layer compositor (CARenderer: blending plus an alpha test against 0, over a
-+	// cleared-to-black window) then showed those regions as black quads. Always present alpha = 1.
-+	glTextureParameteri(_textureID, GL_TEXTURE_SWIZZLE_A, GL_ONE);
-+	const GLenum setupError = glGetError();
- 
- 	glTextureStorageMem2DEXT(_textureID, 1, GL_RGBA8, _size.width, _size.height, _memoryObject, 0);
+-
+-	glTextureStorageMem2DEXT(_textureID, 1, GL_RGBA8, _size.width, _size.height, _memoryObject, 0);
 -	reportGLErrors();
-+	const GLenum storageError = glGetError();
-+
-+	// The first import in the process is always logged, so a working run on a new
-+	// driver shows up too; after that only failed imports, at most five.
-+	static std::atomic<unsigned> importCount {0};
-+	static std::atomic<unsigned> importFailures {0};
-+	const bool failed = dedicatedError != GL_NO_ERROR || importError != GL_NO_ERROR || setupError != GL_NO_ERROR || storageError != GL_NO_ERROR;
-+	const bool first = importCount.fetch_add(1, std::memory_order_relaxed) == 0;
-+	if (first || (failed && importFailures.fetch_add(1, std::memory_order_relaxed) < 5)) {
-+		GLint dedicatedReadBack = -1;
-+		GLint tiling = 0;
-+		glGetMemoryObjectParameterivEXT(_memoryObject, GL_DEDICATED_MEMORY_OBJECT_EXT, &dedicatedReadBack);
-+		glGetTextureParameteriv(_textureID, GL_TEXTURE_TILING_EXT, &tiling);
-+		const GLenum queryError = glGetError();
-+		char line[512];
-+		snprintf(line, sizeof(line), "drawable GL import%s dedicated=%s size=%llu %dx%d memoryType=%zu vkTiling=%s glTiling=%s"
-+			" dedicated_error=0x%x import_error=0x%x setup_error=0x%x storage_error=0x%x query_error=0x%x%s",
-+			first ? " (first)" : "", dedicatedReadBack == GL_TRUE ? "yes" : (dedicatedReadBack == -1 ? "unknown" : "no"),
-+			(unsigned long long) reqs.size, (int) _size.width, (int) _size.height, targetIndex,
-+			interopUsesLinearTiling() ? "linear" : "optimal",
-+			tiling == GL_LINEAR_TILING_EXT ? "linear" : (tiling == GL_OPTIMAL_TILING_EXT ? "optimal" : "unknown"),
-+			dedicatedError, importError, setupError, storageError, queryError, failed ? " FAILED" : " ok");
-+		appendDeviceLog(line);
-+	}
+-
+-	glBindTexture(GL_TEXTURE_2D, prevTex);
+-};
++}
  
- 	glBindTexture(GL_TEXTURE_2D, prevTex);
- };
-@@ -605,35 +841,16 @@ void CAMetalDrawableActual::present() {
+ CAMetalDrawableTexture::~CAMetalDrawableTexture() {
+-	reportGLErrors();
+-	glDeleteTextures(1, &_textureID);
+-	reportGLErrors();
+-	glDeleteMemoryObjectsEXT(1, &_memoryObject);
+-	reportGLErrors();
+-
+-	DynamicVK::vkDestroyImageView(_device->device(), _imageView, nullptr);
+-	DynamicVK::vkDestroyImage(_device->device(), _image, nullptr);
+-	DynamicVK::vkFreeMemory(_device->device(), _memory, nullptr);
+-	DynamicVK::vkDestroyImage(_device->device(), _internalImage, nullptr);
+-	DynamicVK::vkFreeMemory(_device->device(), _internalMemory, nullptr);
+-};
+-
+-GLuint CAMetalDrawableTexture::glTexture() const {
+-	return _textureID;
+-};
++	if (_imageView != VK_NULL_HANDLE) {
++		DynamicVK::vkDestroyImageView(_device->device(), _imageView, nullptr);
++	}
++	if (_image != VK_NULL_HANDLE) {
++		DynamicVK::vkDestroyImage(_device->device(), _image, nullptr);
++	}
++	if (_memory != VK_NULL_HANDLE) {
++		DynamicVK::vkFreeMemory(_device->device(), _memory, nullptr);
++	}
++}
+ 
+ VkImageView CAMetalDrawableTexture::imageView() {
+ 	return _imageView;
+-};
++}
+ 
+ VkImage CAMetalDrawableTexture::image() {
+ 	return _image;
+-};
++}
+ 
+ VkImageLayout CAMetalDrawableTexture::imageLayout() {
+ 	return VK_IMAGE_LAYOUT_GENERAL;
+-};
++}
+ 
+ Indium::TextureType CAMetalDrawableTexture::textureType() const {
+ 	return Indium::TextureType::e2D;
+-};
++}
+ 
+ Indium::PixelFormat CAMetalDrawableTexture::pixelFormat() const {
+ 	return _pixelFormat;
+-};
++}
+ 
+ size_t CAMetalDrawableTexture::width() const {
+ 	return _size.width;
+-};
++}
+ 
+ size_t CAMetalDrawableTexture::height() const {
+ 	return _size.height;
+-};
++}
+ 
+ size_t CAMetalDrawableTexture::depth() const {
+ 	return 1;
+-};
++}
+ 
+ size_t CAMetalDrawableTexture::mipmapLevelCount() const {
+ 	return 1;
+-};
++}
+ 
+ size_t CAMetalDrawableTexture::arrayLength() const {
+ 	return 1;
+-};
++}
+ 
+ size_t CAMetalDrawableTexture::sampleCount() const {
+ 	return 1;
+-};
++}
+ 
+ bool CAMetalDrawableTexture::framebufferOnly() const {
+-	// TODO: determine this according to the layer
+ 	return false;
+-};
++}
+ 
+ bool CAMetalDrawableTexture::allowGPUOptimizedContents() const {
+ 	return true;
+-};
++}
+ 
+ bool CAMetalDrawableTexture::shareable() const {
+ 	return false;
+-};
++}
+ 
+ Indium::TextureSwizzleChannels CAMetalDrawableTexture::swizzle() const {
+ 	return {};
+-};
++}
+ 
+ void CAMetalDrawableTexture::replaceRegion(Indium::Region region, size_t mipmapLevel, const void* bytes, size_t bytesPerRow) {
+-	// TODO
+-	abort();
+-};
++	// No-op for swapchain drawable textures; do not abort.
++}
+ 
+ void CAMetalDrawableTexture::replaceRegion(Indium::Region region, size_t mipmapLevel, size_t slice, const void* bytes, size_t bytesPerRow, size_t bytesPerImage) {
+-	// TODO
+-	abort();
+-};
++	// No-op for swapchain drawable textures; do not abort.
++}
+ 
+ void CAMetalDrawableTexture::precommit(std::shared_ptr<Indium::PrivateCommandBuffer> cmdbuf) {
+-	// TODO: check if we need a barrier for the internal image as well; we probably do.
+-	//       we might even need a separate semaphore for it.
+-
+-	VkImageMemoryBarrier barriers[2];
+-
+-	barriers[0] = {};
+-	barriers[0].sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+-	barriers[0].srcAccessMask = VK_ACCESS_MEMORY_READ_BIT | VK_ACCESS_MEMORY_WRITE_BIT;
+-	barriers[0].dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
+-	barriers[0].oldLayout = VK_IMAGE_LAYOUT_GENERAL;
+-	barriers[0].newLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+-	barriers[0].srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+-	barriers[0].dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+-	barriers[0].image = _image;
+-	barriers[0].subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+-	barriers[0].subresourceRange.baseMipLevel = 0;
+-	barriers[0].subresourceRange.levelCount = 1;
+-	barriers[0].subresourceRange.baseArrayLayer = 0;
+-	barriers[0].subresourceRange.layerCount = 1;
+-
+-	barriers[1] = barriers[0];
+-	barriers[1].dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+-	barriers[1].newLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+-	barriers[1].image = _internalImage;
+-
+-	DynamicVK::vkCmdPipelineBarrier(cmdbuf->commandBuffer(), VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, nullptr, 0, nullptr, sizeof(barriers) / sizeof(*barriers), barriers);
+-
+-	VkImageBlit region {};
+-
+-	region.srcOffsets[0] = { 0, 0, 0 };
+-	region.srcOffsets[1] = { static_cast<int32_t>(width()), static_cast<int32_t>(height()), 1 };
+-	region.srcSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+-	region.srcSubresource.mipLevel = 0;
+-	region.srcSubresource.baseArrayLayer = 0;
+-	region.srcSubresource.layerCount = 1;
+-
+-	region.dstOffsets[0] = region.srcOffsets[0];
+-	region.dstOffsets[1] = region.srcOffsets[1];
+-	region.dstSubresource = region.srcSubresource;
+-
+-	DynamicVK::vkCmdBlitImage(cmdbuf->commandBuffer(), _image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, _internalImage, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &region, VK_FILTER_LINEAR);
+-
+-	barriers[0].srcAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
+-	barriers[0].dstAccessMask = VK_ACCESS_MEMORY_READ_BIT | VK_ACCESS_MEMORY_WRITE_BIT;
+-	barriers[0].oldLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+-	barriers[0].newLayout = VK_IMAGE_LAYOUT_GENERAL;
+-
+-	barriers[1].srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+-	barriers[1].dstAccessMask = VK_ACCESS_MEMORY_READ_BIT | VK_ACCESS_MEMORY_WRITE_BIT;
+-	barriers[1].oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+-	barriers[1].newLayout = VK_IMAGE_LAYOUT_GENERAL;
+-
+-	DynamicVK::vkCmdPipelineBarrier(cmdbuf->commandBuffer(), VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, nullptr, 0, nullptr, sizeof(barriers) / sizeof(*barriers), barriers);
+-};
++	VkMemoryBarrier memoryBarrier {};
++	memoryBarrier.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER;
++	memoryBarrier.srcAccessMask = VK_ACCESS_MEMORY_READ_BIT | VK_ACCESS_MEMORY_WRITE_BIT;
++	memoryBarrier.dstAccessMask = VK_ACCESS_MEMORY_READ_BIT | VK_ACCESS_MEMORY_WRITE_BIT;
++	DynamicVK::vkCmdPipelineBarrier(cmdbuf->commandBuffer(), VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, 0, 1, &memoryBarrier, 0, nullptr, 0, nullptr);
++}
+ 
+ bool CAMetalDrawableTexture::needsExportablePresentationSemaphore() const {
+-	return true;
+-};
++	return false;
++}
+ 
+ //
+ // drawable
+ //
+ 
+-CAMetalDrawableActual::CAMetalDrawableActual(CAMetalLayerInternal* layer, CGSize size, NSUInteger drawableID, Indium::PixelFormat pixelFormat, std::shared_ptr<Indium::Device> device, CGLContextObj glContext):
+-	_drawableID(drawableID),
+-	_glContext(CGLRetainContext(glContext))
++CAMetalDrawableActual::CAMetalDrawableActual(CAMetalLayerInternal* layer, CGSize size, NSUInteger drawableID, Indium::PixelFormat pixelFormat, std::shared_ptr<Indium::Device> device):
++	_drawableID(drawableID)
+ {
+ 	_texture = std::make_shared<CAMetalDrawableTexture>(size, pixelFormat, layer.framebufferOnly, std::dynamic_pointer_cast<Indium::PrivateDevice>(device));
+ 	objc_storeWeak(&_layer, layer);
+-};
++}
+ 
+ CAMetalDrawableActual::~CAMetalDrawableActual() {
+ 	reset();
+ 	objc_storeWeak(&_layer, nil);
+-	CGLReleaseContext(_glContext);
+-};
++}
+ 
+ void CAMetalDrawableActual::present() {
+ 	if (_queued) {
+@@ -600,66 +446,42 @@ void CAMetalDrawableActual::present() {
+ 		CAMetalLayerInternal* layer = objc_loadWeak(&_layer);
+ 
+ 		if (!layer) {
+-			// if we've been disowned, drop all presentation requests
+ 			didDrop();
  			return;
  		}
  
 -		[layer queuePresent: _drawableID];
- 
+-
  		_semaphore = _texture->synchronizePresentation();
- 
+-
 -		if (_semaphore) {
 -			int fd = -1;
 -			VkSemaphoreGetFdInfoKHR info {};
-+        // present() may run on the deferred encoding worker. The window's
-+        // EGL context remains current on the main thread, so attempting to
-+        // import a semaphore here fails and leaks the exported syncobj FD.
-+        // Import it in synchronizeRender(), with the compositor context
-+        // current, immediately before the GPU-side wait.
- 
+-
 -			info.sType = VK_STRUCTURE_TYPE_SEMAPHORE_GET_FD_INFO_KHR;
 -			info.semaphore = _semaphore->semaphore;
 -			info.handleType = VK_EXTERNAL_SEMAPHORE_HANDLE_TYPE_OPAQUE_FD_BIT;
@@ -9561,95 +10822,339 @@ index d6f86b31..687f05d5 100644
 -
 -			CGLSetCurrentContext(prev);
 -		}
-+        [layer queuePresent: _drawableID];
++		[layer queuePresent: _drawableID];
  	}
  }
  
-@@ -702,9 +919,46 @@ void CAMetalDrawableActual::reset() {
- };
+ std::shared_ptr<CAMetalDrawableTexture> CAMetalDrawableActual::texture() {
+ 	return _texture;
+-};
++}
++
++std::shared_ptr<Indium::BinarySemaphore> CAMetalDrawableActual::semaphore() {
++	return _semaphore;
++}
+ 
+ NSUInteger CAMetalDrawableActual::drawableID() const {
+ 	return _drawableID;
+-};
++}
+ 
+ CFTimeInterval CAMetalDrawableActual::presentedTime() const {
+ 	return _presentedTime;
+-};
++}
+ 
+ void CAMetalDrawableActual::setWantsToPresentCallback(std::function<void()> wantsToPresentCallback) {
+ 	_wantsToPresentCallback = wantsToPresentCallback;
+-};
++}
+ 
+ void CAMetalDrawableActual::setDidPresentCallback(std::function<void()> didPresentCallback) {
+ 	_didPresentCallback = didPresentCallback;
+-};
++}
+ 
+ void CAMetalDrawableActual::disown() {
+ 	objc_storeWeak(&_layer, nil);
+-};
++}
+ 
+ void CAMetalDrawableActual::didPresent() {
+ 	_presentedTime = CACurrentMediaTime();
+@@ -668,7 +490,7 @@ void CAMetalDrawableActual::didPresent() {
+ 		_didPresentCallback();
+ 		_didPresentCallback = nullptr;
+ 	}
+-};
++}
+ 
+ void CAMetalDrawableActual::didDrop() {
+ 	_presentedTime = 0;
+@@ -677,39 +499,25 @@ void CAMetalDrawableActual::didDrop() {
+ 		_didPresentCallback();
+ 		_didPresentCallback = nullptr;
+ 	}
+-};
++}
+ 
+ void CAMetalDrawableActual::release() {
+ 	@autoreleasepool {
+ 		CAMetalLayerInternal* layer = objc_loadWeak(&_layer);
+ 		[layer releaseDrawable: _drawableID];
+ 	}
+-};
++}
+ 
+ void CAMetalDrawableActual::reset() {
+-	if (_glSemaphore != 0) {
+-		reportGLErrors();
+-		glDeleteSemaphoresEXT(1, &_glSemaphore);
+-		_glSemaphore = 0;
+-		reportGLErrors();
+-	}
+-
+ 	_semaphore = nullptr;
+ 	_wantsToPresentCallback = nullptr;
+ 	_didPresentCallback = nullptr;
+ 	_presentedTime = 0;
+ 	_queued = false;
+-};
++}
  
  void CAMetalDrawableActual::synchronizeRender() {
 -	GLuint tex = _texture->glTexture();
 -	GLenum layout = GL_LAYOUT_GENERAL_EXT;
 -	glWaitSemaphoreEXT(_glSemaphore, 0, NULL, 1, &tex, &layout);
-+    if (!_semaphore) return;
-+    // GL errors of the import and wait are checked for the first imports of the
-+    // process only: glGetError can stall a threaded GL driver, and this runs every frame.
-+    static std::atomic<unsigned> checkedImports {0};
-+    bool check = false;
-+    GLenum importError = GL_NO_ERROR;
-+    if (_glSemaphore == 0) {
-+        // prepareRender() has made the layer's GL context current on this
-+        // thread. Never try to steal it from the submission worker.
-+        glGenSemaphoresEXT(1, &_glSemaphore);
-+        if (_glSemaphore == 0) abort();
-+        int fd = -1;
-+        VkSemaphoreGetFdInfoKHR info {};
-+        info.sType = VK_STRUCTURE_TYPE_SEMAPHORE_GET_FD_INFO_KHR;
-+        info.semaphore = _semaphore->semaphore;
-+        info.handleType = VK_EXTERNAL_SEMAPHORE_HANDLE_TYPE_OPAQUE_FD_BIT;
-+        if (DynamicVK::vkGetSemaphoreFdKHR(_semaphore->device->device(), &info, &fd) != VK_SUCCESS) abort();
-+        check = checkedImports.fetch_add(1, std::memory_order_relaxed) < 600;
-+        if (check) drainGLErrors();
-+        glImportSemaphoreFdEXT(_glSemaphore, GL_HANDLE_TYPE_OPAQUE_FD_EXT, fd);
-+        // A successful import transfers the native FD to the GL driver.
-+        if (check) importError = glGetError();
-+    }
-+    GLuint tex = _texture->glTexture();
-+    GLenum layout = GL_LAYOUT_GENERAL_EXT;
-+    glWaitSemaphoreEXT(_glSemaphore, 0, NULL, 1, &tex, &layout);
-+    if (check) {
-+        // One line on first use, then only failures (at most five).
-+        const GLenum waitError = glGetError();
-+        const bool failed = importError != GL_NO_ERROR || waitError != GL_NO_ERROR;
-+        static std::atomic<bool> loggedFirst {false};
-+        static std::atomic<unsigned> failures {0};
-+        const bool first = !loggedFirst.exchange(true, std::memory_order_relaxed);
-+        if (first || (failed && failures.fetch_add(1, std::memory_order_relaxed) < 5)) {
-+            char line[192];
-+            snprintf(line, sizeof(line), "drawable GL semaphore%s import_error=0x%x wait_error=0x%x%s (checked for the first 600 imports)",
-+                first ? " (first)" : "", importError, waitError, failed ? " FAILED" : " ok");
-+            appendDeviceLog(line);
-+        }
-+    }
- };
+-};
+-
+-static void glDebugCallback(GLenum source, GLenum type, GLuint id, GLenum severity, GLsizei length, const GLchar* message, const void* context) {
+-	fprintf(stderr, "GL CALLBACK: %s type = 0x%x, severity = 0x%x, message = %s\n", (type == GL_DEBUG_TYPE_ERROR ? "** GL ERROR **" : ""), type, severity, message);
+-};
++}
  
- static void glDebugCallback(GLenum source, GLenum type, GLuint id, GLenum severity, GLsizei length, const GLchar* message, const void* context) {
+ @implementation CAMetalDrawableInternal
+ 
+@@ -718,15 +526,6 @@ static void glDebugCallback(GLenum source, GLenum type, GLuint id, GLenum severi
+ @synthesize texture = _texture;
+ @synthesize layer = _layer;
+ 
+-#if 0
+-+ (void)initialize
+-{
+-	glEnable(GL_DEBUG_OUTPUT);
+-	glEnable(GL_DEBUG_OUTPUT_SYNCHRONOUS);
+-	glDebugMessageCallback(glDebugCallback, NULL);
+-}
+-#endif
+-
+ - (instancetype)initWithLayer: (CAMetalLayer*)layer
+                      drawable: (std::shared_ptr<CAMetalDrawableActual>)drawable
+ {
+@@ -748,34 +547,19 @@ static void glDebugCallback(GLenum source, GLenum type, GLuint id, GLenum severi
+ 					return;
+ 				}
+ 
+-				// ensure we stick around to see final presentation so we can notify _presentedHandlers
+-				// even if the user drops all their references to the drawable object
+-				//
+-				// once the wantsToPresentCallback is invoked (the one we're in right now),
+-				// it's guaranteed that the didPresentCallback will invoked (either for presentation
+-				// or for dropping), so we can be sure we're not leaking ourselves here.
+ 				[me retain];
+ 				me->_drawable->setDidPresentCallback([=]() {
+ 					@autoreleasepool {
+-						// autorelease ourselves
+ 						[me autorelease];
+-
+ 						me->_presentedTime = me->_drawable->presentedTime();
+ 
+-						// TODO: synchronize/lock this
+ 						for (MTLDrawablePresentedHandler handler in me->_presentedHandlers) {
+ 							handler(me);
+ 						}
+ 
+-						// release the C++ drawable instance (and allow it to be recycled)
+ 						me->_drawable->release();
+ 						me->_drawable = nullptr;
+ 
+-						// XXX: it's not clear whether the texture is still accessible after presentation,
+-						//      but it *seems* that it would no longer be accessible. according to the documentation,
+-						//      you can safely retain a drawable to query certain properties such as drawableID and presentedTime,
+-						//      but no mention of texture is made.
+-						// TODO: verify this
+ 						[me->_texture release];
+ 						me->_texture = nil;
+ 					}
+@@ -788,8 +572,6 @@ static void glDebugCallback(GLenum source, GLenum type, GLuint id, GLenum severi
+ 
+ - (void)dealloc
+ {
+-	// explicitly release the drawable, in case it hasn't been released already.
+-	// this occurs when the drawable is requested (via nextDrawable from CAMetalLayer) but never presented.
+ 	if (_drawable) {
+ 		_drawable->release();
+ 	}
+@@ -803,19 +585,38 @@ static void glDebugCallback(GLenum source, GLenum type, GLuint id, GLenum severi
+ 
+ - (void)present
+ {
++	static std::atomic<unsigned> pCount {0};
++	unsigned n = pCount.fetch_add(1, std::memory_order_relaxed);
++	if (n < 60 || n % 120 == 0) {
++		char line[128];
++		snprintf(line, sizeof(line), "[CAMetalDrawable present] frame=%u drawableID=%lu", n, (unsigned long)_drawableID);
++		appendDeviceLog(line);
++	}
+ 	_drawable->present();
+ }
+ 
+ - (void)presentAfterMinimumDuration: (CFTimeInterval)duration
+ {
+-	// TODO
+-	abort();
++	static std::atomic<unsigned> pCount {0};
++	unsigned n = pCount.fetch_add(1, std::memory_order_relaxed);
++	if (n < 60 || n % 120 == 0) {
++		char line[128];
++		snprintf(line, sizeof(line), "[CAMetalDrawable presentAfterMinimumDuration:%.4f] frame=%u drawableID=%lu", duration, n, (unsigned long)_drawableID);
++		appendDeviceLog(line);
++	}
++	[self present];
+ }
+ 
+ - (void)presentAtTime: (CFTimeInterval)presentationTime
+ {
+-	// TODO
+-	abort();
++	static std::atomic<unsigned> pCount {0};
++	unsigned n = pCount.fetch_add(1, std::memory_order_relaxed);
++	if (n < 60 || n % 120 == 0) {
++		char line[128];
++		snprintf(line, sizeof(line), "[CAMetalDrawable presentAtTime:%.4f] frame=%u drawableID=%lu", presentationTime, n, (unsigned long)_drawableID);
++		appendDeviceLog(line);
++	}
++	[self present];
+ }
+ 
+ - (void)addPresentedHandler: (MTLDrawablePresentedHandler)block
+diff --git a/QuartzCore/CAMetalDrawableInternal.h b/QuartzCore/CAMetalDrawableInternal.h
+index 757dd8c9..cbc313d5 100644
+--- a/QuartzCore/CAMetalDrawableInternal.h
++++ b/QuartzCore/CAMetalDrawableInternal.h
+@@ -20,8 +20,6 @@
+ #import <QuartzCore/CAMetalDrawable.h>
+ #import <Metal/MTLDrawableInternal.h>
+ #import <Metal/MTLTextureInternal.h>
+-#import <OpenGL/gl.h>
+-#import <OpenGL/OpenGL.h>
+ 
+ #if DARLING_METAL_ENABLED
+ 
+@@ -34,19 +32,13 @@ class CAMetalDrawableTexture: public Indium::PrivateTexture {
+ 	VkImage _image = VK_NULL_HANDLE;
+ 	VkDeviceMemory _memory = VK_NULL_HANDLE;
+ 	VkImageView _imageView = VK_NULL_HANDLE;
+-	GLuint _textureID = 0;
+-	GLuint _memoryObject = 0;
+ 	Indium::PixelFormat _pixelFormat;
+-	VkImage _internalImage = VK_NULL_HANDLE;
+-	VkDeviceMemory _internalMemory = VK_NULL_HANDLE;
+ 	bool _framebufferOnly = false;
+ 
+ public:
+ 	CAMetalDrawableTexture(CGSize size, Indium::PixelFormat pixelFormat, bool framebufferOnly, std::shared_ptr<Indium::PrivateDevice> privateDevice);
+ 	virtual ~CAMetalDrawableTexture();
+ 
+-	GLuint glTexture() const;
+-
+ 	virtual VkImageView imageView() override;
+ 	virtual VkImage image() override;
+ 	virtual VkImageLayout imageLayout() override;
+@@ -74,21 +66,20 @@ private:
+ 	std::shared_ptr<CAMetalDrawableTexture> _texture = nullptr;
+ 	CAMetalLayerInternal* _layer = nil;
+ 	std::shared_ptr<Indium::BinarySemaphore> _semaphore = nullptr;
+-	GLuint _glSemaphore = 0;
+ 	std::function<void()> _wantsToPresentCallback = nullptr;
+ 	std::function<void()> _didPresentCallback = nullptr;
+ 	NSUInteger _drawableID = NSUIntegerMax;
+ 	CFTimeInterval _presentedTime = 0;
+ 	bool _queued = false;
+-	CGLContextObj _glContext = nullptr;
+ 
+ public:
+-	CAMetalDrawableActual(CAMetalLayerInternal* layer, CGSize size, NSUInteger drawableID, Indium::PixelFormat pixelFormat, std::shared_ptr<Indium::Device> device, CGLContextObj _glContext);
++	CAMetalDrawableActual(CAMetalLayerInternal* layer, CGSize size, NSUInteger drawableID, Indium::PixelFormat pixelFormat, std::shared_ptr<Indium::Device> device);
+ 	virtual ~CAMetalDrawableActual();
+ 
+ 	virtual void present() override;
+ 
+ 	std::shared_ptr<CAMetalDrawableTexture> texture();
++	std::shared_ptr<Indium::BinarySemaphore> semaphore();
+ 	NSUInteger drawableID() const;
+ 	CFTimeInterval presentedTime() const;
+ 
 diff --git a/QuartzCore/CAMetalLayer.mm b/QuartzCore/CAMetalLayer.mm
-index b81e2e14..b71b729a 100644
+index b81e2e14..b2b05eeb 100644
 --- a/QuartzCore/CAMetalLayer.mm
 +++ b/QuartzCore/CAMetalLayer.mm
-@@ -25,7 +25,79 @@
+@@ -17,7 +17,6 @@
+  * along with Darling.  If not, see <http://www.gnu.org/licenses/>.
+  */
+ 
+-#define GL_GLEXT_PROTOTYPES 1
+ #import "CAMetalLayerInternal.h"
+ #import "CAMetalDrawableInternal.h"
+ #import <Foundation/NSRaise.h>
+@@ -25,30 +24,149 @@
  #import <QuartzCore/CALayerContext.h>
  #import <Metal/stubs.h>
  
-+// Wait-site counters (flag file /tmp/metal-debug-waits, checked once at process start): the same summary the Indium
-+// hand-off waits write, so the drawable hand-out and the command-buffer hand-offs appear in one histogram.
 +#include <indium/waits.private.hpp>
 +
  #include <algorithm>
 +#include <cstdio>
 +#include <unistd.h>
++#include <dlfcn.h>
 +#include <map>
 +#include <mutex>
 +#include <string>
 +#include <vector>
 +#import <dispatch/dispatch.h>
 +
-+// Diagnostics are off unless /tmp/metal-debug-trace exists when the process starts.
++static void appendDeviceLog(const std::string& line) {
++	if (FILE* log = fopen("/tmp/metal-device.log", "a")) {
++		fprintf(log, "[CAMetalLayer] pid=%d %s\n", getpid(), line.c_str());
++		fclose(log);
++	}
++}
+ 
+-#import "CALayerInternal.h"
++static void ensureX11WindowVisible(void* dpy, void* win) {
++	if (!dpy || !win) return;
++	typedef int (*XMapRaised_t)(void*, unsigned long);
++	typedef int (*XFlush_t)(void*);
++	static XMapRaised_t pfnXMapRaised = nullptr;
++	static XFlush_t pfnXFlush = nullptr;
++	static std::once_flag flag;
++	std::call_once(flag, []() {
++		void* h = dlopen("libX11.so.6", RTLD_LAZY | RTLD_NOLOAD);
++		if (!h) h = dlopen("libX11.so.6", RTLD_LAZY | RTLD_GLOBAL);
++		if (!h) h = dlopen("libX11.so", RTLD_LAZY | RTLD_GLOBAL);
++		if (h) {
++			pfnXMapRaised = (XMapRaised_t)dlsym(h, "XMapRaised");
++			pfnXFlush = (XFlush_t)dlsym(h, "XFlush");
++		} else {
++			pfnXMapRaised = (XMapRaised_t)dlsym(RTLD_DEFAULT, "XMapRaised");
++			pfnXFlush = (XFlush_t)dlsym(RTLD_DEFAULT, "XFlush");
++		}
++	});
++	if (pfnXMapRaised) {
++		pfnXMapRaised(dpy, (unsigned long)(uintptr_t)win);
++	}
++	if (pfnXFlush) {
++		pfnXFlush(dpy);
++	}
++}
+ 
+-static void reportGLErrors(void) {
+-#if 0
+-	GLenum err;
 +static bool darlingMetalDebug()
 +{
 +	static const bool enabled = access("/tmp/metal-debug-trace", F_OK) == 0;
 +	return enabled;
 +}
-+
-+// Diagnostic trace of the drawable/presentation flow, written to the guest's /tmp/metal-trace.log.
-+// Rate limited: the first events and then every hundredth.
+ 
+-	while ((err = glGetError()) != GL_NO_ERROR) {
+-		printf("*** OPENGL ERROR: %d ***\n", err);
 +static void darlingMetalTrace(const char* what, long a, long b)
 +{
 +	if (!darlingMetalDebug()) {
 +		return;
-+	}
+ 	}
+-#endif
 +	static int count = 0;
 +	int n = __sync_add_and_fetch(&count, 1);
 +	if (n > 80 && n % 100 != 0) {
@@ -9661,7 +11166,6 @@ index b81e2e14..b71b729a 100644
 +	}
 +}
 +
-+// Cheap aggregated timings (flag file /tmp/metal-debug-timing in the guest when the process starts), printed every 5 s.
 +static void darlingMetalTiming(const char* what, double seconds)
 +{
 +	static const bool enabled = access("/tmp/metal-debug-timing", F_OK) == 0;
@@ -9696,84 +11200,180 @@ index b81e2e14..b71b729a 100644
 +{
 +	darlingMetalTiming(what, seconds);
 +}
++
++#import "CALayerInternal.h"
++
++namespace DynamicVK = Indium::DynamicVK;
++
++namespace Indium::DynamicVK {
++	static DynamicFunction<PFN_vkResetFences> vkResetFencesLocal("vkResetFences");
+ };
  
- #import "CALayerInternal.h"
++typedef struct VkXlibSurfaceCreateInfoKHR {
++	VkStructureType sType;
++	const void* pNext;
++	VkFlags flags;
++	void* dpy;
++	unsigned long window;
++} VkXlibSurfaceCreateInfoKHR;
++
++typedef VkResult (VKAPI_PTR *PFN_vkCreateXlibSurfaceKHR)(VkInstance, const VkXlibSurfaceCreateInfoKHR*, const VkAllocationCallbacks*, VkSurfaceKHR*);
++typedef VkResult (VKAPI_PTR *PFN_vkGetPhysicalDeviceSurfaceSupportKHR)(VkPhysicalDevice, uint32_t, VkSurfaceKHR, VkBool32*);
++
++extern "C" void* _CGSNativeDisplay(CGSConnectionID connId);
++extern "C" CGSConnectionID CGSMainConnectionID(void);
++
++static PFN_vkCreateXlibSurfaceKHR pfn_vkCreateXlibSurfaceKHR = nullptr;
++static PFN_vkGetPhysicalDeviceSurfaceSupportKHR pfn_vkGetPhysicalDeviceSurfaceSupportKHR = nullptr;
++
++static void resolveVulkanSurfaceExtensions() {
++	static std::once_flag flag;
++	std::call_once(flag, []() {
++		if (DynamicVK::vkGetInstanceProcAddr && Indium::globalInstance) {
++			pfn_vkCreateXlibSurfaceKHR = reinterpret_cast<PFN_vkCreateXlibSurfaceKHR>(
++				DynamicVK::vkGetInstanceProcAddr(Indium::globalInstance, "vkCreateXlibSurfaceKHR"));
++			pfn_vkGetPhysicalDeviceSurfaceSupportKHR = reinterpret_cast<PFN_vkGetPhysicalDeviceSurfaceSupportKHR>(
++				DynamicVK::vkGetInstanceProcAddr(Indium::globalInstance, "vkGetPhysicalDeviceSurfaceSupportKHR"));
++		}
++	});
++}
++
+ @implementation CAMetalLayer
  
-@@ -205,6 +277,65 @@ static void reportGLErrors(void) {
+ #if DARLING_METAL_ENABLED
+-// FIXME: this breaks inheritance from CAMetalLayer.
+-//        the problem is that we need some C++ ivars, but we can't put those in the public header
+-//        and this code needs to compile on 32-bit (so it can't use non-fragile ivars).
+-//        maybe we could keep the troublesome ivars in an associated object...
+-//
+-//        then again, maybe we could get away with stubbing the entire class when compiling for 32-bit
+-//        since Metal is unavailable for 32-bit code.
+ + (instancetype)allocWithZone: (NSZone*)zone
+ {
+ 	if (self == [CAMetalLayer class]) {
+@@ -205,63 +323,81 @@ static void reportGLErrors(void) {
  
  @end
  
-+#include <array>
-+#include <atomic>
-+#include <chrono>
-+#include <mutex>
-+#include <unistd.h>
-+namespace {
-+struct PresentIntervalSample { std::atomic<int64_t> queued{0}, renderStart{0}, renderDone{0}, flushDone{0}; };
-+static int64_t presentIntervalNow() { return std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now().time_since_epoch()).count(); }
-+static PresentIntervalSample* beginPresentIntervalSample() {
-+ static const bool enabled = [] { FILE* flag = fopen("/tmp/metal-frame-interval-capture", "r"); if (!flag) return false; fclose(flag); return true; }();
-+ if (!enabled) return nullptr;
-+ static std::atomic<bool> finished{false};
-+ static std::mutex captureMutex;
-+ // Never reuse a callback's timestamp storage. A delayed main-queue callback
-+ // must not stall the recorder or write into a subsequent capture. All
-+ // storage stays alive until process exit; 64 blocks cap its size at 4 MiB.
-+ static std::array<std::array<PresentIntervalSample,2048>,64> blocks;
-+ static size_t count = 0;
-+ static unsigned block = 0, seriesBlocks = 0;
-+ static const bool testing = getenv("RIOT_FRAME_CAPTURE_TEST") != nullptr;
-+ if (finished.load(std::memory_order_relaxed)) {
-+  static std::atomic<unsigned> checks{0};
-+  if (checks.fetch_add(1, std::memory_order_relaxed) % (testing ? 8 : 128)) return nullptr;
-+  // Explicitly rearm a bounded eight-block capture in the same match. Keep
-+  // filenames increasing so an earlier workload's measurements survive.
-+  if (access("/tmp/metal-frame-interval-repeat", F_OK) != 0) return nullptr;
-+  std::lock_guard<std::mutex> guard(captureMutex);
-+  if (finished.load(std::memory_order_relaxed) && block < blocks.size() &&
-+      unlink("/tmp/metal-frame-interval-repeat") == 0) {
-+   count = 0; seriesBlocks = 0;
-+   finished.store(false, std::memory_order_relaxed);
-+  }
-+ }
-+ std::lock_guard<std::mutex> guard(captureMutex);
-+ if (finished.load(std::memory_order_relaxed)) return nullptr;
-+ static const int64_t start = presentIntervalNow();
-+ const int64_t now = presentIntervalNow();
-+ if (!testing && now - start < 90000000000LL) return nullptr;
-+ auto& samples = blocks[block];
-+ static const size_t limit = testing ? 8 : samples.size();
-+ if (count < limit) { samples[count].queued.store(now); return &samples[count++]; }
-+ // Completion columns may still be zero; the analyzer labels incomplete rows.
-+ // Queued timestamps already cover every request in the bounded block.
-+ char path[96];
-+ if (block == 0) snprintf(path,sizeof(path),"/tmp/metal-present-intervals.csv");
-+ else snprintf(path,sizeof(path),"/tmp/metal-present-intervals-%u.csv",block);
-+ if (FILE* log=fopen(path,"w")) {
-+  fprintf(log,"queued_ns,render_start_ns,render_done_ns,flush_done_ns\n");
-+  for (size_t i=0;i<limit;++i) { const auto& sample=samples[i]; fprintf(log,"%lld,%lld,%lld,%lld\n",(long long)sample.queued.load(),(long long)sample.renderStart.load(),(long long)sample.renderDone.load(),(long long)sample.flushDone.load()); }
-+  fclose(log);
-+ }
-+ ++block;
-+ if (++seriesBlocks >= 8 || block >= blocks.size()) { finished.store(true, std::memory_order_relaxed); return nullptr; }
-+ count=0;
-+ // This request covers file I/O and is deliberately outside both sample blocks.
-+ return nullptr;
-+}
-+}
-+
- @implementation CAMetalLayerInternal
- 
+-@implementation CAMetalLayerInternal
+-
  #if DARLING_METAL_ENABLED
-@@ -226,6 +357,7 @@ static void reportGLErrors(void) {
+ 
+-@synthesize presentsWithTransaction = _presentsWithTransaction;
+-@synthesize displaySyncEnabled = _displaySyncEnabled;
+-@synthesize wantsExtendedDynamicRangeContent = _wantsExtendedDynamicRangeContent;
+-@synthesize EDRMetadata = _EDRMetadata;
+-@synthesize allowsNextDrawableTimeout = _allowsNextDrawableTimeout;
+-@synthesize developerHUDProperties = _developerHUDProperties;
+-
+-// TODO: use CGL here instead of direct OpenGL calls
+-//       (once we CGL-ify the rest of QuartzCore)
++@implementation CAMetalLayerInternal
+ 
+ - (instancetype)init
+ {
+ 	self = [super init];
+-	if (self != nil) {
++	if (self) {
  		_pixelFormat = MTLPixelFormatBGRA8Unorm;
  		_framebufferOnly = YES;
- 		_drawableSize = _bounds.size; // TODO: multiply by contentsScale, once we add that to CALayer
-+		_drawableSizeExplicitlySet = NO;
- 		_displaySyncEnabled = YES;
+-		_drawableSize = _bounds.size; // TODO: multiply by contentsScale, once we add that to CALayer
+-		_displaySyncEnabled = YES;
  		_maximumDrawableCount = 3;
  		_allowsNextDrawableTimeout = YES;
-@@ -321,6 +453,7 @@ static void reportGLErrors(void) {
+-		_developerHUDProperties = [NSDictionary new];
+-
+ 		_drawableCondition = [NSCondition new];
++		_usableDrawablesBitmap = 0;
++		_vkSurface = VK_NULL_HANDLE;
++		_vkSwapchain = VK_NULL_HANDLE;
++		_vkNativeWindow = nullptr;
++		_vkAcquireSemaphore = VK_NULL_HANDLE;
++		_vkRenderCompleteSemaphore = VK_NULL_HANDLE;
++		_vkPresentFence = VK_NULL_HANDLE;
++		_vkCommandPool = VK_NULL_HANDLE;
++		_vkCmdBuffer = VK_NULL_HANDLE;
+ 	}
+ 	return self;
+ }
+ 
+ - (void)dealloc
+ {
+-	[_device release];
+-	if (_colorspace) {
+-		CGColorSpaceRelease(_colorspace);
++	if (_device) {
++		auto dev = std::dynamic_pointer_cast<Indium::PrivateDevice>(((MTLDeviceInternal*)_device).device);
++		if (dev) {
++			if (_vkPresentFence != VK_NULL_HANDLE) {
++				DynamicVK::vkWaitForFences(dev->device(), 1, &_vkPresentFence, VK_TRUE, 1000000000ULL);
++				DynamicVK::vkDestroyFence(dev->device(), _vkPresentFence, nullptr);
++				_vkPresentFence = VK_NULL_HANDLE;
++			}
++			if (_vkAcquireSemaphore != VK_NULL_HANDLE) {
++				DynamicVK::vkDestroySemaphore(dev->device(), _vkAcquireSemaphore, nullptr);
++				_vkAcquireSemaphore = VK_NULL_HANDLE;
++			}
++			if (_vkRenderCompleteSemaphore != VK_NULL_HANDLE) {
++				DynamicVK::vkDestroySemaphore(dev->device(), _vkRenderCompleteSemaphore, nullptr);
++				_vkRenderCompleteSemaphore = VK_NULL_HANDLE;
++			}
++			if (_vkCommandPool != VK_NULL_HANDLE) {
++				DynamicVK::vkDestroyCommandPool(dev->device(), _vkCommandPool, nullptr);
++				_vkCommandPool = VK_NULL_HANDLE;
++				_vkCmdBuffer = VK_NULL_HANDLE;
++			}
++			if (_vkSwapchain != VK_NULL_HANDLE) {
++				DynamicVK::vkDestroySwapchainKHR(dev->device(), _vkSwapchain, nullptr);
++				_vkSwapchain = VK_NULL_HANDLE;
++			}
++			if (_vkSurface != VK_NULL_HANDLE) {
++				DynamicVK::vkDestroySurfaceKHR(Indium::globalInstance, _vkSurface, nullptr);
++				_vkSurface = VK_NULL_HANDLE;
++			}
++		}
+ 	}
+-	[_EDRMetadata release];
+-	[_developerHUDProperties release];
++	[_device release];
+ 	[_drawableCondition release];
+-
+-	reportGLErrors();
+-	if (_tex != 0) {
+-		glDeleteTextures(1, &_tex);
+-		reportGLErrors();
+-	}
+-
++	if (_colorspace) CGColorSpaceRelease(_colorspace);
+ 	[super dealloc];
+ }
+ 
+-//
+-// properties
+-//
++@synthesize presentsWithTransaction = _presentsWithTransaction;
++@synthesize displaySyncEnabled = _displaySyncEnabled;
++@synthesize wantsExtendedDynamicRangeContent = _wantsExtendedDynamicRangeContent;
++@synthesize EDRMetadata = _EDRMetadata;
++@synthesize allowsNextDrawableTimeout = _allowsNextDrawableTimeout;
++@synthesize developerHUDProperties = _developerHUDProperties;
+ 
+ - (id<MTLDevice>)device
+ {
+-	return [[_device retain] autorelease];
++	return _device;
+ }
+ 
+ - (void)setDevice: (id<MTLDevice>)device
+@@ -290,7 +426,6 @@ static void reportGLErrors(void) {
+ 
+ - (CGColorSpaceRef)colorspace
+ {
+-	// TODO: retain and autorelease this? it's technically an objc object
+ 	return _colorspace;
+ }
+ 
+@@ -321,6 +456,7 @@ static void reportGLErrors(void) {
  
  - (void)setDrawableSize: (CGSize)drawableSize
  {
@@ -9781,29 +11381,24 @@ index b81e2e14..b71b729a 100644
  	_drawableSize = drawableSize;
  	[self recreateDrawables];
  }
-@@ -343,18 +476,25 @@ static void reportGLErrors(void) {
- // overridden properties
- //
+@@ -339,36 +475,45 @@ static void reportGLErrors(void) {
+ 	[self recreateDrawables];
+ }
  
+-//
+-// overridden properties
+-//
+-
 -// it appears that the drawable size does NOT change after initially being set
 -#if 0
  - (void)setBounds: (CGRect)value
  {
  	[super setBounds: value];
-+	if (!_drawableSizeExplicitlySet && value.size.width > 0 && value.size.height > 0) {
-+		CGFloat scale = self.contentsScale > 0.0 ? self.contentsScale : 1.0;
-+		_drawableSize = CGSizeMake(value.size.width * scale, value.size.height * scale);
-+		[self recreateDrawables];
-+	}
-+}
- 
+-
 -	CGSize drawableSize = value.size;
 -	// TODO: multiply by contentsScale (CALayer doesn't currently have that property)
 -
 -	[self setDrawableSize: drawableSize];
-+- (void)setFrame: (CGRect)value
-+{
-+	[super setFrame: value];
 +	if (!_drawableSizeExplicitlySet && value.size.width > 0 && value.size.height > 0) {
 +		CGFloat scale = self.contentsScale > 0.0 ? self.contentsScale : 1.0;
 +		_drawableSize = CGSizeMake(value.size.width * scale, value.size.height * scale);
@@ -9812,9 +11407,19 @@ index b81e2e14..b71b729a 100644
  }
 -#endif
  
- //
- // methods
-@@ -363,12 +503,45 @@ static void reportGLErrors(void) {
+-//
+-// methods
+-//
++- (void)setFrame: (CGRect)value
++{
++	[super setFrame: value];
++	if (!_drawableSizeExplicitlySet && value.size.width > 0 && value.size.height > 0) {
++		CGFloat scale = self.contentsScale > 0.0 ? self.contentsScale : 1.0;
++		_drawableSize = CGSizeMake(value.size.width * scale, value.size.height * scale);
++		[self recreateDrawables];
++	}
++}
+ 
  - (id<CAMetalDrawable>)nextDrawable
  {
  	std::shared_ptr<CAMetalDrawableActual> drawable = nullptr;
@@ -9830,62 +11435,37 @@ index b81e2e14..b71b729a 100644
  
  	[_drawableCondition lock];
  
-+	if (_usableDrawablesBitmap == 0) {
-+		@synchronized(self) {
-+			if (_lastPresentedDrawable) {
-+				_lastPresentedDrawable->didPresent();
-+				_lastPresentedDrawable = nullptr;
-+			}
-+		}
-+	}
-+
-+	if (_usableDrawablesBitmap == 0 && _queuedDrawableCount > 0 && [NSThread isMainThread] && _context) {
-+		[_drawableCondition unlock];
-+		[_context render];
-+		[_context flush];
-+		[_drawableCondition lock];
-+		@synchronized(self) {
-+			if (_lastPresentedDrawable) {
-+				_lastPresentedDrawable->didPresent();
-+				_lastPresentedDrawable = nullptr;
-+			}
-+		}
-+	}
-+
  	NSDate* endTime = [NSDate dateWithTimeIntervalSinceNow: 1];
  
  	while (_usableDrawablesBitmap == 0) {
-+		// No drawable is free: this thread really blocks here (the wait is what the pool starvation costs the game).
 +		Indium::Waits::Block block("nextDrawable");
  		if (_allowsNextDrawableTimeout) {
  			if (![_drawableCondition waitUntilDate: endTime]) {
  				break;
-@@ -378,8 +551,24 @@ static void reportGLErrors(void) {
+@@ -378,8 +523,15 @@ static void reportGLErrors(void) {
  		}
  	}
  
-+	if (_usableDrawablesBitmap == 0) {
-+		@synchronized(self) {
-+			if (_lastPresentedDrawable) {
-+				_lastPresentedDrawable->didPresent();
-+				_lastPresentedDrawable = nullptr;
-+			}
-+		}
-+		if (_usableDrawablesBitmap == 0 && (_drawables[0] == nullptr || _drawableSize.width == 0)) {
-+			[_drawableCondition unlock];
-+			[self recreateDrawables];
-+			[_drawableCondition lock];
-+		}
++	if (_usableDrawablesBitmap == 0 && (_drawables[0] == nullptr || _drawableSize.width == 0)) {
++		[_drawableCondition unlock];
++		[self recreateDrawables];
++		[_drawableCondition lock];
 +	}
 +
  	if (_usableDrawablesBitmap == 0) {
- 		// timeout reached
+-		// timeout reached
 +		darlingMetalTiming("nextDrawableTimeout", CACurrentMediaTime() - waitStart);
 +		darlingMetalTrace("nextDrawable-timeout", (long) _queuedDrawableCount, 0);
  		[_drawableCondition unlock];
  		return nil;
  	}
-@@ -400,6 +589,8 @@ static void reportGLErrors(void) {
+@@ -394,12 +546,13 @@ static void reportGLErrors(void) {
+ 	}
+ 
+ 	if (drawableID == UINT8_MAX) {
+-		// shouldn't happen, but just in case
+ 		[_drawableCondition unlock];
+ 		return nil;
  	}
  
  	_usableDrawablesBitmap &= ~(1u << drawableID);
@@ -9894,49 +11474,35 @@ index b81e2e14..b71b729a 100644
  
  	drawable = _drawables[drawableID];
  
-@@ -410,20 +601,49 @@ static void reportGLErrors(void) {
+@@ -410,20 +563,28 @@ static void reportGLErrors(void) {
  
  - (void)queuePresent: (NSUInteger)drawableID
  {
-+    auto* intervalSample = beginPresentIntervalSample();
++	darlingMetalTrace("queuePresent", (long) drawableID, 0);
++
++	if (_vkSwapchain == VK_NULL_HANDLE) {
++		[self recreateDrawables];
++	}
++
++	if (_vkSwapchain != VK_NULL_HANDLE) {
++		[self presentDirectVulkan: drawableID];
++		return;
++	}
++
  	[_drawableCondition lock];
- 	_queuedDrawables[_queuedDrawableCount] = drawableID;
- 	++_queuedDrawableCount;
-+	darlingMetalTrace("queuePresent", (long) drawableID, (long) _queuedDrawableCount);
+-	_queuedDrawables[_queuedDrawableCount] = drawableID;
+-	++_queuedDrawableCount;
++	auto drawable = _drawables[drawableID];
  	[_drawableCondition unlock];
- 
- 	// we now need to schedule a render
- 	//
- 	// FIXME: once we fix up CALayer and make it more featureful, this needs to change to `self.needsDisplay = YES` or equivalently `[self setNeedsDisplay: YES]`
- 	// right now, CALayer is missing all the needs-display logic (which is currently in NSView)
+-
+-	// we now need to schedule a render
+-	//
+-	// FIXME: once we fix up CALayer and make it more featureful, this needs to change to `self.needsDisplay = YES` or equivalently `[self setNeedsDisplay: YES]`
+-	// right now, CALayer is missing all the needs-display logic (which is currently in NSView)
 -	[self display];
-+    // Present only after the Vulkan/GL synchronization has been prepared, on
-+    // the window thread. display alone does not drive the layer compositor.
-+    void (^renderBlock)(void) = ^{
-+        if (intervalSample) intervalSample->renderStart.store(presentIntervalNow());
-+        darlingMetalTrace("present-block-runs", 0, 0);
-+        CFTimeInterval blockStart = CACurrentMediaTime();
-+        [self->_context render];
-+        if (intervalSample) intervalSample->renderDone.store(presentIntervalNow());
-+        CFTimeInterval renderDone = CACurrentMediaTime();
-+        darlingMetalTiming("mainBlockRender", renderDone - blockStart);
-+        [self->_context flush];
-+        if (intervalSample) intervalSample->flushDone.store(presentIntervalNow(), std::memory_order_release);
-+        darlingMetalTiming("mainBlockFlush", CACurrentMediaTime() - renderDone);
-+
-+        @synchronized(self) {
-+            if (self->_lastPresentedDrawable) {
-+                self->_lastPresentedDrawable->didPresent();
-+                self->_lastPresentedDrawable = nullptr;
-+            }
-+        }
-+    };
-+
-+    if ([NSThread isMainThread]) {
-+        renderBlock();
-+    } else {
-+        dispatch_async(dispatch_get_main_queue(), renderBlock);
-+    }
++	if (drawable) {
++		drawable->didPresent();
++	}
  }
  
  - (void)releaseDrawable: (NSUInteger)drawableID
@@ -9945,10 +11511,13 @@ index b81e2e14..b71b729a 100644
  	[_drawableCondition lock];
  	_usableDrawablesBitmap |= 1u << drawableID;
  	[_drawableCondition signal];
-@@ -440,9 +660,10 @@ static void reportGLErrors(void) {
- 
- 		// disown it first so it doesn't try to release itself
- 		// (and end up deadlocking in `releaseDrawable:`)
+@@ -437,16 +598,14 @@ static void reportGLErrors(void) {
+ 	// drop all queued presentations
+ 	for (NSUInteger i = 0; i < _queuedDrawableCount; ++i) {
+ 		auto& drawable = _drawables[_queuedDrawables[i]];
+-
+-		// disown it first so it doesn't try to release itself
+-		// (and end up deadlocking in `releaseDrawable:`)
 -		drawable->disown();
 -
 -		drawable->didDrop();
@@ -9959,11 +11528,17 @@ index b81e2e14..b71b729a 100644
  	}
  	_queuedDrawableCount = 0;
  
-@@ -455,7 +676,33 @@ static void reportGLErrors(void) {
+-	// clear the drawable array (and disown them so they don't try to queue with us anymore)
++	// clear the drawable array
+ 	for (auto& drawable: _drawables) {
+ 		if (drawable) {
+ 			drawable->disown();
+@@ -455,14 +614,236 @@ static void reportGLErrors(void) {
  	}
  	_usableDrawablesBitmap = 0;
  
 -	if (!_device || !_context || _drawableSize.width == 0 || _drawableSize.height == 0) {
+-		// can't create new drawables
 +	if (!_device) {
 +		_device = [self.preferredDevice retain];
 +	}
@@ -9990,14 +11565,240 @@ index b81e2e14..b71b729a 100644
 +		}
 +	}
 +
-+	if (!_device || !_context || !_context.glContext || _drawableSize.width == 0 || _drawableSize.height == 0) {
- 		// can't create new drawables
++	if (!_device || _drawableSize.width == 0 || _drawableSize.height == 0) {
  		[_drawableCondition unlock];
  		return;
-@@ -497,17 +744,22 @@ static void reportGLErrors(void) {
- 		if (_tex != 0) {
- 			reportGLErrors();
- 			glDeleteTextures(1, &_tex);
+ 	}
+ 
+-	Indium::PixelFormat pixelFormat;
++	auto dev = std::dynamic_pointer_cast<Indium::PrivateDevice>(((MTLDeviceInternal*)_device).device);
++	if (!dev) {
++		[_drawableCondition unlock];
++		return;
++	}
++
++	void* nativeWin = nil;
++	if (_context && [_context subwindow]) {
++		nativeWin = [[_context subwindow] nativeWindow];
++	} else if (self.superlayer && [self.superlayer _context] && [[self.superlayer _context] subwindow]) {
++		nativeWin = [[[self.superlayer _context] subwindow] nativeWindow];
++	}
++	void* nativeDpy = _CGSNativeDisplay(CGSMainConnectionID());
++
++	if (nativeWin && nativeDpy) {
++		ensureX11WindowVisible(nativeDpy, nativeWin);
++	}
++
++	resolveVulkanSurfaceExtensions();
++
++	if (pfn_vkCreateXlibSurfaceKHR && nativeWin && nativeDpy) {
++		if (_vkSurface == VK_NULL_HANDLE || _vkNativeWindow != nativeWin) {
++			if (_vkSwapchain != VK_NULL_HANDLE) {
++				DynamicVK::vkDestroySwapchainKHR(dev->device(), _vkSwapchain, nullptr);
++				_vkSwapchain = VK_NULL_HANDLE;
++			}
++			if (_vkSurface != VK_NULL_HANDLE) {
++				DynamicVK::vkDestroySurfaceKHR(Indium::globalInstance, _vkSurface, nullptr);
++				_vkSurface = VK_NULL_HANDLE;
++			}
++			VkXlibSurfaceCreateInfoKHR sci {};
++			sci.sType = static_cast<VkStructureType>(1000004000);
++			sci.dpy = nativeDpy;
++			sci.window = (unsigned long)(uintptr_t)nativeWin;
++			if (pfn_vkCreateXlibSurfaceKHR(Indium::globalInstance, &sci, nullptr, &_vkSurface) == VK_SUCCESS) {
++				_vkNativeWindow = nativeWin;
++			}
++		}
++
++		uint32_t qFam = dev->graphicsQueueFamilyIndex() ? *dev->graphicsQueueFamilyIndex() : 0;
++
++		if (_vkSurface != VK_NULL_HANDLE && pfn_vkGetPhysicalDeviceSurfaceSupportKHR) {
++			VkBool32 supported = VK_FALSE;
++			pfn_vkGetPhysicalDeviceSurfaceSupportKHR(dev->physicalDevice(), qFam, _vkSurface, &supported);
++			if (!supported) {
++				DynamicVK::vkDestroySurfaceKHR(Indium::globalInstance, _vkSurface, nullptr);
++				_vkSurface = VK_NULL_HANDLE;
++			}
++		}
++
++		if (_vkSurface != VK_NULL_HANDLE) {
++			VkSurfaceCapabilitiesKHR caps {};
++			DynamicVK::vkGetPhysicalDeviceSurfaceCapabilitiesKHR(dev->physicalDevice(), _vkSurface, &caps);
++
++			uint32_t formatCount = 0;
++			DynamicVK::vkGetPhysicalDeviceSurfaceFormatsKHR(dev->physicalDevice(), _vkSurface, &formatCount, nullptr);
++			std::vector<VkSurfaceFormatKHR> formats(formatCount);
++			if (formatCount > 0) {
++				DynamicVK::vkGetPhysicalDeviceSurfaceFormatsKHR(dev->physicalDevice(), _vkSurface, &formatCount, formats.data());
++			}
++
++			VkFormat chosenFormat = VK_FORMAT_B8G8R8A8_UNORM;
++			VkColorSpaceKHR chosenColorSpace = VK_COLOR_SPACE_SRGB_NONLINEAR_KHR;
++			if (!formats.empty()) {
++				bool foundDesired = false;
++				for (const auto& f : formats) {
++					if (f.format == VK_FORMAT_B8G8R8A8_UNORM) {
++						chosenFormat = f.format;
++						chosenColorSpace = f.colorSpace;
++						foundDesired = true;
++						break;
++					}
++				}
++				if (!foundDesired) {
++					chosenFormat = formats[0].format;
++					chosenColorSpace = formats[0].colorSpace;
++				}
++			}
++
++			uint32_t modeCount = 0;
++			DynamicVK::vkGetPhysicalDeviceSurfacePresentModesKHR(dev->physicalDevice(), _vkSurface, &modeCount, nullptr);
++			std::vector<VkPresentModeKHR> modes(modeCount);
++			if (modeCount > 0) {
++				DynamicVK::vkGetPhysicalDeviceSurfacePresentModesKHR(dev->physicalDevice(), _vkSurface, &modeCount, modes.data());
++			}
++
++			VkPresentModeKHR chosenPresentMode = VK_PRESENT_MODE_FIFO_KHR;
++			if (!_displaySyncEnabled) {
++				for (auto m : modes) {
++					if (m == VK_PRESENT_MODE_IMMEDIATE_KHR) {
++						chosenPresentMode = VK_PRESENT_MODE_IMMEDIATE_KHR;
++						break;
++					}
++				}
++				if (chosenPresentMode != VK_PRESENT_MODE_IMMEDIATE_KHR) {
++					for (auto m : modes) {
++						if (m == VK_PRESENT_MODE_MAILBOX_KHR) {
++							chosenPresentMode = VK_PRESENT_MODE_MAILBOX_KHR;
++							break;
++						}
++					}
++				}
++			} else {
++				for (auto m : modes) {
++					if (m == VK_PRESENT_MODE_MAILBOX_KHR) {
++						chosenPresentMode = VK_PRESENT_MODE_MAILBOX_KHR;
++						break;
++					}
++				}
++			}
++
++			uint32_t imageCount = caps.minImageCount + 1;
++			if (caps.maxImageCount > 0 && imageCount > caps.maxImageCount) {
++				imageCount = caps.maxImageCount;
++			}
++
++			VkExtent2D extent;
++			if (caps.currentExtent.width != UINT32_MAX) {
++				extent = caps.currentExtent;
++			} else {
++				extent.width = std::max(caps.minImageExtent.width, std::min(caps.maxImageExtent.width, (uint32_t)_drawableSize.width));
++				extent.height = std::max(caps.minImageExtent.height, std::min(caps.maxImageExtent.height, (uint32_t)_drawableSize.height));
++			}
++
++			VkCompositeAlphaFlagBitsKHR compositeAlpha = VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR;
++			if (!(caps.supportedCompositeAlpha & VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR)) {
++				if (caps.supportedCompositeAlpha & VK_COMPOSITE_ALPHA_INHERIT_BIT_KHR) {
++					compositeAlpha = VK_COMPOSITE_ALPHA_INHERIT_BIT_KHR;
++				} else if (caps.supportedCompositeAlpha & VK_COMPOSITE_ALPHA_PRE_MULTIPLIED_BIT_KHR) {
++					compositeAlpha = VK_COMPOSITE_ALPHA_PRE_MULTIPLIED_BIT_KHR;
++				} else if (caps.supportedCompositeAlpha & VK_COMPOSITE_ALPHA_POST_MULTIPLIED_BIT_KHR) {
++					compositeAlpha = VK_COMPOSITE_ALPHA_POST_MULTIPLIED_BIT_KHR;
++				}
++			}
+ 
++			VkSwapchainCreateInfoKHR swapInfo {};
++			swapInfo.sType = VK_STRUCTURE_TYPE_SWAPCHAIN_CREATE_INFO_KHR;
++			swapInfo.surface = _vkSurface;
++			swapInfo.minImageCount = imageCount;
++			swapInfo.imageFormat = chosenFormat;
++			swapInfo.imageColorSpace = chosenColorSpace;
++			swapInfo.imageExtent = extent;
++			swapInfo.imageArrayLayers = 1;
++			swapInfo.imageUsage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT;
++			swapInfo.imageSharingMode = VK_SHARING_MODE_EXCLUSIVE;
++			swapInfo.preTransform = caps.currentTransform;
++			swapInfo.compositeAlpha = compositeAlpha;
++			swapInfo.presentMode = chosenPresentMode;
++			swapInfo.clipped = VK_TRUE;
++			swapInfo.oldSwapchain = _vkSwapchain;
++
++			VkSwapchainKHR newSwapchain = VK_NULL_HANDLE;
++			if (DynamicVK::vkCreateSwapchainKHR(dev->device(), &swapInfo, nullptr, &newSwapchain) == VK_SUCCESS) {
++				if (_vkSwapchain != VK_NULL_HANDLE) {
++					DynamicVK::vkDestroySwapchainKHR(dev->device(), _vkSwapchain, nullptr);
++				}
++				_vkSwapchain = newSwapchain;
++				_vkSwapchainSize = CGSizeMake(extent.width, extent.height);
++
++				uint32_t count = 0;
++				DynamicVK::vkGetSwapchainImagesKHR(dev->device(), _vkSwapchain, &count, nullptr);
++				_vkSwapchainImages.resize(count);
++				DynamicVK::vkGetSwapchainImagesKHR(dev->device(), _vkSwapchain, &count, _vkSwapchainImages.data());
++			}
++
++			if (_vkAcquireSemaphore == VK_NULL_HANDLE) {
++				VkSemaphoreCreateInfo semInfo {};
++				semInfo.sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO;
++				DynamicVK::vkCreateSemaphore(dev->device(), &semInfo, nullptr, &_vkAcquireSemaphore);
++			}
++			if (_vkRenderCompleteSemaphore == VK_NULL_HANDLE) {
++				VkSemaphoreCreateInfo semInfo {};
++				semInfo.sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO;
++				DynamicVK::vkCreateSemaphore(dev->device(), &semInfo, nullptr, &_vkRenderCompleteSemaphore);
++			}
++			if (_vkPresentFence == VK_NULL_HANDLE) {
++				VkFenceCreateInfo fenceInfo {};
++				fenceInfo.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO;
++				fenceInfo.flags = VK_FENCE_CREATE_SIGNALED_BIT;
++				DynamicVK::vkCreateFence(dev->device(), &fenceInfo, nullptr, &_vkPresentFence);
++			}
++			if (_vkCommandPool == VK_NULL_HANDLE) {
++				VkCommandPoolCreateInfo poolInfo {};
++				poolInfo.sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO;
++				poolInfo.flags = VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT;
++				poolInfo.queueFamilyIndex = qFam;
++				DynamicVK::vkCreateCommandPool(dev->device(), &poolInfo, nullptr, &_vkCommandPool);
++
++				VkCommandBufferAllocateInfo cbAllocInfo {};
++				cbAllocInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
++				cbAllocInfo.commandPool = _vkCommandPool;
++				cbAllocInfo.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
++				cbAllocInfo.commandBufferCount = 1;
++				DynamicVK::vkAllocateCommandBuffers(dev->device(), &cbAllocInfo, &_vkCmdBuffer);
++			}
++		}
++	}
++
++	Indium::PixelFormat pixelFormat;
+ 	switch (_pixelFormat) {
+ 		case MTLPixelFormatBGRA8Unorm:      pixelFormat = Indium::PixelFormat::BGRA8Unorm;      break;
+ 		case MTLPixelFormatBGRA8Unorm_sRGB: pixelFormat = Indium::PixelFormat::BGRA8Unorm_sRGB; break;
+@@ -476,123 +857,212 @@ static void reportGLErrors(void) {
+ 		default:                            pixelFormat = Indium::PixelFormat::Invalid;         break;
+ 	}
+ 
+-	CGLContextObj prev = CGLGetCurrentContext();
+-	CGLSetCurrentContext(_context.glContext);
+-
+-	// now let's start creating the new drawables
+ 	for (size_t i = 0; i < _maximumDrawableCount; ++i) {
+-		_drawables[i] = std::make_shared<CAMetalDrawableActual>(self, _drawableSize, i, pixelFormat, ((MTLDeviceInternal*)self.device).device, _context.glContext);
++		_drawables[i] = std::make_shared<CAMetalDrawableActual>(self, _drawableSize, i, pixelFormat, dev);
+ 		_usableDrawablesBitmap |= 1u << i;
+ 	}
+ 
+-	// now signal the right number of waiters
+ 	for (size_t i = 0; i < _maximumDrawableCount; ++i) {
+ 		[_drawableCondition signal];
+ 	}
+ 
+ 	[_drawableCondition unlock];
+-
+-	@synchronized(self) {
+-		// resize the render texture
+-		if (_tex != 0) {
+-			reportGLErrors();
+-			glDeleteTextures(1, &_tex);
 -			reportGLErrors();
 -			glCreateTextures(GL_TEXTURE_2D, 1, &_tex);
 -			reportGLErrors();
@@ -10007,158 +11808,289 @@ index b81e2e14..b71b729a 100644
 -			glTextureParameteri(_tex, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
 -			glTextureParameteri(_tex, GL_TEXTURE_WRAP_S, GL_REPEAT);
 -			glTextureParameteri(_tex, GL_TEXTURE_WRAP_T, GL_REPEAT);
-+			_tex = 0;
- 			reportGLErrors();
- 		}
-+		glCreateTextures(GL_TEXTURE_2D, 1, &_tex);
-+		reportGLErrors();
-+		glTextureStorage2D(_tex, 1, GL_RGBA8, _drawableSize.width, _drawableSize.height);
-+		reportGLErrors();
-+		glTextureParameteri(_tex, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
-+		glTextureParameteri(_tex, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
-+		glTextureParameteri(_tex, GL_TEXTURE_WRAP_S, GL_REPEAT);
-+		glTextureParameteri(_tex, GL_TEXTURE_WRAP_T, GL_REPEAT);
-+		// The layer is opaque, as on macOS: never let the drawable's alpha reach the compositor (its blending and
-+		// alpha test turned the game's low-alpha effect regions into black quads). The drawable is copied in with
-+		// glCopyImageSubData, so the swizzle has to be on this texture, the one that is actually sampled.
-+		glTextureParameteri(_tex, GL_TEXTURE_SWIZZLE_A, GL_ONE);
-+		reportGLErrors();
- 	}
+-			reportGLErrors();
+-		}
+-	}
+-
+-	CGLSetCurrentContext(prev);
+ }
  
- 	CGLSetCurrentContext(prev);
-@@ -516,6 +768,10 @@ static void reportGLErrors(void) {
- - (void)prepareRender
+-- (void)prepareRender
++- (void)presentDirectVulkan: (NSUInteger)drawableID
  {
- 	std::shared_ptr<CAMetalDrawableActual> drawable = nullptr;
-+	static CFTimeInterval lastPrepare = 0;
-+	CFTimeInterval prepareStart = CACurrentMediaTime();
-+	if (lastPrepare != 0) darlingMetalTiming("prepareRenderInterval", prepareStart - lastPrepare);
-+	lastPrepare = prepareStart;
+-	std::shared_ptr<CAMetalDrawableActual> drawable = nullptr;
++	static std::atomic<uint64_t> s_presentFrameCount{0};
++	uint64_t frameNum = ++s_presentFrameCount;
  
- 	[_drawableCondition lock];
- 	if (_queuedDrawableCount > 0) {
-@@ -528,11 +784,85 @@ static void reportGLErrors(void) {
- 	if (drawable) {
- 		// wait for the drawable to be fully rendered before copying it to the render texture
- 		// (this is a GPU-side wait)
-+		CFTimeInterval syncStart = CACurrentMediaTime();
- 		drawable->synchronizeRender();
-+		darlingMetalTiming("synchronizeRender", CACurrentMediaTime() - syncStart);
-+
-+		CGLContextObj prevCtx = CGLGetCurrentContext();
-+		if (_context && _context.glContext) {
-+			CGLSetCurrentContext(_context.glContext);
-+		}
-+
-+		@synchronized(self) {
-+			if (_tex == 0 && _drawableSize.width > 0 && _drawableSize.height > 0) {
-+				glCreateTextures(GL_TEXTURE_2D, 1, &_tex);
-+				glTextureStorage2D(_tex, 1, GL_RGBA8, (GLsizei)_drawableSize.width, (GLsizei)_drawableSize.height);
-+				glTextureParameteri(_tex, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
-+				glTextureParameteri(_tex, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
-+				glTextureParameteri(_tex, GL_TEXTURE_WRAP_S, GL_REPEAT);
-+				glTextureParameteri(_tex, GL_TEXTURE_WRAP_T, GL_REPEAT);
-+				glTextureParameteri(_tex, GL_TEXTURE_SWIZZLE_A, GL_ONE);
-+			}
-+		}
+-	[_drawableCondition lock];
+-	if (_queuedDrawableCount > 0) {
+-		drawable = _drawables[_queuedDrawables[0]];
+-		--_queuedDrawableCount;
+-		std::copy(_queuedDrawables.begin() + 1, _queuedDrawables.end(), _queuedDrawables.begin());
++	auto dev = std::dynamic_pointer_cast<Indium::PrivateDevice>(((MTLDeviceInternal*)self.device).device);
++	if (!dev || _vkSwapchain == VK_NULL_HANDLE) {
++		return;
+ 	}
+-	[_drawableCondition unlock];
  
- 		reportGLErrors();
+-	if (drawable) {
+-		// wait for the drawable to be fully rendered before copying it to the render texture
+-		// (this is a GPU-side wait)
+-		drawable->synchronizeRender();
++	std::shared_ptr<CAMetalDrawableActual> drawable = _drawables[drawableID];
++	if (!drawable) {
++		return;
++	}
+ 
+-		reportGLErrors();
 -		glCopyImageSubData(drawable->texture()->glTexture(), GL_TEXTURE_2D, 0, 0, 0, 0, _tex, GL_TEXTURE_2D, 0, 0, 0, 0, _drawableSize.width, _drawableSize.height, 1);
-+		{
-+			// Diagnostic: statistics of the imported Vulkan image itself, before the copy
-+			static unsigned long sourceCounter = 0;
-+			if (darlingMetalDebug() && access("/tmp/metal-debug-frames", F_OK) == 0 && (++sourceCounter <= 30 || sourceCounter % 150 == 0)) {
-+				size_t width = _drawableSize.width, height = _drawableSize.height;
-+				std::vector<uint8_t> source(width * height * 4);
-+				glGetTextureImage(drawable->texture()->glTexture(), 0, GL_RGBA, GL_UNSIGNED_BYTE, (GLsizei) source.size(), source.data());
-+				unsigned long lit = 0, total = 0;
-+				for (size_t i = 0; i < source.size(); i += 4) {
-+					unsigned v = source[i] + source[i + 1] + source[i + 2];
-+					total += v;
-+					if (v > 6) ++lit;
-+				}
-+				darlingMetalTrace("source-stats", (long) lit, (long) (total / (width * height)));
-+			}
-+		}
-+		reportGLErrors();
-+		if (_tex != 0) {
-+			glCopyImageSubData(drawable->texture()->glTexture(), GL_TEXTURE_2D, 0, 0, 0, 0, _tex, GL_TEXTURE_2D, 0, 0, 0, 0, _drawableSize.width, _drawableSize.height, 1);
-+		}
- 		reportGLErrors();
-+
-+		// Diagnostic: every 150th presented frame, log pixel statistics of what is about to be shown
-+		// and save a few of them as /tmp/metal-frame-<n>.ppm.
-+		static unsigned long frameCounter = 0;
-+		++frameCounter;
-+		if (darlingMetalDebug() && access("/tmp/metal-debug-frames", F_OK) == 0 && (frameCounter <= 30 || frameCounter % 150 == 0) && frameCounter <= 1800) {
-+			size_t width = _drawableSize.width, height = _drawableSize.height;
-+			std::vector<uint8_t> pixels(width * height * 4);
-+			glGetTextureImage(_tex, 0, GL_RGBA, GL_UNSIGNED_BYTE, (GLsizei) pixels.size(), pixels.data());
-+			unsigned long nonBlack = 0, sum = 0;
-+			for (size_t i = 0; i < pixels.size(); i += 4) {
-+				unsigned v = pixels[i] + pixels[i + 1] + pixels[i + 2];
-+				sum += v;
-+				if (v > 6) ++nonBlack;
-+			}
-+			darlingMetalTrace("frame-stats", (long) nonBlack, (long) (sum / (width * height)));
-+			if (frameCounter == 5 || frameCounter == 30 || frameCounter == 300 || frameCounter == 900) {
-+				char path[64];
-+				snprintf(path, sizeof(path), "/tmp/metal-frame-%lu.ppm", frameCounter);
-+				if (FILE* out = fopen(path, "wb")) {
-+					fprintf(out, "P6\n%zu %zu\n255\n", width, height);
-+					for (size_t row = 0; row < height; ++row) {
-+						// GL rows run bottom to top
-+						const uint8_t* line = pixels.data() + (height - 1 - row) * width * 4;
-+						for (size_t x = 0; x < width; ++x) {
-+							fwrite(line + x * 4, 1, 3, out);
-+						}
-+					}
-+					fclose(out);
-+				}
-+			}
-+		}
-+
-+		if (prevCtx) {
-+			CGLSetCurrentContext(prevCtx);
-+		}
+-		reportGLErrors();
++	if (frameNum <= 5 && _vkNativeWindow) {
++		void* nativeDpy = _CGSNativeDisplay(CGSMainConnectionID());
++		ensureX11WindowVisible(nativeDpy, _vkNativeWindow);
  	}
  
- 	@synchronized(self) {
-@@ -575,7 +905,12 @@ static void reportGLErrors(void) {
+-	@synchronized(self) {
+-		// FIXME: this is wrong, but there's no good way to tell when the texture is actually fully rendered/presented.
+-		//        this is at least close enough. it should balance out in the long run since we're supposed to be invoked on vsync
+-		//        or at least a fixed interval.
+-		if (_lastPresentedDrawable) {
+-			_lastPresentedDrawable->didPresent();
++	// 1. Acquire next image from swapchain
++	uint32_t imageIndex = 0;
++	VkResult res = DynamicVK::vkAcquireNextImageKHR(dev->device(), _vkSwapchain, 1000000000ULL /* 1s */, _vkAcquireSemaphore, VK_NULL_HANDLE, &imageIndex);
++	if (res == VK_ERROR_OUT_OF_DATE_KHR || res == VK_SUBOPTIMAL_KHR) {
++		if (res == VK_ERROR_OUT_OF_DATE_KHR) {
++			char logBuf[256];
++			snprintf(logBuf, sizeof(logBuf), "presentDirectVulkan frame=%llu drawable=%lu acqRes=%d (out of date, recreating)",
++				(unsigned long long)frameNum, (unsigned long)drawableID, (int)res);
++			appendDeviceLog(logBuf);
++			[self recreateDrawables];
++			drawable->didPresent();
++			return;
+ 		}
+-		_lastPresentedDrawable = drawable;
++	} else if (res != VK_SUCCESS) {
++		char logBuf[256];
++		snprintf(logBuf, sizeof(logBuf), "presentDirectVulkan frame=%llu drawable=%lu acqRes=%d (acquire failed)",
++			(unsigned long long)frameNum, (unsigned long)drawableID, (int)res);
++		appendDeviceLog(logBuf);
++		drawable->didPresent();
++		return;
++	}
++
++	// Wait for previous present fence
++	DynamicVK::vkWaitForFences(dev->device(), 1, &_vkPresentFence, VK_TRUE, 1000000000ULL);
++	DynamicVK::vkResetFencesLocal(dev->device(), 1, &_vkPresentFence);
++
++	// 2. Record command buffer
++	VkCommandBufferBeginInfo beginInfo {};
++	beginInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
++	beginInfo.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
++	DynamicVK::vkBeginCommandBuffer(_vkCmdBuffer, &beginInfo);
++
++	VkImage srcImage = drawable->texture()->image();
++	VkImage dstImage = _vkSwapchainImages[imageIndex];
++
++	// Barrier 1: dstImage UNDEFINED -> TRANSFER_DST_OPTIMAL, srcImage GENERAL -> TRANSFER_SRC_OPTIMAL
++	VkImageMemoryBarrier barriers[2] {};
++	barriers[0].sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
++	barriers[0].srcAccessMask = VK_ACCESS_NONE;
++	barriers[0].dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
++	barriers[0].oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
++	barriers[0].newLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
++	barriers[0].srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
++	barriers[0].dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
++	barriers[0].image = dstImage;
++	barriers[0].subresourceRange = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1 };
++
++	barriers[1].sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
++	barriers[1].srcAccessMask = VK_ACCESS_MEMORY_READ_BIT | VK_ACCESS_MEMORY_WRITE_BIT;
++	barriers[1].dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
++	barriers[1].oldLayout = VK_IMAGE_LAYOUT_GENERAL;
++	barriers[1].newLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
++	barriers[1].srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
++	barriers[1].dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
++	barriers[1].image = srcImage;
++	barriers[1].subresourceRange = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1 };
++
++	DynamicVK::vkCmdPipelineBarrier(_vkCmdBuffer,
++		VK_PIPELINE_STAGE_ALL_COMMANDS_BIT,
++		VK_PIPELINE_STAGE_TRANSFER_BIT,
++		0, 0, nullptr, 0, nullptr, 2, barriers);
++
++	// Blit from drawable texture to swapchain image
++	VkImageBlit blitRegion {};
++	blitRegion.srcSubresource = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1 };
++	blitRegion.srcOffsets[0] = { 0, 0, 0 };
++	blitRegion.srcOffsets[1] = { static_cast<int32_t>(_drawableSize.width), static_cast<int32_t>(_drawableSize.height), 1 };
++	blitRegion.dstSubresource = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1 };
++	blitRegion.dstOffsets[0] = { 0, 0, 0 };
++	blitRegion.dstOffsets[1] = { static_cast<int32_t>(_vkSwapchainSize.width), static_cast<int32_t>(_vkSwapchainSize.height), 1 };
++
++	DynamicVK::vkCmdBlitImage(_vkCmdBuffer,
++		srcImage, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
++		dstImage, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
++		1, &blitRegion, VK_FILTER_LINEAR);
++
++	// Barrier 2: dstImage TRANSFER_DST_OPTIMAL -> PRESENT_SRC_KHR, srcImage TRANSFER_SRC_OPTIMAL -> GENERAL
++	barriers[0].srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
++	barriers[0].dstAccessMask = VK_ACCESS_MEMORY_READ_BIT;
++	barriers[0].oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
++	barriers[0].newLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
++
++	barriers[1].srcAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
++	barriers[1].dstAccessMask = VK_ACCESS_MEMORY_READ_BIT | VK_ACCESS_MEMORY_WRITE_BIT;
++	barriers[1].oldLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
++	barriers[1].newLayout = VK_IMAGE_LAYOUT_GENERAL;
++
++	DynamicVK::vkCmdPipelineBarrier(_vkCmdBuffer,
++		VK_PIPELINE_STAGE_TRANSFER_BIT,
++		VK_PIPELINE_STAGE_ALL_COMMANDS_BIT,
++		0, 0, nullptr, 0, nullptr, 2, barriers);
++
++	DynamicVK::vkEndCommandBuffer(_vkCmdBuffer);
++
++	// 3. Submit to graphics queue
++	std::vector<VkSemaphore> waitSemaphores;
++	std::vector<VkPipelineStageFlags> waitStages;
++	if (drawable->semaphore() && drawable->semaphore()->semaphore != VK_NULL_HANDLE) {
++		waitSemaphores.push_back(drawable->semaphore()->semaphore);
++		waitStages.push_back(VK_PIPELINE_STAGE_TRANSFER_BIT);
++	}
++	waitSemaphores.push_back(_vkAcquireSemaphore);
++	waitStages.push_back(VK_PIPELINE_STAGE_TRANSFER_BIT);
++
++	VkSubmitInfo submitInfo {};
++	submitInfo.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
++	submitInfo.waitSemaphoreCount = static_cast<uint32_t>(waitSemaphores.size());
++	submitInfo.pWaitSemaphores = waitSemaphores.data();
++	submitInfo.pWaitDstStageMask = waitStages.data();
++	submitInfo.commandBufferCount = 1;
++	submitInfo.pCommandBuffers = &_vkCmdBuffer;
++	submitInfo.signalSemaphoreCount = 1;
++	submitInfo.pSignalSemaphores = &_vkRenderCompleteSemaphore;
++
++	VkResult subRes = VK_SUCCESS;
++	VkResult fenceRes = VK_SUCCESS;
++	VkResult presRes = VK_SUCCESS;
++
++	{
++		std::lock_guard<std::mutex> qLock(dev->graphicsQueueMutex());
++		subRes = DynamicVK::vkQueueSubmit(dev->graphicsQueue(), 1, &submitInfo, _vkPresentFence);
++
++		// Wait on fence immediately so GPU blit barriers are flushed/finished before presentation
++		fenceRes = DynamicVK::vkWaitForFences(dev->device(), 1, &_vkPresentFence, VK_TRUE, 1000000000ULL);
++
++		// 4. Present
++		VkPresentInfoKHR presentInfo {};
++		presentInfo.sType = VK_STRUCTURE_TYPE_PRESENT_INFO_KHR;
++		presentInfo.waitSemaphoreCount = 1;
++		presentInfo.pWaitSemaphores = &_vkRenderCompleteSemaphore;
++		presentInfo.swapchainCount = 1;
++		presentInfo.pSwapchains = &_vkSwapchain;
++		presentInfo.pImageIndices = &imageIndex;
++
++		presRes = DynamicVK::vkQueuePresentKHR(dev->graphicsQueue(), &presentInfo);
+ 	}
++
++	if (frameNum <= 120 || (frameNum % 60) == 0) {
++		char logBuf[256];
++		snprintf(logBuf, sizeof(logBuf),
++			"presentDirectVulkan frame=%llu drawable=%lu extent=%ux%u acqRes=%d imgIdx=%u subRes=%d fenceRes=%d presRes=%d",
++			(unsigned long long)frameNum, (unsigned long)drawableID,
++			(uint32_t)_vkSwapchainSize.width, (uint32_t)_vkSwapchainSize.height,
++			(int)res, (unsigned int)imageIndex, (int)subRes, (int)fenceRes, (int)presRes);
++		appendDeviceLog(logBuf);
++	}
++
++	if (presRes == VK_ERROR_OUT_OF_DATE_KHR) {
++		[self recreateDrawables];
++	}
++
++	// 5. Notify drawable presented
++	drawable->didPresent();
+ }
+ 
+-- (NSNumber*)_textureId
++- (void)prepareRender
+ {
+-	return [NSNumber numberWithUnsignedInt: _tex];
++	// Pure Vulkan presentation: no OpenGL preparation needed.
+ }
+ 
+-//
+-// overridden methods
+-//
++- (NSNumber*)_textureId
++{
++	return [NSNumber numberWithUnsignedInt: 0];
++}
+ 
+ - (void)removeFromSuperlayer
+ {
+-	// we're being removed from our superlayer, so we probably won't be rendered again for a while
+-	//
+-	// FIXME: if we're the layer for a root view, this won't be called (i think) so we'll just be leaked.
+-	//        we'll probably have to add another private method to be called when the layer is released externally (e.g. by the layer context).
+-	@synchronized(self) {
+-		if (_lastPresentedDrawable) {
+-			// no way to tell if it was actually presented or not, so assume it was dropped
+-			_lastPresentedDrawable->didDrop();
+-			_lastPresentedDrawable = nullptr;
+-		}
+-	}
+ 	[super removeFromSuperlayer];
+ }
+ 
+ - (void)_setContext: (CALayerContext*)context
  {
  	[super _setContext: context];
- 
+-
 -	if (_tex == 0) {
-+    if (!context || !context.glContext) {
-+        [self recreateDrawables];
-+        return;
-+    }
-+
-+	if (_tex == 0 && _drawableSize.width > 0 && _drawableSize.height > 0) {
- 		// create our textures now using the context's CGLContext
- 		CGLContextObj prev = CGLGetCurrentContext();
- 		CGLSetCurrentContext(context.glContext);
-@@ -589,10 +924,15 @@ static void reportGLErrors(void) {
- 		glTextureParameteri(_tex, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
- 		glTextureParameteri(_tex, GL_TEXTURE_WRAP_S, GL_REPEAT);
- 		glTextureParameteri(_tex, GL_TEXTURE_WRAP_T, GL_REPEAT);
-+		// The layer is opaque, as on macOS: never let the drawable's alpha reach the compositor (its blending and
-+		// alpha test turned the game's low-alpha effect regions into black quads). The drawable is copied in with
-+		// glCopyImageSubData, so the swizzle has to be on this texture, the one that is actually sampled.
-+		glTextureParameteri(_tex, GL_TEXTURE_SWIZZLE_A, GL_ONE);
- 		reportGLErrors();
- 
- 		CGLSetCurrentContext(prev);
- 	}
-+    [self recreateDrawables];
+-		// create our textures now using the context's CGLContext
+-		CGLContextObj prev = CGLGetCurrentContext();
+-		CGLSetCurrentContext(context.glContext);
+-
+-		reportGLErrors();
+-		glCreateTextures(GL_TEXTURE_2D, 1, &_tex);
+-		reportGLErrors();
+-		glTextureStorage2D(_tex, 1, GL_RGBA8, _drawableSize.width, _drawableSize.height);
+-		reportGLErrors();
+-		glTextureParameteri(_tex, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+-		glTextureParameteri(_tex, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+-		glTextureParameteri(_tex, GL_TEXTURE_WRAP_S, GL_REPEAT);
+-		glTextureParameteri(_tex, GL_TEXTURE_WRAP_T, GL_REPEAT);
+-		reportGLErrors();
+-
+-		CGLSetCurrentContext(prev);
+-	}
++	[self recreateDrawables];
  }
  
  #else
 diff --git a/QuartzCore/CAMetalLayerInternal.h b/QuartzCore/CAMetalLayerInternal.h
-index 48693da0..947a9133 100644
+index 48693da0..f080db92 100644
 --- a/QuartzCore/CAMetalLayerInternal.h
 +++ b/QuartzCore/CAMetalLayerInternal.h
-@@ -32,6 +32,7 @@ class CAMetalDrawableActual;
+@@ -19,12 +19,14 @@
+ 
+ #import <QuartzCore/CAMetalLayer.h>
+ 
+-#import <OpenGL/gl.h>
+-
++#ifdef __cplusplus
+ #include <memory>
+ #include <array>
++#include <vector>
++#include <vulkan/vulkan.h>
+ 
+ class CAMetalDrawableActual;
++#endif
+ 
+ @interface CAMetalLayerInternal : CAMetalLayer {
+ 	id<MTLDevice> _device;
+@@ -32,6 +34,7 @@ class CAMetalDrawableActual;
  	CGColorSpaceRef _colorspace;
  	BOOL _framebufferOnly;
  	CGSize _drawableSize;
@@ -10166,11 +12098,41 @@ index 48693da0..947a9133 100644
  	BOOL _presentsWithTransaction;
  	BOOL _displaySyncEnabled;
  	BOOL _wantsExtendedDynamicRangeContent;
-@@ -54,5 +55,6 @@ class CAMetalDrawableActual;
+@@ -40,6 +43,7 @@ class CAMetalDrawableActual;
+ 	BOOL _allowsNextDrawableTimeout;
+ 	NSDictionary* _developerHUDProperties;
+ 
++#ifdef __cplusplus
+ 	std::array<std::shared_ptr<CAMetalDrawableActual>, 3> _drawables;
+ 	std::array<NSUInteger, 3> _queuedDrawables;
+ 	NSUInteger _queuedDrawableCount;
+@@ -47,12 +51,27 @@ class CAMetalDrawableActual;
+ 	NSCondition* _drawableCondition;
+ 	std::shared_ptr<CAMetalDrawableActual> _lastPresentedDrawable;
+ 
+-	GLuint _tex;
++	VkSurfaceKHR _vkSurface;
++	VkSwapchainKHR _vkSwapchain;
++	CGSize _vkSwapchainSize;
++	void* _vkNativeWindow;
++	std::vector<VkImage> _vkSwapchainImages;
++	VkSemaphore _vkAcquireSemaphore;
++	VkSemaphore _vkRenderCompleteSemaphore;
++	VkFence _vkPresentFence;
++	VkCommandPool _vkCommandPool;
++	VkCommandBuffer _vkCmdBuffer;
++#endif
+ }
+ 
+ - (void)queuePresent: (NSUInteger)drawableID;
  - (void)releaseDrawable: (NSUInteger)drawableID;
  
  - (void)prepareRender;
 +- (void)recreateDrawables;
++
++#ifdef __cplusplus
++- (void)presentDirectVulkan: (NSUInteger)drawableID;
++#endif
  
  @end
 diff --git a/QuartzCore/CARenderer.m b/QuartzCore/CARenderer.m
@@ -10820,560 +12782,3 @@ index 00000000..19cd9ea9
 +- (instancetype) init;
 +
 +@end
-diff --git a/AppKit/include/AppKit/NSStatusItem.h b/AppKit/include/AppKit/NSStatusItem.h
-index 3d80edb5..181a6321 100644
---- a/AppKit/include/AppKit/NSStatusItem.h
-+++ b/AppKit/include/AppKit/NSStatusItem.h
-@@ -19,10 +19,21 @@ CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE. */
- 
- #import <CoreFoundation/CFBase.h>
- #import <Foundation/Foundation.h>
-+#import <AppKit/NSButton.h>
- #ifdef WIN32
- #import <windows.h>
- #endif
--@class NSStatusBar, NSImage, NSAttributedString, NSMenu, NSView, NSWindow;
-+
-+@class NSStatusBar, NSImage, NSAttributedString, NSMenu, NSView, NSWindow, NSStatusItem;
-+
-+@interface NSStatusBarButton : NSButton {
-+    BOOL _appearsDisabled;
-+    NSStatusItem *_statusItem;
-+}
-+@property BOOL appearsDisabled;
-+- (instancetype) initWithStatusItem: (NSStatusItem *) statusItem;
-+@end
-+
- @interface NSStatusItem : NSObject {
-     SEL _action;
-     SEL _doubleAction;
-@@ -41,10 +52,15 @@ CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE. */
-     CGFloat _length;
-     NSMenu *_menu;
-     NSInteger _actionMask;
-+    NSString *_toolTip;
-+    NSStatusBarButton *_button;
- #ifdef WIN32
-     int _trayIconID;
-     HICON _trayIcon;
-     HMENU _win32Menu;
-+#else
-+    unsigned long _x11TrayWindow;
-+    BOOL _x11TrayDocked;
- #endif
- }
- - (NSStatusBar *) statusBar;
-@@ -63,6 +79,7 @@ CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE. */
- 
- - (NSString *) title;
- - (void) setTitle: (NSString *) title;
-+- (NSString *) toolTip;
- - (void) setToolTip: (NSString *) toolTip;
- - (NSAttributedString *) attributedTitle;
- - (void) setAttributedTitle: (NSAttributedString *) title;
-@@ -82,6 +99,8 @@ CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE. */
- - (NSMenu *) menu;
- - (void) setMenu: (NSMenu *) menu;
- 
-+- (NSStatusBarButton *) button;
-+
- - (void) popUpStatusItemMenu: (NSMenu *) menu;
- - (NSInteger) sendActionOn: (NSInteger) mask;
- 
-diff --git a/AppKit/NSStatusItem+Private.h b/AppKit/NSStatusItem+Private.h
-index e954fd7b..535e4c08 100644
---- a/AppKit/NSStatusItem+Private.h
-+++ b/AppKit/NSStatusItem+Private.h
-@@ -23,6 +23,11 @@
-                  intoMenu: (HMENU) menu;
- HWND _eventhWnd;
- NOTIFYICONDATA niData;
-+#else
-+- (void) _createTrayIcon;
-+- (void) _removeTrayIcon;
-+- (void) _drawTrayIcon;
-+- (void) handleTrayXEvent: (void *) eventPtr;
- #endif
- - (void) _showContextMenu;
- @end
-\ No newline at end of file
-diff --git a/AppKit/NSStatusItem.m b/AppKit/NSStatusItem.m
-index eb5c7a40..93ab7c2f 100644
---- a/AppKit/NSStatusItem.m
-+++ b/AppKit/NSStatusItem.m
-@@ -26,12 +26,58 @@ CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE. */
- #import <AppKit/NSStatusItem+Private.h>
- #import <AppKit/NSStatusItem.h>
- #import <AppKit/NSWindow.h>
-+#import <AppKit/NSEvent.h>
-+#import <AppKit/NSApplication.h>
- #ifdef WIN32
- #import <AppKit/NSStatusBar_(Private).h>
- #import <AppKit/Win32Window.h>
- #import <Foundation/NSPlatform_win32.h>
-+#else
-+#import "X11Display.h"
-+#import <X11/Xlib.h>
-+#import <X11/Xatom.h>
-+#import <X11/Xutil.h>
- #endif
- 
-+@implementation NSStatusBarButton
-+
-+@synthesize appearsDisabled = _appearsDisabled;
-+
-+- (instancetype) initWithStatusItem: (NSStatusItem *) statusItem {
-+    self = [super initWithFrame: NSMakeRect(0, 0, 24, 24)];
-+    if (self) {
-+        _statusItem = statusItem;
-+    }
-+    return self;
-+}
-+
-+- (void) setImage: (NSImage *) image {
-+    [super setImage: image];
-+    [_statusItem setImage: image];
-+}
-+
-+- (void) setTitle: (NSString *) title {
-+    [super setTitle: title];
-+    [_statusItem setTitle: title];
-+}
-+
-+- (void) setTarget: (id) target {
-+    [super setTarget: target];
-+    [_statusItem setTarget: target];
-+}
-+
-+- (void) setAction: (SEL) action {
-+    [super setAction: action];
-+    [_statusItem setAction: action];
-+}
-+
-+- (void) setToolTip: (NSString *) toolTip {
-+    [super setToolTip: toolTip];
-+    [_statusItem setToolTip: toolTip];
-+}
-+
-+@end
-+
- @implementation NSStatusItem
- 
- #pragma mark Private Methods
-@@ -258,20 +304,223 @@ CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE. */
- 
- #endif
- 
-+#ifndef WIN32
-+
-+- (void) _drawTrayIcon {
-+    if (_x11TrayWindow == 0) return;
-+    X11Display *d = (X11Display *) [NSDisplay currentDisplay];
-+    Display *dpy = [d display];
-+    if (dpy == NULL) return;
-+
-+    Window root_ret;
-+    int x_ret = 0, y_ret = 0;
-+    unsigned int width = 24, height = 24, border_ret = 0, depth_ret = 24;
-+    XGetGeometry(dpy, (Window)_x11TrayWindow, &root_ret, &x_ret, &y_ret,
-+                 &width, &height, &border_ret, &depth_ret);
-+    if (width == 0 || height == 0) {
-+        width = 24;
-+        height = 24;
-+    }
-+
-+    CGColorSpaceRef colorSpace = CGColorSpaceCreateDeviceRGB();
-+    size_t bytesPerRow = width * 4;
-+    CGContextRef context = CGBitmapContextCreate(
-+            NULL, width, height, 8, bytesPerRow, colorSpace,
-+            kCGImageAlphaPremultipliedFirst | kCGBitmapByteOrder32Host);
-+    CGColorSpaceRelease(colorSpace);
-+    if (context == NULL) return;
-+
-+    @autoreleasepool {
-+        NSGraphicsContext *graphicsContext =
-+                [NSGraphicsContext graphicsContextWithGraphicsPort: context
-+                                                           flipped: NO];
-+
-+        [NSGraphicsContext saveGraphicsState];
-+        [NSGraphicsContext setCurrentContext: graphicsContext];
-+
-+        CGContextClearRect(context, CGRectMake(0, 0, width, height));
-+
-+        if (_image) {
-+            NSSize imgSize = [_image size];
-+            CGFloat drawW = width;
-+            CGFloat drawH = height;
-+            if (imgSize.width > 0 && imgSize.height > 0) {
-+                CGFloat aspect = imgSize.width / imgSize.height;
-+                if (aspect >= 1.0) {
-+                    drawH = width / aspect;
-+                } else {
-+                    drawW = height * aspect;
-+                }
-+            }
-+            CGFloat pad = 2.0;
-+            if (drawW > width - pad * 2) drawW = width - pad * 2;
-+            if (drawH > height - pad * 2) drawH = height - pad * 2;
-+            if (drawW < 1.0) drawW = 1.0;
-+            if (drawH < 1.0) drawH = 1.0;
-+
-+            NSRect drawRect = NSMakeRect((width - drawW) / 2.0,
-+                                         (height - drawH) / 2.0,
-+                                         drawW, drawH);
-+            [_image drawInRect: drawRect
-+                      fromRect: NSZeroRect
-+                     operation: NSCompositeSourceOver
-+                      fraction: 1.0];
-+        }
-+
-+        [NSGraphicsContext restoreGraphicsState];
-+    }
-+
-+    const uint8_t *rowBytes = CGBitmapContextGetData(context);
-+    int screen = DefaultScreen(dpy);
-+    Visual *visual = DefaultVisual(dpy, screen);
-+
-+    XImage *ximage = XCreateImage(dpy, visual, depth_ret, ZPixmap, 0,
-+                                  (char *)rowBytes, width, height, 32, bytesPerRow);
-+    if (ximage) {
-+        GC gc = XCreateGC(dpy, (Window)_x11TrayWindow, 0, NULL);
-+        XPutImage(dpy, (Window)_x11TrayWindow, gc, ximage, 0, 0, 0, 0, width, height);
-+        XFreeGC(dpy, gc);
-+        ximage->data = NULL;
-+        XDestroyImage(ximage);
-+    }
-+
-+    CGContextRelease(context);
-+    XFlush(dpy);
-+}
-+
-+- (void) _createTrayIcon {
-+    if (_x11TrayWindow != 0) return;
-+    X11Display *d = (X11Display *) [NSDisplay currentDisplay];
-+    Display *dpy = [d display];
-+    if (dpy == NULL) return;
-+
-+    int screen = DefaultScreen(dpy);
-+    char tray_atom_name[32];
-+    snprintf(tray_atom_name, sizeof(tray_atom_name), "_NET_SYSTEM_TRAY_S%d", screen);
-+    Atom tray_atom = XInternAtom(dpy, tray_atom_name, False);
-+    Window tray_manager = XGetSelectionOwner(dpy, tray_atom);
-+
-+    XSetWindowAttributes attr;
-+    memset(&attr, 0, sizeof(attr));
-+    attr.background_pixmap = ParentRelative;
-+    attr.event_mask = ExposureMask | ButtonPressMask | ButtonReleaseMask | EnterWindowMask | LeaveWindowMask;
-+
-+    Window root = DefaultRootWindow(dpy);
-+    Window tray_win = XCreateWindow(dpy, root, 0, 0, 24, 24, 0,
-+                                    CopyFromParent, InputOutput, CopyFromParent,
-+                                    CWBackPixmap | CWEventMask, &attr);
-+    if (tray_win == 0) return;
-+
-+    _x11TrayWindow = (unsigned long) tray_win;
-+
-+    long xembed_info[2] = { 0, 1 };
-+    Atom xembed_atom = XInternAtom(dpy, "_XEMBED_INFO", False);
-+    XChangeProperty(dpy, tray_win, xembed_atom, xembed_atom, 32, PropModeReplace,
-+                    (unsigned char *) xembed_info, 2);
-+
-+    const char *name = _toolTip ? [_toolTip UTF8String] : (_title ? [_title UTF8String] : "DarlingTray");
-+    XStoreName(dpy, tray_win, name);
-+    XChangeProperty(dpy, tray_win, XInternAtom(dpy, "_NET_WM_NAME", False),
-+                    XInternAtom(dpy, "UTF8_STRING", False), 8, PropModeReplace,
-+                    (const unsigned char *) name, strlen(name));
-+
-+    [d setWindow: self forID: (XID) tray_win];
-+
-+    if (tray_manager != None) {
-+        XClientMessageEvent dock_ev;
-+        memset(&dock_ev, 0, sizeof(dock_ev));
-+        dock_ev.type = ClientMessage;
-+        dock_ev.window = tray_manager;
-+        dock_ev.message_type = XInternAtom(dpy, "_NET_SYSTEM_TRAY_OPCODE", False);
-+        dock_ev.format = 32;
-+        dock_ev.data.l[0] = CurrentTime;
-+        dock_ev.data.l[1] = 0; // SYSTEM_TRAY_REQUEST_DOCK
-+        dock_ev.data.l[2] = tray_win;
-+        dock_ev.data.l[3] = 0;
-+        dock_ev.data.l[4] = 0;
-+        XSendEvent(dpy, tray_manager, False, NoEventMask, (XEvent *) &dock_ev);
-+        XSync(dpy, False);
-+        _x11TrayDocked = YES;
-+    }
-+
-+    [self _drawTrayIcon];
-+}
-+
-+- (void) _removeTrayIcon {
-+    if (_x11TrayWindow != 0) {
-+        X11Display *d = (X11Display *) [NSDisplay currentDisplay];
-+        Display *dpy = [d display];
-+        if (dpy) {
-+            [d setWindow: nil forID: (XID) _x11TrayWindow];
-+            XDestroyWindow(dpy, (Window) _x11TrayWindow);
-+            XFlush(dpy);
-+        }
-+        _x11TrayWindow = 0;
-+        _x11TrayDocked = NO;
-+    }
-+}
-+
-+- (void) handleTrayXEvent: (void *) eventPtr {
-+    XEvent *ev = (XEvent *) eventPtr;
-+    switch (ev->type) {
-+    case Expose:
-+        if (ev->xexpose.count == 0) {
-+            [self _drawTrayIcon];
-+        }
-+        break;
-+    case ButtonRelease:
-+        if (ev->xbutton.button == Button1) {
-+            if (_action) {
-+                [NSApp sendAction: _action to: _target from: self];
-+            } else if (_menu) {
-+                [self _showContextMenu];
-+            }
-+        } else if (ev->xbutton.button == Button3) {
-+            if (_menu) {
-+                [self _showContextMenu];
-+            } else if (_action) {
-+                [NSApp sendAction: _action to: _target from: self];
-+            }
-+        }
-+        break;
-+    default:
-+        break;
-+    }
-+}
-+
-+#endif
-+
- #pragma mark Public Methods
- 
- - (id) init {
-     self = [super init];
-     if (self) {
-+        _enabled = YES;
- #ifdef WIN32
-         _trayIcon = NULL;
-         _trayIconID = -1;
-         _win32Menu = NULL;
-+#else
-+        _x11TrayWindow = 0;
-+        _x11TrayDocked = NO;
- #endif
-     }
-     return self;
- }
- 
-+- (void) dealloc {
-+    [self _removeTrayIcon];
-+    [_image release];
-+    [_alternateImage release];
-+    [_title release];
-+    [_atrTitle release];
-+    [_view release];
-+    [_menu release];
-+    [_toolTip release];
-+    [_button release];
-+    [super dealloc];
-+}
-+
- - (NSStatusBar *) statusBar {
-     return [NSStatusBar systemStatusBar];
- }
-@@ -307,7 +556,16 @@ CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE. */
-     if (_trayIconID <= -1) {
-         [self _createTrayIcon];
-     }
-+#else
-+    if (_x11TrayWindow == 0) {
-+        [self _createTrayIcon];
-+    } else {
-+        [self _drawTrayIcon];
-+    }
- #endif
-+    if (_button && [_button image] != _image) {
-+        [_button setImage: _image];
-+    }
- }
- - (NSImage *) alternateImage {
-     return _alternateImage;
-@@ -328,10 +586,44 @@ CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE. */
-     [_title release];
-     _title = nil;
-     _title = [title copy];
-+    if (_x11TrayWindow == 0) {
-+        [self _createTrayIcon];
-+    } else {
-+        [self _drawTrayIcon];
-+    }
- #endif
-+    if (_button && ![[_button title] isEqualToString: _title]) {
-+        [_button setTitle: _title];
-+    }
-+}
-+
-+- (NSString *) toolTip {
-+    return _toolTip;
- }
-+
- - (void) setToolTip: (NSString *) toolTip {
-+    [_toolTip release];
-+    _toolTip = [toolTip copy];
-+#ifndef WIN32
-+    if (_x11TrayWindow != 0) {
-+        X11Display *d = (X11Display *) [NSDisplay currentDisplay];
-+        Display *dpy = [d display];
-+        if (dpy) {
-+            const char *name = _toolTip ? [_toolTip UTF8String] : "";
-+            XStoreName(dpy, (Window)_x11TrayWindow, name);
-+            XChangeProperty(dpy, (Window)_x11TrayWindow,
-+                            XInternAtom(dpy, "_NET_WM_NAME", False),
-+                            XInternAtom(dpy, "UTF8_STRING", False), 8, PropModeReplace,
-+                            (const unsigned char *) name, strlen(name));
-+            XFlush(dpy);
-+        }
-+    }
-+#endif
-+    if (_button && ![[_button toolTip] isEqualToString: _toolTip]) {
-+        [_button setToolTip: _toolTip];
-+    }
- }
-+
- - (NSAttributedString *) attributedTitle {
-     return _atrTitle;
- }
-@@ -350,7 +642,6 @@ CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE. */
-     [_view release];
-     _view = nil;
-     _view = [view copy];
--    // Start capture timer
- }
- 
- - (BOOL) highlightMode {
-@@ -371,21 +662,20 @@ CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE. */
- #ifdef WIN32
-     int traySizeX = GetSystemMetrics(SM_CXSMICON);
-     int traySizeY = GetSystemMetrics(SM_CYSMICON);
--    // Make sure we return a value that will ensure icon will not be clipped
--    // with non-standard tray icon sizes
--    NSLog(@"X:%d Y:%d", traySizeX, traySizeY);
-     if (traySizeX > traySizeY) {
-         return traySizeY;
-     } else {
-         return traySizeX;
-     }
--#endif
-+#else
-+    if (_length <= 0) {
-+        return 24.0;
-+    }
-     return _length;
-+#endif
- }
- - (void) setLength: (CGFloat) len {
--#ifndef WIN32
-     _length = len;
--#endif
- }
- 
- - (NSMenu *) menu {
-@@ -411,7 +701,47 @@ CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE. */
- #endif
- }
- 
-+- (NSStatusBarButton *) button {
-+    if (_button == nil) {
-+        _button = [[NSStatusBarButton alloc] initWithStatusItem: self];
-+        if (_image) [_button setImage: _image];
-+        if (_title) [_button setTitle: _title];
-+        if (_target) [_button setTarget: _target];
-+        if (_action) [_button setAction: _action];
-+        if (_toolTip) [_button setToolTip: _toolTip];
-+    }
-+    return _button;
-+}
-+
- - (void) popUpStatusItemMenu: (NSMenu *) menu {
-+    if (menu == nil) return;
-+#ifndef WIN32
-+    X11Display *d = (X11Display *) [NSDisplay currentDisplay];
-+    Display *dpy = [d display];
-+    if (dpy == NULL) return;
-+
-+    Window root_ret, child_ret;
-+    int root_x = 0, root_y = 0, win_x = 0, win_y = 0;
-+    unsigned int mask_ret = 0;
-+    XQueryPointer(dpy, DefaultRootWindow(dpy), &root_ret, &child_ret,
-+                  &root_x, &root_y, &win_x, &win_y, &mask_ret);
-+
-+    NSRect mouseRect = NSMakeRect(root_x, root_y, 1, 1);
-+    NSRect cocoaRect = [d frameForRootRect: mouseRect];
-+    NSPoint mouseLoc = cocoaRect.origin;
-+
-+    NSEvent *event = [NSEvent mouseEventWithType: NSRightMouseDown
-+                                        location: mouseLoc
-+                                   modifierFlags: 0
-+                                       timestamp: [NSDate timeIntervalSinceReferenceDate]
-+                                    windowNumber: 0
-+                                         context: [NSGraphicsContext currentContext]
-+                                     eventNumber: 0
-+                                      clickCount: 1
-+                                        pressure: 1.0];
-+
-+    [NSMenu popUpContextMenu: menu withEvent: event forView: nil];
-+#endif
- }
- 
- - (void) _showContextMenu {
-@@ -426,6 +756,10 @@ CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE. */
-     } else {
-         NSLog(@"win32Menu is null!");
-     }
-+#else
-+    if (_menu) {
-+        [self popUpStatusItemMenu: _menu];
-+    }
- #endif
- }
- 
-diff --git a/AppKit/NSStatusBar.m b/AppKit/NSStatusBar.m
-index a9989e14..2a49c905 100644
---- a/AppKit/NSStatusBar.m
-+++ b/AppKit/NSStatusBar.m
-@@ -75,6 +75,8 @@ static NSStatusBar *_statusBar = nil;
-     return NO;
- }
- - (void) removeStatusItem: (NSStatusItem *) item {
-+    [item _removeTrayIcon];
-+    [_statusItems removeObjectIdenticalTo: item];
- }
- - (NSStatusItem *) statusItemWithLength: (CGFloat) length {
-     NSStatusItem *item = [[NSStatusItem alloc] init];
-@@ -97,8 +99,9 @@ static NSStatusBar *_statusBar = nil;
-         // Fall back to Windows XP's default taskbar height
-         return 30;
-     }
-+#else
-+    return 24.0;
- #endif
--    return 42;
- }
- 
- #ifdef WIN32
-@@ -127,12 +130,10 @@ static NSStatusBar *_statusBar = nil;
- #endif
- 
- - (void) handleApplicationClose {
--#ifdef WIN32
-     for (int i = 0; i < _statusItems.count; i++) {
-         NSStatusItem *item = [_statusItems objectAtIndex: i];
-         [item _removeTrayIcon];
-     }
--#endif
- }
- 
- @end
