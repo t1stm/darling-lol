@@ -10199,7 +10199,7 @@ index deca16b87..d75d5e22d 100644
  
  set_property(TARGET OpenGL APPEND_STRING PROPERTY LINK_FLAGS
 diff --git a/src/frameworks/OpenGL/OpenGL.c b/src/frameworks/OpenGL/OpenGL.c
-index 02514960b..d9b28dc84 100644
+index 02514960b..df65cff7c 100644
 --- a/src/frameworks/OpenGL/OpenGL.c
 +++ b/src/frameworks/OpenGL/OpenGL.c
 @@ -2,11 +2,22 @@
@@ -10226,7 +10226,7 @@ index 02514960b..d9b28dc84 100644
  
  // Try to get the right (generic) type definitions.
  // In particular, we really want EGLNativeDisplayType to be void *,
-@@ -22,12 +33,121 @@
+@@ -22,12 +33,136 @@
  #define APPLE
  #define __APPLE__
  
@@ -10255,6 +10255,7 @@ index 02514960b..d9b28dc84 100644
 +static EGLBoolean (*p_eglDestroyContext)(EGLDisplay, EGLContext);
 +static EGLBoolean (*p_eglSwapBuffers)(EGLDisplay, EGLSurface);
 +static EGLBoolean (*p_eglSwapInterval)(EGLDisplay, EGLint);
++static EGLint (*p_eglGetError)(void);
 +
 +static int native_egl_loaded;
 +static pthread_mutex_t native_egl_mutex = PTHREAD_MUTEX_INITIALIZER;
@@ -10326,6 +10327,7 @@ index 02514960b..d9b28dc84 100644
 +            p_eglDestroyContext = (EGLBoolean (*)(EGLDisplay, EGLContext)) dlsym(h, "eglDestroyContext");
 +            p_eglSwapBuffers = (EGLBoolean (*)(EGLDisplay, EGLSurface)) dlsym(h, "eglSwapBuffers");
 +            p_eglSwapInterval = (EGLBoolean (*)(EGLDisplay, EGLint)) dlsym(h, "eglSwapInterval");
++            p_eglGetError = (EGLint (*)(void)) dlsym(h, "eglGetError");
 +            native_egl_loaded = 1;
 +        }
 +    }
@@ -10333,16 +10335,29 @@ index 02514960b..d9b28dc84 100644
 +}
 +
  static EGLDisplay display;
- 
++static void *saved_native_display;
++
 +static EGLDisplay x11EGLDisplay(EGLNativeDisplayType native_display) {
 +    /* CGS/AppKit supply Xlib Display pointers. Mesa's automatic platform
 +     * selection can choose Wayland on a Wayland desktop and interpret the
 +     * Xlib pointer as a wl_display, crashing during eglInitialize. */
-+    if (p_eglGetPlatformDisplay)
-+        return p_eglGetPlatformDisplay(0x31D5 /* EGL_PLATFORM_X11 */, native_display, NULL);
-+    return p_eglGetDisplay(native_display);
++    if (p_eglGetPlatformDisplay) {
++        EGLDisplay d = p_eglGetPlatformDisplay(0x31D5 /* EGL_PLATFORM_X11 */, native_display, NULL);
++        if (d != EGL_NO_DISPLAY && d != NULL)
++            return d;
++        EGLint err = p_eglGetError ? p_eglGetError() : 0;
++        fprintf(stderr, "M58DG p_eglGetPlatformDisplay returned NO_DISPLAY: native_display=%p err=0x%x\n", (void*)native_display, (unsigned)err);
++    }
++    if (p_eglGetDisplay) {
++        EGLDisplay d = p_eglGetDisplay(native_display);
++        if (d != EGL_NO_DISPLAY && d != NULL)
++            return d;
++        EGLint err = p_eglGetError ? p_eglGetError() : 0;
++        fprintf(stderr, "M58DG p_eglGetDisplay returned NO_DISPLAY: native_display=%p err=0x%x\n", (void*)native_display, (unsigned)err);
++    }
++    return EGL_NO_DISPLAY;
 +}
-+
+ 
  static EGLConfig config;
  static int num_config;
 -static int default_swap_interval = 1;
@@ -10350,7 +10365,7 @@ index 02514960b..d9b28dc84 100644
  
  static EGLint const attribute_list[] = {
      EGL_RED_SIZE, 1,
-@@ -49,23 +169,44 @@ static pthread_mutex_t g_displaysMutex = PTHREAD_MUTEX_INITIALIZER;
+@@ -49,23 +184,44 @@ static pthread_mutex_t g_displaysMutex = PTHREAD_MUTEX_INITIALIZER;
  struct _CGLContextObj {
      GLuint retain_count;
      pthread_mutex_t lock;
@@ -10399,7 +10414,7 @@ index 02514960b..d9b28dc84 100644
  static inline int attribute_has_argument(CGLPixelFormatAttribute attr) {
      switch (attr) {
      case kCGLPFAAuxBuffers:
-@@ -76,6 +217,9 @@ static inline int attribute_has_argument(CGLPixelFormatAttribute attr) {
+@@ -76,6 +232,9 @@ static inline int attribute_has_argument(CGLPixelFormatAttribute attr) {
      case kCGLPFAAccumSize:
      case kCGLPFARendererID:
      case kCGLPFADisplayMask:
@@ -10409,7 +10424,7 @@ index 02514960b..d9b28dc84 100644
          return 1;
      default:
          return 0;
-@@ -85,6 +229,7 @@ static inline int attribute_has_argument(CGLPixelFormatAttribute attr) {
+@@ -85,6 +244,7 @@ static inline int attribute_has_argument(CGLPixelFormatAttribute attr) {
  __attribute__((constructor))
  static void _CGLInitialize(void)
  {
@@ -10417,7 +10432,7 @@ index 02514960b..d9b28dc84 100644
      g_displays = CFDictionaryCreateMutable(NULL, 0, NULL, NULL);
  }
  
-@@ -99,113 +244,72 @@ static int attributes_count(const CGLPixelFormatAttribute *attrs) {
+@@ -99,113 +259,73 @@ static int attributes_count(const CGLPixelFormatAttribute *attrs) {
  }
  
  CGLError CGLRegisterNativeDisplay(void *native_display) {
@@ -10427,6 +10442,7 @@ index 02514960b..d9b28dc84 100644
 -    if (candidate == EGL_NO_DISPLAY || !eglInitialize(candidate, NULL, NULL))
 +
 +    ensure_native_egl();
++    saved_native_display = native_display;
 +    display = x11EGLDisplay(native_display);
 +
 +    if (display == EGL_NO_DISPLAY) {
@@ -10572,7 +10588,7 @@ index 02514960b..d9b28dc84 100644
  
          pthread_mutex_lock(&g_displaysMutex);
          CFDictionaryAddValue(g_displays, (const void*)(unsigned long) cid, rv);
-@@ -232,68 +336,71 @@ CGLError CGLSetSurface(CGLContextObj gl, CGSConnectionID cid, CGSWindowID wid, C
+@@ -232,68 +352,71 @@ CGLError CGLSetSurface(CGLContextObj gl, CGSConnectionID cid, CGSWindowID wid, C
      if (!window)
          return kCGLBadWindow;
  
@@ -10686,7 +10702,7 @@ index 02514960b..d9b28dc84 100644
  }
  
  static pthread_key_t current_context_key;
-@@ -313,70 +420,41 @@ CGLContextObj CGLGetCurrentContext(void) {
+@@ -313,70 +436,41 @@ CGLContextObj CGLGetCurrentContext(void) {
      return pthread_getspecific(key);
  }
  
@@ -10785,7 +10801,7 @@ index 02514960b..d9b28dc84 100644
      return kCGLNoError;
  }
  
-@@ -391,16 +469,13 @@ CGLError CGLChoosePixelFormat(
+@@ -391,16 +485,13 @@ CGLError CGLChoosePixelFormat(
      CGLPixelFormatObj *result,
      GLint *number_of_screens
  ) {
@@ -10805,7 +10821,7 @@ index 02514960b..d9b28dc84 100644
      for (int i = 0; i < count; i++) {
          format->attributes[i] = attrs[i];
      }
-@@ -418,17 +493,16 @@ CGLError CGLClearDrawable(CGLContextObj ctx)
+@@ -418,17 +509,16 @@ CGLError CGLClearDrawable(CGLContextObj ctx)
      return kCGLNoError;
  }
  
@@ -10827,7 +10843,7 @@ index 02514960b..d9b28dc84 100644
      for (int i = 0; format->attributes[i] != 0; i++) {
          int has_arg = attribute_has_argument(format->attributes[i]);
  
-@@ -481,55 +555,98 @@ GLuint CGLGetPixelFormatRetainCount(CGLPixelFormatObj pixelFormat) {
+@@ -481,55 +571,166 @@ GLuint CGLGetPixelFormatRetainCount(CGLPixelFormatObj pixelFormat) {
      return pixelFormat->retain_count;
  }
  
@@ -10873,13 +10889,82 @@ index 02514960b..d9b28dc84 100644
 +    } else if (profile && profile != 0x1000 && profile != 0x3200) {
 +        return kCGLBadValue;
 +    }
-+    EGLContext egl_context = p_eglCreateContext(contextDisplay, contextConfig, egl_share,
-+        profile == 0x3200 || profile == 0x4100 ? contextAttributes : NULL);
++    EGLint const *attribs = (profile == 0x3200 || profile == 0x4100) ? contextAttributes : NULL;
++    EGLContext egl_context = p_eglCreateContext(contextDisplay, contextConfig, egl_share, attribs);
  
      if (egl_context == EGL_NO_CONTEXT) {
-+        fprintf(stderr, "M58DG CGLCreateContext FAILED: display=%p config=%p share=%p p_eglCreateContext=%p\n",
-+            (void*) display, (void*) config, (void*) egl_share, (void*) p_eglCreateContext);
-         return kCGLBadContext;
+-        return kCGLBadContext;
++        EGLint err = p_eglGetError ? p_eglGetError() : 0;
++        fprintf(stderr, "M58DG CGLCreateContext FAILED: pid=%d display=%p config=%p share=%p attribs=%p p_eglCreateContext=%p eglGetError=0x%x\n",
++            getpid(), (void*) display, (void*) config, (void*) egl_share, (void*) attribs, (void*) p_eglCreateContext, (unsigned) err);
++        if (err == 0x3008 /* EGL_BAD_DISPLAY */ || err == 0x3001 /* EGL_NOT_INITIALIZED */) {
++            void *nativeDisplay = saved_native_display ? saved_native_display : _CGSNativeDisplay(CGSMainConnectionID());
++            fprintf(stderr, "M58DG EGL_BAD_DISPLAY detected! Re-probing nativeDisplay=%p saved=%p\n", nativeDisplay, saved_native_display);
++            EGLDisplay newDisp = nativeDisplay ? x11EGLDisplay(nativeDisplay) : EGL_NO_DISPLAY;
++            if (newDisp == EGL_NO_DISPLAY) {
++                typedef void *(*XOpenDisplayFn)(const char *);
++                XOpenDisplayFn xopen = (XOpenDisplayFn)dlsym(RTLD_DEFAULT, "XOpenDisplay");
++                if (!xopen) {
++                    void *xh = dlopen("libX11.so.6", RTLD_NOW | RTLD_LOCAL);
++                    if (!xh) xh = dlopen("/usr/lib/native/libX11.dylib", RTLD_NOW | RTLD_LOCAL);
++                    if (xh) xopen = (XOpenDisplayFn)dlsym(xh, "XOpenDisplay");
++                }
++                if (xopen) {
++                    void *fresh_x11 = xopen(NULL);
++                    if (fresh_x11) {
++                        newDisp = x11EGLDisplay(fresh_x11);
++                        if (newDisp != EGL_NO_DISPLAY) {
++                            saved_native_display = fresh_x11;
++                        } else {
++                            typedef int (*XCloseDisplayFn)(void *);
++                            XCloseDisplayFn xclose = (XCloseDisplayFn)dlsym(RTLD_DEFAULT, "XCloseDisplay");
++                            if (xclose) xclose(fresh_x11);
++                        }
++                    }
++                }
++            }
++            EGLConfig newCfg = NULL;
++            EGLBoolean ini_ok = 0, ch_ok = 0;
++            EGLint ini_err = 0, ch_err = 0;
++            if (newDisp != EGL_NO_DISPLAY) {
++                ini_ok = p_eglInitialize(newDisp, NULL, NULL);
++                ini_err = p_eglGetError ? p_eglGetError() : 0;
++                if (ini_ok) {
++                    ch_ok = p_eglChooseConfig(newDisp, attribute_list, &newCfg, 1, &num_config);
++                    ch_err = p_eglGetError ? p_eglGetError() : 0;
++                }
++            }
++            fprintf(stderr, "M58DG re-probe: newDisp=%p ini_ok=%d (err=0x%x) ch_ok=%d (err=0x%x) newCfg=%p num_config=%d\n",
++                (void*)newDisp, (int)ini_ok, (unsigned)ini_err, (int)ch_ok, (unsigned)ch_err, (void*)newCfg, num_config);
++            if (ini_ok && ch_ok && newCfg) {
++                display = newDisp;
++                config = newCfg;
++                contextDisplay = display;
++                contextConfig = config;
++                p_eglBindAPI(EGL_OPENGL_API);
++                egl_context = p_eglCreateContext(contextDisplay, contextConfig, egl_share, attribs);
++                fprintf(stderr, "M58DG CGLCreateContext recovered with new display %p cfg %p -> ctx=%p err=0x%x\n",
++                    (void*)newDisp, (void*)newCfg, (void*)egl_context, (unsigned)(p_eglGetError ? p_eglGetError() : 0));
++            }
++        }
++        if (egl_context == EGL_NO_CONTEXT && !attribs) {
++            egl_context = p_eglCreateContext(contextDisplay, contextConfig, egl_share, contextAttributes);
++            if (egl_context != EGL_NO_CONTEXT) {
++                fprintf(stderr, "M58DG CGLCreateContext fallback to Core profile SUCCEEDED: ctx=%p\n", (void*) egl_context);
++            } else {
++                EGLint compatAttrs[] = {
++                    0x3098 /* EGL_CONTEXT_MAJOR_VERSION */, 3,
++                    0x30FB /* EGL_CONTEXT_MINOR_VERSION */, 0,
++                    EGL_NONE
++                };
++                egl_context = p_eglCreateContext(contextDisplay, contextConfig, egl_share, compatAttrs);
++                if (egl_context != EGL_NO_CONTEXT) {
++                    fprintf(stderr, "M58DG CGLCreateContext fallback to 3.0 SUCCEEDED: ctx=%p\n", (void*) egl_context);
++                }
++            }
++        }
++        if (egl_context == EGL_NO_CONTEXT)
++            return kCGLBadContext;
      }
  
 -    CGLContextObj context = malloc(sizeof(struct _CGLContextObj));
@@ -10889,9 +10974,9 @@ index 02514960b..d9b28dc84 100644
 -        return kCGLBadAlloc;
 +    {
 +        static int m58dg_ok = 0;
-+        if (m58dg_ok++ < 5)
-+            fprintf(stderr, "M58DG CGLCreateContext OK display=%p config=%p ctx=%p\n",
-+                (void*) display, (void*) config, (void*) egl_context);
++        if (m58dg_ok++ < 10)
++            fprintf(stderr, "M58DG CGLCreateContext OK pid=%d display=%p config=%p ctx=%p\n",
++                getpid(), (void*) display, (void*) config, (void*) egl_context);
      }
  
 +    CGLContextObj context = malloc(sizeof(struct _CGLContextObj));
@@ -10946,7 +11031,7 @@ index 02514960b..d9b28dc84 100644
      return context;
  }
  
-@@ -538,22 +655,29 @@ void CGLReleaseContext(CGLContextObj context) {
+@@ -538,22 +739,29 @@ void CGLReleaseContext(CGLContextObj context) {
          return;
      }
  
@@ -10986,7 +11071,7 @@ index 02514960b..d9b28dc84 100644
  
      free(context);
  }
-@@ -582,12 +706,330 @@ CGLError CGLUnlockContext(CGLContextObj context) {
+@@ -582,12 +790,330 @@ CGLError CGLUnlockContext(CGLContextObj context) {
      return kCGLNoError;
  }
  
@@ -11321,7 +11406,7 @@ index 02514960b..d9b28dc84 100644
  }
  
  CGLError CGLSetParameter(CGLContextObj context, CGLContextParameter parameter, const GLint *value) {
-@@ -596,12 +1038,9 @@ CGLError CGLSetParameter(CGLContextObj context, CGLContextParameter parameter, c
+@@ -596,12 +1122,9 @@ CGLError CGLSetParameter(CGLContextObj context, CGLContextParameter parameter, c
  
      if (parameter == kCGLCPSwapInterval)
      {
@@ -11336,7 +11421,7 @@ index 02514960b..d9b28dc84 100644
          if (success)
              context->swap_interval = v;
          return success ? kCGLNoError : kCGLBadValue;
-@@ -623,12 +1062,17 @@ CGLError CGLGetParameter(CGLContextObj context, CGLContextParameter parameter, G
+@@ -623,12 +1146,17 @@ CGLError CGLGetParameter(CGLContextObj context, CGLContextParameter parameter, G
      return kCGLNoError;
  }
  
@@ -11358,7 +11443,7 @@ index 02514960b..d9b28dc84 100644
  }
  
  CGLError CGLDestroyRendererInfo(CGLRendererInfoObj rend) {
-@@ -641,3 +1085,46 @@ void CGLGetVersion(GLint *majorvers, GLint *minorvers) {
+@@ -641,3 +1169,46 @@ void CGLGetVersion(GLint *majorvers, GLint *minorvers) {
      if (minorvers)
          *minorvers = 0;
  }
