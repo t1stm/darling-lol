@@ -308,7 +308,8 @@
         "private-include/indium/submission-batch.private.hpp",
         "private-include/indium/submit-batch.private.hpp",
         "private-include/indium/submit-thread.private.hpp",
-        "private-include/indium/waits.private.hpp"
+        "private-include/indium/waits.private.hpp",
+        "private-include/indium/completion-spin.private.hpp"
       ]
     },
     {
