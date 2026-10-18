@@ -1,5 +1,5 @@
 diff --git a/AppKit/CMakeLists.txt b/AppKit/CMakeLists.txt
-index 6762bc51..edd83644 100644
+index 6762bc51..d2267e37 100644
 --- a/AppKit/CMakeLists.txt
 +++ b/AppKit/CMakeLists.txt
 @@ -1,5 +1,8 @@
@@ -11,7 +11,16 @@ index 6762bc51..edd83644 100644
  include(darling_framework)
  
  remove_sdk_framework(AppKit)
-@@ -667,6 +670,7 @@ add_backend(X11
+@@ -585,6 +588,8 @@ add_framework(AppKit
+ 		FreeType
+ 		fontconfig
+ 		jpeg png tiff
++		# NSStatusItem docks into the FreeDesktop system tray through Xlib.
++		X11
+ 		CoreServices
+ 		UniformTypeIdentifiers
+ )
+@@ -667,6 +672,7 @@ add_backend(X11
                  X11
  		XRandR
  		Xcursor
