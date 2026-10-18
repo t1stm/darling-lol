@@ -5192,22 +5192,25 @@ index 0e91a5d1..1e4cec1b 100644
  
  - (void) selectionNotify: (XSelectionEvent *) event {
 diff --git a/AppKit/X11.backend/X11SubWindow.h b/AppKit/X11.backend/X11SubWindow.h
-index 65b63a3e..632d38ee 100644
+index 65b63a3e..1fe16c56 100644
 --- a/AppKit/X11.backend/X11SubWindow.h
 +++ b/AppKit/X11.backend/X11SubWindow.h
-@@ -10,5 +10,7 @@
+@@ -10,5 +10,10 @@
  }
  
  - initWithParentWindow: (X11Window *) parent frame: (CGRect) frame;
 +- (void *) parentNativeWindow;
 +- (X11Window *) parentWindow;
++- (void *) nativeDisplay;
++- (Display *) display;
++- (Window) window;
  
  @end
 diff --git a/AppKit/X11.backend/X11SubWindow.m b/AppKit/X11.backend/X11SubWindow.m
-index 738ab457..2416d55e 100644
+index 738ab457..ed6991bf 100644
 --- a/AppKit/X11.backend/X11SubWindow.m
 +++ b/AppKit/X11.backend/X11SubWindow.m
-@@ -39,6 +39,14 @@
+@@ -39,6 +39,26 @@
      return (void *) _window;
  }
  
@@ -5217,6 +5220,18 @@ index 738ab457..2416d55e 100644
 +
 +- (X11Window *) parentWindow {
 +    return _parent;
++}
++
++- (void *) nativeDisplay {
++    return (void *) _display;
++}
++
++- (Display *) display {
++    return _display;
++}
++
++- (Window) window {
++    return _window;
 +}
 +
  - (void) show {
@@ -7489,6 +7504,25 @@ index e1da261d..f050b6e8 100644
  CFArrayRef __nullable CGWindowListCreate(CGWindowListOption option, CGWindowID relativeToWindow)
  {
      printf("STUB %s\n", __PRETTY_FUNCTION__);
+diff --git a/CoreGraphics/CGSubWindow.m b/CoreGraphics/CGSubWindow.m
+index 008ccd74..4bb12dbb 100644
+--- a/CoreGraphics/CGSubWindow.m
++++ b/CoreGraphics/CGSubWindow.m
+@@ -8,6 +8,14 @@
+     return NULL;
+ }
+ 
++- (void *) parentNativeWindow {
++    return NULL;
++}
++
++- (void *) nativeDisplay {
++    return NULL;
++}
++
+ - (void) show {
+     O2InvalidAbstractInvocation();
+ }
 diff --git a/CoreGraphics/X11.backend/CGSConnectionX11.h b/CoreGraphics/X11.backend/CGSConnectionX11.h
 index 5437acb5..07f7eb4f 100644
 --- a/CoreGraphics/X11.backend/CGSConnectionX11.h
@@ -7719,14 +7753,15 @@ index f3991816..7862bdbb 100644
  -(CGPoint) mouseLocation;
  
 diff --git a/CoreGraphics/include/CoreGraphics/CGSubWindow.h b/CoreGraphics/include/CoreGraphics/CGSubWindow.h
-index de7a3496..964817dd 100644
+index de7a3496..42f3ebb7 100644
 --- a/CoreGraphics/include/CoreGraphics/CGSubWindow.h
 +++ b/CoreGraphics/include/CoreGraphics/CGSubWindow.h
-@@ -6,6 +6,7 @@
+@@ -6,6 +6,8 @@
  @interface CGSubWindow : NSObject
  
  - (void *) nativeWindow;
 +- (void *) parentNativeWindow;
++- (void *) nativeDisplay;
  
  - (void) show;
  - (void) hide;
@@ -11175,10 +11210,10 @@ index 757dd8c9..cbc313d5 100644
  	CFTimeInterval presentedTime() const;
  
 diff --git a/QuartzCore/CAMetalLayer.mm b/QuartzCore/CAMetalLayer.mm
-index b81e2e14..48f894f1 100644
+index b81e2e14..5df88e0e 100644
 --- a/QuartzCore/CAMetalLayer.mm
 +++ b/QuartzCore/CAMetalLayer.mm
-@@ -17,38 +17,257 @@
+@@ -17,38 +17,333 @@
   * along with Darling.  If not, see <http://www.gnu.org/licenses/>.
   */
  
@@ -11211,32 +11246,80 @@ index b81e2e14..48f894f1 100644
 +}
  
 -#import "CALayerInternal.h"
-+static void ensureX11WindowVisible(void* dpy, void* win) {
-+	if (!dpy || !win) return;
-+	typedef int (*XMapRaised_t)(void*, unsigned long);
-+	typedef int (*XMapWindow_t)(void*, unsigned long);
-+	typedef int (*XFlush_t)(void*);
-+	static XMapRaised_t pfnXMapRaised = nullptr;
-+	static XMapWindow_t pfnXMapWindow = nullptr;
-+	static XFlush_t pfnXFlush = nullptr;
++typedef int (*XMapRaised_t)(void*, unsigned long);
++typedef int (*XMapWindow_t)(void*, unsigned long);
++typedef int (*XUnmapWindow_t)(void*, unsigned long);
++typedef int (*XFlush_t)(void*);
++typedef int (*XQueryTree_t)(void*, unsigned long, unsigned long*, unsigned long*, unsigned long**, unsigned int*);
++typedef int (*XFree_t)(void*);
++typedef void* (*XOpenDisplay_t)(const char*);
++
++static XMapRaised_t pfnXMapRaised = nullptr;
++static XMapWindow_t pfnXMapWindow = nullptr;
++static XUnmapWindow_t pfnXUnmapWindow = nullptr;
++static XFlush_t pfnXFlush = nullptr;
++static XQueryTree_t pfnXQueryTree = nullptr;
++static XFree_t pfnXFree = nullptr;
++static XOpenDisplay_t pfnXOpenDisplay = nullptr;
++
++static void* getLibX11Handle() {
++	static void* h = nullptr;
 +	static std::once_flag flag;
 +	std::call_once(flag, []() {
-+		void* h = dlopen("libX11.so.6", RTLD_LAZY | RTLD_NOLOAD);
-+		if (!h) h = dlopen("libX11.so.6", RTLD_LAZY | RTLD_GLOBAL);
-+		if (!h) h = dlopen("libX11.so", RTLD_LAZY | RTLD_GLOBAL);
-+		if (h) {
-+			pfnXMapRaised = (XMapRaised_t)dlsym(h, "XMapRaised");
-+			pfnXMapWindow = (XMapWindow_t)dlsym(h, "XMapWindow");
-+			pfnXFlush = (XFlush_t)dlsym(h, "XFlush");
-+		} else {
-+			pfnXMapRaised = (XMapRaised_t)dlsym(RTLD_DEFAULT, "XMapRaised");
-+			pfnXMapWindow = (XMapWindow_t)dlsym(RTLD_DEFAULT, "XMapWindow");
-+			pfnXFlush = (XFlush_t)dlsym(RTLD_DEFAULT, "XFlush");
++		const char* candidates[] = {
++			"/usr/lib/native/libX11.dylib",
++			"libX11.dylib",
++			"libX11.so.6",
++			"libX11.so",
++			"/usr/lib64/libX11.so.6",
++			"/usr/lib/x86_64-linux-gnu/libX11.so.6"
++		};
++		for (const char* path : candidates) {
++			h = dlopen(path, RTLD_LAZY | RTLD_GLOBAL);
++			const char* err = h ? "none" : dlerror();
++			char logBuf[256];
++			snprintf(logBuf, sizeof(logBuf), "dlopen(\"%s\") -> %p (error: %s)",
++				path, h, err ? err : "unknown");
++			appendDeviceLog(logBuf);
++			if (h) break;
 +		}
 +	});
++	return h;
++}
+ 
+-static void reportGLErrors(void) {
+-#if 0
+-	GLenum err;
++static void resolveX11Symbols() {
++	static std::once_flag symFlag;
++	std::call_once(symFlag, []() {
++		void* h = getLibX11Handle();
++		void* searchHandle = h ? h : RTLD_DEFAULT;
++		pfnXMapRaised = (XMapRaised_t)dlsym(searchHandle, "XMapRaised");
++		pfnXMapWindow = (XMapWindow_t)dlsym(searchHandle, "XMapWindow");
++		pfnXUnmapWindow = (XUnmapWindow_t)dlsym(searchHandle, "XUnmapWindow");
++		pfnXFlush = (XFlush_t)dlsym(searchHandle, "XFlush");
++		pfnXQueryTree = (XQueryTree_t)dlsym(searchHandle, "XQueryTree");
++		pfnXFree = (XFree_t)dlsym(searchHandle, "XFree");
++		pfnXOpenDisplay = (XOpenDisplay_t)dlsym(searchHandle, "XOpenDisplay");
++
++		char symLog[512];
++		snprintf(symLog, sizeof(symLog), "libX11 symbols: handle=%p XQueryTree=%p XFree=%p XOpenDisplay=%p XMapRaised=%p XMapWindow=%p XUnmapWindow=%p XFlush=%p",
++			h, (void*)pfnXQueryTree, (void*)pfnXFree, (void*)pfnXOpenDisplay,
++			(void*)pfnXMapRaised, (void*)pfnXMapWindow, (void*)pfnXUnmapWindow, (void*)pfnXFlush);
++		appendDeviceLog(symLog);
++	});
++}
+ 
+-	while ((err = glGetError()) != GL_NO_ERROR) {
+-		printf("*** OPENGL ERROR: %d ***\n", err);
++static void ensureX11WindowVisible(void* dpy, void* win) {
++	if (!dpy || !win) return;
++	resolveX11Symbols();
 +	if (pfnXMapWindow) {
 +		pfnXMapWindow(dpy, (unsigned long)(uintptr_t)win);
-+	}
+ 	}
+-#endif
 +	if (pfnXMapRaised) {
 +		pfnXMapRaised(dpy, (unsigned long)(uintptr_t)win);
 +	}
@@ -11244,35 +11327,47 @@ index b81e2e14..48f894f1 100644
 +		pfnXFlush(dpy);
 +	}
 +}
- 
--static void reportGLErrors(void) {
--#if 0
--	GLenum err;
++
 +static void* getTopLevelWindow(void* dpy, id subwinObj, void* nativeWin) {
-+	if (!dpy || !nativeWin) return nativeWin;
- 
--	while ((err = glGetError()) != GL_NO_ERROR) {
--		printf("*** OPENGL ERROR: %d ***\n", err);
++	char enterLog[256];
++	snprintf(enterLog, sizeof(enterLog), "getTopLevelWindow ENTER subWin=%p dpy=%p subwinObj=%p", nativeWin, dpy, (void*)subwinObj);
++	appendDeviceLog(enterLog);
++
++	if (!nativeWin) return nullptr;
++
++	void* topLevelWin = nullptr;
++
++	// 1. Try parentNativeWindow on subwinObj
 +	if (subwinObj && [subwinObj respondsToSelector:@selector(parentNativeWindow)]) {
 +		void* pw = [subwinObj parentNativeWindow];
-+		if (pw != NULL) return pw;
- 	}
--#endif
++		if (pw != NULL) {
++			topLevelWin = pw;
++			char logBuf[256];
++			snprintf(logBuf, sizeof(logBuf), "getTopLevelWindow: parentNativeWindow resolved topLevelWin=%p", topLevelWin);
++			appendDeviceLog(logBuf);
++		}
++	}
 +
-+	if (subwinObj && [subwinObj respondsToSelector:@selector(parentWindow)]) {
++	// 2. Try parentWindow -> windowHandle
++	if (!topLevelWin && subwinObj && [subwinObj respondsToSelector:@selector(parentWindow)]) {
 +		id pwObj = [subwinObj performSelector:@selector(parentWindow)];
 +		if (pwObj && [pwObj respondsToSelector:@selector(windowHandle)]) {
 +			typedef unsigned long (*HandleFn)(id, SEL);
 +			HandleFn fn = (HandleFn)[pwObj methodForSelector:@selector(windowHandle)];
 +			if (fn) {
 +				unsigned long h = fn(pwObj, @selector(windowHandle));
-+				if (h != 0) return (void*)(uintptr_t)h;
++				if (h != 0) {
++					topLevelWin = (void*)(uintptr_t)h;
++					char logBuf[256];
++					snprintf(logBuf, sizeof(logBuf), "getTopLevelWindow: parentWindow windowHandle resolved topLevelWin=%p", topLevelWin);
++					appendDeviceLog(logBuf);
++				}
 +			}
 +		}
 +	}
 +
-+	// 1. Try Objective-C reflection on subwinObj to retrieve parent X11Window
-+	if (subwinObj) {
++	// 3. Try Objective-C reflection on _parent ivar
++	if (!topLevelWin && subwinObj) {
 +		@try {
 +			Ivar parentIvar = class_getInstanceVariable([subwinObj class], "_parent");
 +			if (parentIvar) {
@@ -11284,64 +11379,75 @@ index b81e2e14..48f894f1 100644
 +						if (fn) {
 +							unsigned long h = fn(parentObj, @selector(windowHandle));
 +							if (h != 0) {
-+								return (void*)(uintptr_t)h;
++								topLevelWin = (void*)(uintptr_t)h;
 +							}
 +						}
 +					}
-+					Ivar winIvar = class_getInstanceVariable([parentObj class], "_window");
-+					if (winIvar) {
-+						ptrdiff_t offset = ivar_getOffset(winIvar);
-+						unsigned long w = *(unsigned long*)((char*)(__bridge void*)parentObj + offset);
-+						if (w != 0) {
-+							return (void*)(uintptr_t)w;
++					if (!topLevelWin) {
++						Ivar winIvar = class_getInstanceVariable([parentObj class], "_window");
++						if (winIvar) {
++							ptrdiff_t offset = ivar_getOffset(winIvar);
++							unsigned long w = *(unsigned long*)((char*)(__bridge void*)parentObj + offset);
++							if (w != 0) {
++								topLevelWin = (void*)(uintptr_t)w;
++							}
 +						}
++					}
++					if (topLevelWin) {
++						char logBuf[256];
++						snprintf(logBuf, sizeof(logBuf), "getTopLevelWindow: ivar _parent resolved topLevelWin=%p", topLevelWin);
++						appendDeviceLog(logBuf);
 +					}
 +				}
 +			}
 +		} @catch (id ex) {}
 +	}
 +
-+	// 2. Query X11 tree hierarchy up to root window (for Xwayland top-level surface)
-+	typedef int (*XQueryTree_t)(void*, unsigned long, unsigned long*, unsigned long*, unsigned long**, unsigned int*);
-+	typedef int (*XFree_t)(void*);
-+	static XQueryTree_t pfnXQueryTree = nullptr;
-+	static XFree_t pfnXFree = nullptr;
-+	static std::once_flag treeFlag;
-+	std::call_once(treeFlag, []() {
-+		void* h = dlopen("libX11.so.6", RTLD_LAZY | RTLD_NOLOAD);
-+		if (!h) h = dlopen("libX11.so.6", RTLD_LAZY | RTLD_GLOBAL);
-+		if (!h) h = dlopen("libX11.so", RTLD_LAZY | RTLD_GLOBAL);
-+		if (h) {
-+			pfnXQueryTree = (XQueryTree_t)dlsym(h, "XQueryTree");
-+			pfnXFree = (XFree_t)dlsym(h, "XFree");
-+		} else {
-+			pfnXQueryTree = (XQueryTree_t)dlsym(RTLD_DEFAULT, "XQueryTree");
-+			pfnXFree = (XFree_t)dlsym(RTLD_DEFAULT, "XFree");
-+		}
-+	});
-+
-+	if (pfnXQueryTree && pfnXFree) {
-+		unsigned long curr = (unsigned long)(uintptr_t)nativeWin;
++	// 4. Query X11 tree hierarchy up to root window (for Xwayland top-level surface)
++	resolveX11Symbols();
++	if (dpy && pfnXQueryTree && pfnXFree) {
++		unsigned long curr = (unsigned long)(uintptr_t)(topLevelWin ? topLevelWin : nativeWin);
 +		unsigned long root = 0, parent = 0;
 +		unsigned long* children = nullptr;
 +		unsigned int nchildren = 0;
++		int depth = 0;
 +
-+		while (curr != 0) {
-+			if (!pfnXQueryTree(dpy, curr, &root, &parent, &children, &nchildren)) {
-+				break;
-+			}
++		while (curr != 0 && depth < 20) {
++			int qres = pfnXQueryTree(dpy, curr, &root, &parent, &children, &nchildren);
 +			if (children) {
 +				pfnXFree(children);
 +				children = nullptr;
 +			}
-+			if (parent == 0 || parent == root) {
-+				return (void*)(uintptr_t)curr;
++			if (!qres) {
++				char qLog[256];
++				snprintf(qLog, sizeof(qLog), "getTopLevelWindow: XQueryTree failed for win=0x%lx", curr);
++				appendDeviceLog(qLog);
++				break;
 +			}
++			char qLog[256];
++			snprintf(qLog, sizeof(qLog), "getTopLevelWindow: XQueryTree curr=0x%lx root=0x%lx parent=0x%lx nchildren=%u", curr, root, parent, nchildren);
++			appendDeviceLog(qLog);
++
++			if (parent == 0 || parent == root) {
++				topLevelWin = (void*)(uintptr_t)curr;
++				break;
++			}
++			topLevelWin = (void*)(uintptr_t)parent;
 +			curr = parent;
++			depth++;
 +		}
 +	}
 +
-+	return nativeWin;
++	if (!topLevelWin) {
++		topLevelWin = nativeWin;
++	}
++
++	char logBuf[256];
++	snprintf(logBuf, sizeof(logBuf), "getTopLevelWindow subWin=%p xqueryTree=%p -> topLevelWin=%p",
++		nativeWin, (void*)pfnXQueryTree, topLevelWin);
++	appendDeviceLog(logBuf);
++
++	return topLevelWin;
 +}
 +
 +static bool darlingMetalDebug()
@@ -11435,6 +11541,11 @@ index b81e2e14..48f894f1 100644
 +			pfn_vkGetPhysicalDeviceSurfaceSupportKHR = reinterpret_cast<PFN_vkGetPhysicalDeviceSurfaceSupportKHR>(
 +				DynamicVK::vkGetInstanceProcAddr(Indium::globalInstance, "vkGetPhysicalDeviceSurfaceSupportKHR"));
 +		}
++		char extLog[256];
++		snprintf(extLog, sizeof(extLog), "resolveVulkanSurfaceExtensions: vkGetInstanceProcAddr=%p globalInstance=%p vkCreateXlibSurfaceKHR=%p vkGetPhysicalDeviceSurfaceSupportKHR=%p",
++			(void*)DynamicVK::vkGetInstanceProcAddr, (void*)Indium::globalInstance,
++			(void*)pfn_vkCreateXlibSurfaceKHR, (void*)pfn_vkGetPhysicalDeviceSurfaceSupportKHR);
++		appendDeviceLog(extLog);
 +	});
 +}
 +
@@ -11451,7 +11562,7 @@ index b81e2e14..48f894f1 100644
  + (instancetype)allocWithZone: (NSZone*)zone
  {
  	if (self == [CAMetalLayer class]) {
-@@ -205,63 +424,82 @@ static void reportGLErrors(void) {
+@@ -205,63 +500,82 @@ static void reportGLErrors(void) {
  
  @end
  
@@ -11566,7 +11677,7 @@ index b81e2e14..48f894f1 100644
  }
  
  - (void)setDevice: (id<MTLDevice>)device
-@@ -290,7 +528,6 @@ static void reportGLErrors(void) {
+@@ -290,7 +604,6 @@ static void reportGLErrors(void) {
  
  - (CGColorSpaceRef)colorspace
  {
@@ -11574,7 +11685,7 @@ index b81e2e14..48f894f1 100644
  	return _colorspace;
  }
  
-@@ -321,6 +558,7 @@ static void reportGLErrors(void) {
+@@ -321,6 +634,7 @@ static void reportGLErrors(void) {
  
  - (void)setDrawableSize: (CGSize)drawableSize
  {
@@ -11582,7 +11693,7 @@ index b81e2e14..48f894f1 100644
  	_drawableSize = drawableSize;
  	[self recreateDrawables];
  }
-@@ -339,36 +577,45 @@ static void reportGLErrors(void) {
+@@ -339,36 +653,45 @@ static void reportGLErrors(void) {
  	[self recreateDrawables];
  }
  
@@ -11643,7 +11754,7 @@ index b81e2e14..48f894f1 100644
  		if (_allowsNextDrawableTimeout) {
  			if (![_drawableCondition waitUntilDate: endTime]) {
  				break;
-@@ -378,8 +625,15 @@ static void reportGLErrors(void) {
+@@ -378,8 +701,15 @@ static void reportGLErrors(void) {
  		}
  	}
  
@@ -11660,7 +11771,7 @@ index b81e2e14..48f894f1 100644
  		[_drawableCondition unlock];
  		return nil;
  	}
-@@ -394,12 +648,13 @@ static void reportGLErrors(void) {
+@@ -394,12 +724,13 @@ static void reportGLErrors(void) {
  	}
  
  	if (drawableID == UINT8_MAX) {
@@ -11675,7 +11786,7 @@ index b81e2e14..48f894f1 100644
  
  	drawable = _drawables[drawableID];
  
-@@ -410,20 +665,28 @@ static void reportGLErrors(void) {
+@@ -410,20 +741,28 @@ static void reportGLErrors(void) {
  
  - (void)queuePresent: (NSUInteger)drawableID
  {
@@ -11712,7 +11823,7 @@ index b81e2e14..48f894f1 100644
  	[_drawableCondition lock];
  	_usableDrawablesBitmap |= 1u << drawableID;
  	[_drawableCondition signal];
-@@ -437,16 +700,14 @@ static void reportGLErrors(void) {
+@@ -437,16 +776,14 @@ static void reportGLErrors(void) {
  	// drop all queued presentations
  	for (NSUInteger i = 0; i < _queuedDrawableCount; ++i) {
  		auto& drawable = _drawables[_queuedDrawables[i]];
@@ -11734,7 +11845,7 @@ index b81e2e14..48f894f1 100644
  	for (auto& drawable: _drawables) {
  		if (drawable) {
  			drawable->disown();
-@@ -455,14 +716,251 @@ static void reportGLErrors(void) {
+@@ -455,14 +792,401 @@ static void reportGLErrors(void) {
  	}
  	_usableDrawablesBitmap = 0;
  
@@ -11787,27 +11898,129 @@ index b81e2e14..48f894f1 100644
 +		subwinObj = [[self.superlayer _context] subwindow];
 +		nativeWin = [subwinObj nativeWindow];
 +	}
-+	void* nativeDpy = _CGSNativeDisplay(CGSMainConnectionID());
 +
-+	void* subWin = nativeWin;
-+	void* topLevelWin = getTopLevelWindow(nativeDpy, subwinObj, subWin);
-+	void* presentationWin = topLevelWin ? topLevelWin : subWin;
++	// Resolve X11 Display
++	void* nativeDpy = nullptr;
++	const char* dpySource = "none";
 +
-+	if (presentationWin && nativeDpy) {
-+		ensureX11WindowVisible(nativeDpy, presentationWin);
-+		if (subWin && subWin != presentationWin) {
-+			ensureX11WindowVisible(nativeDpy, subWin);
++	// 1. Try subwinObj nativeDisplay or ivar _display
++	if (subwinObj) {
++		if ([subwinObj respondsToSelector:@selector(nativeDisplay)]) {
++			typedef void* (*DpyFn)(id, SEL);
++			DpyFn fn = (DpyFn)[subwinObj methodForSelector:@selector(nativeDisplay)];
++			if (fn) {
++				nativeDpy = fn(subwinObj, @selector(nativeDisplay));
++				if (nativeDpy) dpySource = "subwinObj.nativeDisplay";
++			}
++		}
++		if (!nativeDpy) {
++			Ivar dpyIvar = class_getInstanceVariable([subwinObj class], "_display");
++			if (dpyIvar) {
++				nativeDpy = *(void**)((char*)(__bridge void*)subwinObj + ivar_getOffset(dpyIvar));
++				if (nativeDpy) dpySource = "subwinObj._display";
++			}
 +		}
 +	}
 +
++	// 2. Try parent window display
++	if (!nativeDpy && subwinObj && [subwinObj respondsToSelector:@selector(parentWindow)]) {
++		id pw = [subwinObj performSelector:@selector(parentWindow)];
++		if (pw) {
++			Ivar pDpyIvar = class_getInstanceVariable([pw class], "_display");
++			if (pDpyIvar) {
++				nativeDpy = *(void**)((char*)(__bridge void*)pw + ivar_getOffset(pDpyIvar));
++				if (nativeDpy) dpySource = "parentWindow._display";
++			}
++		}
++	}
++
++	// 3. Try AppKit [NSDisplay currentDisplay]
++	if (!nativeDpy) {
++		Class nsDisplayCls = objc_getClass("NSDisplay");
++		if (nsDisplayCls && [nsDisplayCls respondsToSelector:@selector(currentDisplay)]) {
++			id curDpy = [nsDisplayCls performSelector:@selector(currentDisplay)];
++			if (curDpy && [curDpy respondsToSelector:@selector(display)]) {
++				typedef void* (*DpyFn)(id, SEL);
++				DpyFn fn = (DpyFn)[curDpy methodForSelector:@selector(display)];
++				if (fn) {
++					nativeDpy = fn(curDpy, @selector(display));
++					if (nativeDpy) dpySource = "NSDisplay.currentDisplay";
++				}
++			}
++		}
++	}
++
++	// 4. Try CoreGraphics _CGSNativeDisplay
++	if (!nativeDpy) {
++		nativeDpy = _CGSNativeDisplay(CGSMainConnectionID());
++		if (nativeDpy) dpySource = "CGSNativeDisplay";
++	}
++
++	// 5. Try XOpenDisplay fallback via libX11
++	if (!nativeDpy) {
++		resolveX11Symbols();
++		if (pfnXOpenDisplay) {
++			const char* dispEnv = getenv("DISPLAY");
++			nativeDpy = pfnXOpenDisplay(dispEnv ? dispEnv : ":0");
++			if (nativeDpy) dpySource = "XOpenDisplay";
++		}
++	}
++
++	char dpyLog[256];
++	snprintf(dpyLog, sizeof(dpyLog), "recreateDrawables nativeDpy=%p source=%s subwinObj=%p nativeWin=%p",
++		nativeDpy, dpySource, (void*)subwinObj, nativeWin);
++	appendDeviceLog(dpyLog);
++
++	void* subWin = nativeWin;
++	void* topLevelWin = getTopLevelWindow(nativeDpy, subwinObj, subWin);
++
 +	char winLog[256];
-+	snprintf(winLog, sizeof(winLog), "recreateDrawables subWin=%p topLevelWin=%p (presenting on %p)", subWin, topLevelWin, presentationWin);
++	snprintf(winLog, sizeof(winLog), "recreateDrawables subWin=%p topLevelWin=%p nativeDpy=%p",
++		subWin, topLevelWin, nativeDpy);
 +	appendDeviceLog(winLog);
 +
 +	resolveVulkanSurfaceExtensions();
 +
-+	if (pfn_vkCreateXlibSurfaceKHR && presentationWin && nativeDpy) {
-+		if (_vkSurface == VK_NULL_HANDLE || _vkNativeWindow != presentationWin) {
++	if (!pfn_vkCreateXlibSurfaceKHR || !nativeDpy) {
++		char errLog[256];
++		snprintf(errLog, sizeof(errLog), "Cannot create Vulkan surface: pfn_vkCreateXlibSurfaceKHR=%p nativeDpy=%p",
++			(void*)pfn_vkCreateXlibSurfaceKHR, nativeDpy);
++		appendDeviceLog(errLog);
++	} else {
++		// Determine presentation window candidate list
++		const char* targetEnv = getenv("DARLING_VULKAN_PRESENT_TARGET");
++		std::vector<void*> candidateWins;
++		if (targetEnv && strcmp(targetEnv, "toplevel") == 0) {
++			candidateWins.push_back(topLevelWin ? topLevelWin : subWin);
++			if (subWin && subWin != candidateWins[0]) candidateWins.push_back(subWin);
++		} else if (targetEnv && strcmp(targetEnv, "subwin") == 0) {
++			candidateWins.push_back(subWin);
++			if (topLevelWin && topLevelWin != subWin) candidateWins.push_back(topLevelWin);
++		} else {
++			// Auto: try subWin first (child window WSI DRI3/Present);
++			// if that fails, automatically fall back to topLevelWin.
++			candidateWins.push_back(subWin);
++			if (topLevelWin && topLevelWin != subWin) candidateWins.push_back(topLevelWin);
++		}
++
++		for (void* targetWin : candidateWins) {
++			if (!targetWin) continue;
++
++			bool isTopLevel = (targetWin == topLevelWin);
++			const char* winKind = isTopLevel ? "topLevel" : "subWin";
++
++			char tryLog[256];
++			snprintf(tryLog, sizeof(tryLog), "Attempting Vulkan WSI on %s window %p (subWin=%p topLevelWin=%p)",
++				winKind, targetWin, subWin, topLevelWin);
++			appendDeviceLog(tryLog);
++
++			// Ensure window is mapped and visible
++			ensureX11WindowVisible(nativeDpy, targetWin);
++			if (targetWin == subWin && topLevelWin && topLevelWin != subWin) {
++				ensureX11WindowVisible(nativeDpy, topLevelWin);
++			}
++
++			// Clean up previous surface/swapchain if any
 +			if (_vkSwapchain != VK_NULL_HANDLE) {
 +				DynamicVK::vkDestroySwapchainKHR(dev->device(), _vkSwapchain, nullptr);
 +				_vkSwapchain = VK_NULL_HANDLE;
@@ -11816,28 +12029,39 @@ index b81e2e14..48f894f1 100644
 +				DynamicVK::vkDestroySurfaceKHR(Indium::globalInstance, _vkSurface, nullptr);
 +				_vkSurface = VK_NULL_HANDLE;
 +			}
++
++			// 1. vkCreateXlibSurfaceKHR
 +			VkXlibSurfaceCreateInfoKHR sci {};
 +			sci.sType = static_cast<VkStructureType>(1000004000);
 +			sci.dpy = nativeDpy;
-+			sci.window = (unsigned long)(uintptr_t)presentationWin;
-+			if (pfn_vkCreateXlibSurfaceKHR(Indium::globalInstance, &sci, nullptr, &_vkSurface) == VK_SUCCESS) {
-+				_vkNativeWindow = presentationWin;
-+				_vkSubWindow = subWin;
++			sci.window = (unsigned long)(uintptr_t)targetWin;
++			VkResult sRes = pfn_vkCreateXlibSurfaceKHR(Indium::globalInstance, &sci, nullptr, &_vkSurface);
++			char sLog[256];
++			snprintf(sLog, sizeof(sLog), "vkCreateXlibSurfaceKHR res=%d surface=%p on %s win=%p",
++				(int)sRes, (void*)_vkSurface, winKind, targetWin);
++			appendDeviceLog(sLog);
++
++			if (sRes != VK_SUCCESS) {
++				_vkSurface = VK_NULL_HANDLE;
++				continue;
 +			}
-+		}
 +
-+		uint32_t qFam = dev->graphicsQueueFamilyIndex() ? *dev->graphicsQueueFamilyIndex() : 0;
-+
-+		if (_vkSurface != VK_NULL_HANDLE && pfn_vkGetPhysicalDeviceSurfaceSupportKHR) {
++			// 2. vkGetPhysicalDeviceSurfaceSupportKHR
++			uint32_t qFam = dev->graphicsQueueFamilyIndex() ? *dev->graphicsQueueFamilyIndex() : 0;
 +			VkBool32 supported = VK_FALSE;
-+			pfn_vkGetPhysicalDeviceSurfaceSupportKHR(dev->physicalDevice(), qFam, _vkSurface, &supported);
-+			if (!supported) {
++			VkResult supRes = pfn_vkGetPhysicalDeviceSurfaceSupportKHR(dev->physicalDevice(), qFam, _vkSurface, &supported);
++			char supLog[256];
++			snprintf(supLog, sizeof(supLog), "vkGetPhysicalDeviceSurfaceSupportKHR res=%d supported=%d qFam=%u on %s win=%p",
++				(int)supRes, (int)supported, qFam, winKind, targetWin);
++			appendDeviceLog(supLog);
++
++			if (supRes != VK_SUCCESS || !supported) {
 +				DynamicVK::vkDestroySurfaceKHR(Indium::globalInstance, _vkSurface, nullptr);
 +				_vkSurface = VK_NULL_HANDLE;
++				continue;
 +			}
-+		}
 +
-+		if (_vkSurface != VK_NULL_HANDLE) {
++			// 3. Surface formats & present modes & capabilities
 +			VkSurfaceCapabilitiesKHR caps {};
 +			DynamicVK::vkGetPhysicalDeviceSurfaceCapabilitiesKHR(dev->physicalDevice(), _vkSurface, &caps);
 +
@@ -11865,7 +12089,7 @@ index b81e2e14..48f894f1 100644
 +					chosenColorSpace = formats[0].colorSpace;
 +				}
 +			}
-+
+ 
 +			uint32_t modeCount = 0;
 +			DynamicVK::vkGetPhysicalDeviceSurfacePresentModesKHR(dev->physicalDevice(), _vkSurface, &modeCount, nullptr);
 +			std::vector<VkPresentModeKHR> modes(modeCount);
@@ -11897,19 +12121,28 @@ index b81e2e14..48f894f1 100644
 +					}
 +				}
 +			}
- 
++
 +			uint32_t imageCount = caps.minImageCount + 1;
 +			if (caps.maxImageCount > 0 && imageCount > caps.maxImageCount) {
 +				imageCount = caps.maxImageCount;
 +			}
 +
 +			VkExtent2D extent;
-+			if (caps.currentExtent.width != UINT32_MAX) {
++			if (caps.currentExtent.width != UINT32_MAX && caps.currentExtent.width > 0 && caps.currentExtent.height > 0) {
 +				extent = caps.currentExtent;
 +			} else {
 +				extent.width = std::max(caps.minImageExtent.width, std::min(caps.maxImageExtent.width, (uint32_t)_drawableSize.width));
 +				extent.height = std::max(caps.minImageExtent.height, std::min(caps.maxImageExtent.height, (uint32_t)_drawableSize.height));
 +			}
++
++			char capsLog[256];
++			snprintf(capsLog, sizeof(capsLog), "Surface caps: currentExtent=%ux%u minExtent=%ux%u maxExtent=%ux%u minImages=%u maxImages=%u transform=%u usage=0x%x",
++				caps.currentExtent.width, caps.currentExtent.height,
++				caps.minImageExtent.width, caps.minImageExtent.height,
++				caps.maxImageExtent.width, caps.maxImageExtent.height,
++				caps.minImageCount, caps.maxImageCount, (unsigned int)caps.currentTransform,
++				(unsigned int)caps.supportedUsageFlags);
++			appendDeviceLog(capsLog);
 +
 +			VkCompositeAlphaFlagBitsKHR compositeAlpha = VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR;
 +			if (!(caps.supportedCompositeAlpha & VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR)) {
@@ -11936,51 +12169,79 @@ index b81e2e14..48f894f1 100644
 +			swapInfo.compositeAlpha = compositeAlpha;
 +			swapInfo.presentMode = chosenPresentMode;
 +			swapInfo.clipped = VK_TRUE;
-+			swapInfo.oldSwapchain = _vkSwapchain;
++			swapInfo.oldSwapchain = VK_NULL_HANDLE;
 +
 +			VkSwapchainKHR newSwapchain = VK_NULL_HANDLE;
-+			if (DynamicVK::vkCreateSwapchainKHR(dev->device(), &swapInfo, nullptr, &newSwapchain) == VK_SUCCESS) {
-+				if (_vkSwapchain != VK_NULL_HANDLE) {
-+					DynamicVK::vkDestroySwapchainKHR(dev->device(), _vkSwapchain, nullptr);
-+				}
++			VkResult swRes = DynamicVK::vkCreateSwapchainKHR(dev->device(), &swapInfo, nullptr, &newSwapchain);
++			char swLog[256];
++			snprintf(swLog, sizeof(swLog), "vkCreateSwapchainKHR res=%d swapchain=%p extent=%ux%u format=%d mode=%d on %s win=%p",
++				(int)swRes, (void*)newSwapchain, extent.width, extent.height, (int)chosenFormat, (int)chosenPresentMode, winKind, targetWin);
++			appendDeviceLog(swLog);
++
++			if (swRes == VK_SUCCESS) {
 +				_vkSwapchain = newSwapchain;
++				_vkNativeWindow = targetWin;
++				_vkSubWindow = subWin;
 +				_vkSwapchainSize = CGSizeMake(extent.width, extent.height);
 +
 +				uint32_t count = 0;
 +				DynamicVK::vkGetSwapchainImagesKHR(dev->device(), _vkSwapchain, &count, nullptr);
 +				_vkSwapchainImages.resize(count);
 +				DynamicVK::vkGetSwapchainImagesKHR(dev->device(), _vkSwapchain, &count, _vkSwapchainImages.data());
-+			}
 +
-+			if (_vkAcquireSemaphore == VK_NULL_HANDLE) {
-+				VkSemaphoreCreateInfo semInfo {};
-+				semInfo.sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO;
-+				DynamicVK::vkCreateSemaphore(dev->device(), &semInfo, nullptr, &_vkAcquireSemaphore);
-+			}
-+			if (_vkRenderCompleteSemaphore == VK_NULL_HANDLE) {
-+				VkSemaphoreCreateInfo semInfo {};
-+				semInfo.sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO;
-+				DynamicVK::vkCreateSemaphore(dev->device(), &semInfo, nullptr, &_vkRenderCompleteSemaphore);
-+			}
-+			if (_vkPresentFence == VK_NULL_HANDLE) {
-+				VkFenceCreateInfo fenceInfo {};
-+				fenceInfo.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO;
-+				fenceInfo.flags = VK_FENCE_CREATE_SIGNALED_BIT;
-+				DynamicVK::vkCreateFence(dev->device(), &fenceInfo, nullptr, &_vkPresentFence);
-+			}
-+			if (_vkCommandPool == VK_NULL_HANDLE) {
-+				VkCommandPoolCreateInfo poolInfo {};
-+				poolInfo.sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO;
-+				poolInfo.flags = VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT;
-+				poolInfo.queueFamilyIndex = qFam;
-+				DynamicVK::vkCreateCommandPool(dev->device(), &poolInfo, nullptr, &_vkCommandPool);
++				char imgLog[256];
++				snprintf(imgLog, sizeof(imgLog), "Swapchain active on %s win=%p: images=%u extent=%ux%u",
++					winKind, targetWin, count, extent.width, extent.height);
++				appendDeviceLog(imgLog);
 +
-+				VkCommandBufferAllocateInfo cbAllocInfo {};
-+				cbAllocInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
-+				cbAllocInfo.commandPool = _vkCommandPool;
-+				cbAllocInfo.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
-+				cbAllocInfo.commandBufferCount = 1;
-+				DynamicVK::vkAllocateCommandBuffers(dev->device(), &cbAllocInfo, &_vkCmdBuffer);
++				// If presenting on topLevelWin and subWin exists and is different:
++				// Unmap subWin so the opaque child window cannot occlude topLevelWin presentation
++				if (isTopLevel && subWin && subWin != targetWin) {
++					resolveX11Symbols();
++					if (pfnXUnmapWindow && nativeDpy) {
++						pfnXUnmapWindow(nativeDpy, (unsigned long)(uintptr_t)subWin);
++						if (pfnXFlush) pfnXFlush(nativeDpy);
++						char unmapLog[256];
++						snprintf(unmapLog, sizeof(unmapLog), "Unmapped subWin %p to prevent occluding topLevelWin %p", subWin, targetWin);
++						appendDeviceLog(unmapLog);
++					}
++				}
++
++				if (_vkAcquireSemaphore == VK_NULL_HANDLE) {
++					VkSemaphoreCreateInfo semInfo {};
++					semInfo.sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO;
++					DynamicVK::vkCreateSemaphore(dev->device(), &semInfo, nullptr, &_vkAcquireSemaphore);
++				}
++				if (_vkRenderCompleteSemaphore == VK_NULL_HANDLE) {
++					VkSemaphoreCreateInfo semInfo {};
++					semInfo.sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO;
++					DynamicVK::vkCreateSemaphore(dev->device(), &semInfo, nullptr, &_vkRenderCompleteSemaphore);
++				}
++				if (_vkPresentFence == VK_NULL_HANDLE) {
++					VkFenceCreateInfo fenceInfo {};
++					fenceInfo.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO;
++					fenceInfo.flags = VK_FENCE_CREATE_SIGNALED_BIT;
++					DynamicVK::vkCreateFence(dev->device(), &fenceInfo, nullptr, &_vkPresentFence);
++				}
++				if (_vkCommandPool == VK_NULL_HANDLE) {
++					VkCommandPoolCreateInfo poolInfo {};
++					poolInfo.sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO;
++					poolInfo.flags = VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT;
++					poolInfo.queueFamilyIndex = qFam;
++					DynamicVK::vkCreateCommandPool(dev->device(), &poolInfo, nullptr, &_vkCommandPool);
++
++					VkCommandBufferAllocateInfo cbAllocInfo {};
++					cbAllocInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
++					cbAllocInfo.commandPool = _vkCommandPool;
++					cbAllocInfo.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
++					cbAllocInfo.commandBufferCount = 1;
++					DynamicVK::vkAllocateCommandBuffers(dev->device(), &cbAllocInfo, &_vkCmdBuffer);
++				}
++
++				break; // successfully initialized swapchain
++			} else {
++				DynamicVK::vkDestroySurfaceKHR(Indium::globalInstance, _vkSurface, nullptr);
++				_vkSurface = VK_NULL_HANDLE;
 +			}
 +		}
 +	}
@@ -11989,7 +12250,7 @@ index b81e2e14..48f894f1 100644
  	switch (_pixelFormat) {
  		case MTLPixelFormatBGRA8Unorm:      pixelFormat = Indium::PixelFormat::BGRA8Unorm;      break;
  		case MTLPixelFormatBGRA8Unorm_sRGB: pixelFormat = Indium::PixelFormat::BGRA8Unorm_sRGB; break;
-@@ -476,123 +974,215 @@ static void reportGLErrors(void) {
+@@ -476,123 +1200,215 @@ static void reportGLErrors(void) {
  		default:                            pixelFormat = Indium::PixelFormat::Invalid;         break;
  	}
  
@@ -12176,7 +12437,7 @@ index b81e2e14..48f894f1 100644
 +	if (drawable->semaphore() && drawable->semaphore()->semaphore != VK_NULL_HANDLE) {
 +		waitSemaphores.push_back(drawable->semaphore()->semaphore);
 +		waitStages.push_back(VK_PIPELINE_STAGE_TRANSFER_BIT);
- 	}
++	}
 +	waitSemaphores.push_back(_vkAcquireSemaphore);
 +	waitStages.push_back(VK_PIPELINE_STAGE_TRANSFER_BIT);
 +
@@ -12211,7 +12472,7 @@ index b81e2e14..48f894f1 100644
 +		presentInfo.pImageIndices = &imageIndex;
 +
 +		presRes = DynamicVK::vkQueuePresentKHR(dev->graphicsQueue(), &presentInfo);
-+	}
+ 	}
 +
 +	if (frameNum <= 120 || (frameNum % 60) == 0) {
 +		char logBuf[256];
