@@ -45,7 +45,7 @@ Game files, Riot installers, account databases, tokens, local prefixes, captures
 - X11/XCB/SHM development files for the current runtime helpers.
 - Enough free disk for Darling sources/build, Git LFS assets and the game: budget at least 50 GB. Building is substantially larger than this source-only repository.
 
-Use the dependency list in the [pinned Darling source](https://github.com/darlinghq/darling/tree/60ba801decee7a00782f74f6be4c8ffb013f79ff) for your distribution. `tools/env-check.sh` provides a starting check; its legacy package names may need adapting to your distro.
+Use the dependency list in the [pinned Darling source](https://github.com/VibeDarling/darling/tree/1d451b15ffc0937b41017bf3461cbf9fd587f977) (the VibeDarling fork of Darling) for your distribution. `tools/env-check.sh` provides a starting check; its legacy package names may need adapting to your distro.
 
 ## Experimental Nix/rootless package
 

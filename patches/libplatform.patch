@@ -1,8 +1,8 @@
 diff --git a/CMakeLists.txt b/CMakeLists.txt
-index 54d2843..cb87d13 100644
+index ba4c84d..f7b4b83 100644
 --- a/CMakeLists.txt
 +++ b/CMakeLists.txt
-@@ -127,3 +127,27 @@ if (BUILD_TARGET_64BIT)
+@@ -146,3 +146,27 @@ if (BUILD_TARGET_64BIT)
  endif (BUILD_TARGET_64BIT)
  
  install(TARGETS platform DESTINATION libexec/darling/usr/lib/system)
@@ -179,7 +179,7 @@ index 0000000..32cdf76
 +
 +#endif /* _PLATFORM_STRING_AVX2_H_ */
 diff --git a/src/string/generic/bzero.c b/src/string/generic/bzero.c
-index 4559dde..b059fb4 100644
+index 63337e1..ef449d0 100644
 --- a/src/string/generic/bzero.c
 +++ b/src/string/generic/bzero.c
 @@ -23,6 +23,10 @@

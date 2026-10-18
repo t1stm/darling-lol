@@ -1,8 +1,8 @@
 diff --git a/CMakeLists.txt b/CMakeLists.txt
-index 4920879..012235e 100644
+index 7352d43..6047365 100644
 --- a/CMakeLists.txt
 +++ b/CMakeLists.txt
-@@ -133,6 +133,13 @@ target_compile_options(darlingserver PRIVATE
+@@ -149,6 +149,13 @@ target_compile_options(darlingserver PRIVATE
  	-pthread
  	-std=c++17
  )
@@ -17,10 +17,10 @@ index 4920879..012235e 100644
  	-pthread
  	-Wl,--gc-sections
 diff --git a/duct-tape/CMakeLists.txt b/duct-tape/CMakeLists.txt
-index 5950c7f..cf4f1ba 100644
+index 39ec8e5..3a648fe 100644
 --- a/duct-tape/CMakeLists.txt
 +++ b/duct-tape/CMakeLists.txt
-@@ -268,6 +268,7 @@ add_library(darlingserver_duct_tape STATIC
+@@ -284,6 +284,7 @@ add_library(darlingserver_duct_tape STATIC
  	src/kqchan.c
  	src/semaphore.c
  	src/psynch.c
@@ -28,7 +28,7 @@ index 5950c7f..cf4f1ba 100644
  	src/condvar.c
  	src/debug.c
  
-@@ -380,3 +381,9 @@ add_dependencies(darlingserver_duct_tape
+@@ -396,3 +397,9 @@ add_dependencies(darlingserver_duct_tape
  target_link_libraries(darlingserver_duct_tape PUBLIC
  	libsimple_darlingserver
  )
@@ -101,10 +101,10 @@ index 32ebd76..688015e 100644
  
  #endif // _DARLINGSERVER_DUCT_TAPE_STUBS_H_
 diff --git a/duct-tape/internal-include/darlingserver/duct-tape/thread.h b/duct-tape/internal-include/darlingserver/duct-tape/thread.h
-index 633d729..75a3965 100644
+index d65e353..71c44b9 100644
 --- a/duct-tape/internal-include/darlingserver/duct-tape/thread.h
 +++ b/duct-tape/internal-include/darlingserver/duct-tape/thread.h
-@@ -38,6 +38,8 @@ struct dtape_thread {
+@@ -41,6 +41,8 @@ struct dtape_thread {
  	bool processing_signal;
  
  	bool waiting_suspended;
@@ -114,7 +114,7 @@ index 633d729..75a3965 100644
  	dtape_condvar_t suspension_condvar;
  
 diff --git a/duct-tape/pthread/kern_synch.c b/duct-tape/pthread/kern_synch.c
-index aa2b6d3..ab7cdb7 100644
+index d90515a..71ba60d 100644
 --- a/duct-tape/pthread/kern_synch.c
 +++ b/duct-tape/pthread/kern_synch.c
 @@ -42,6 +42,7 @@
@@ -125,7 +125,7 @@ index aa2b6d3..ab7cdb7 100644
  //#include <sys/proc_internal.h>
  #include <sys/kauth.h>
  #include <sys/systm.h>
-@@ -1236,8 +1237,22 @@ _psynch_cvwait(__unused proc_t p, user_addr_t cv, uint64_t cvlsgen,
+@@ -1247,8 +1248,22 @@ _psynch_cvwait(__unused proc_t p, user_addr_t cv, uint64_t cvlsgen,
  			struct timespec ts;
  			ts.tv_sec = (__darwin_time_t)sec;
  			ts.tv_nsec = (nsec & 0x3fffffff);
@@ -311,7 +311,7 @@ index 0000000..1741d59
 +	free(fp);
 +}
 diff --git a/duct-tape/src/host.c b/duct-tape/src/host.c
-index a841dfd..9fe8bb4 100644
+index 5a45a15..f7f6e3b 100644
 --- a/duct-tape/src/host.c
 +++ b/duct-tape/src/host.c
 @@ -28,6 +28,64 @@ long sysconf(int name);
@@ -379,7 +379,7 @@ index a841dfd..9fe8bb4 100644
  static void cache_sysinfo(void* context) {
  	struct sysinfo* cached_sysinfo = context;
  
-@@ -73,11 +131,16 @@ kern_return_t host_info(host_t host, host_flavor_t flavor, host_info_t info, mac
+@@ -76,11 +134,16 @@ kern_return_t host_info(host_t host, host_flavor_t flavor, host_info_t info, mac
  
  			// if there's room for the modern structure, fill in some additional info
  			if (*count >= HOST_BASIC_INFO_COUNT) {
@@ -445,7 +445,7 @@ index 458e659..2e33f20 100644
  			// wait until it's read
  			if (!dtape_semaphore_down_simple(kqchan->waiter_read_semaphore)) {
 diff --git a/duct-tape/src/memory.c b/duct-tape/src/memory.c
-index 3114947..e2a8d5e 100644
+index d630a6e..9391340 100644
 --- a/duct-tape/src/memory.c
 +++ b/duct-tape/src/memory.c
 @@ -11,6 +11,7 @@
@@ -456,7 +456,7 @@ index 3114947..e2a8d5e 100644
  #include <mach_debug/mach_debug.h>
  
  struct zone {
-@@ -341,7 +342,14 @@ kern_return_t copyoutmap(vm_map_t map, void* fromdata, vm_map_address_t toaddr,
+@@ -365,7 +366,14 @@ kern_return_t copyoutmap(vm_map_t map, void* fromdata, vm_map_address_t toaddr,
  		memmove((void*)toaddr, fromdata, length);
  		return KERN_SUCCESS;
  	} else {
@@ -472,7 +472,7 @@ index 3114947..e2a8d5e 100644
  	}
  };
  
-@@ -526,20 +534,212 @@ kern_return_t mach_vm_allocate_kernel(vm_map_t map, mach_vm_offset_t* addr, mach
+@@ -554,20 +562,212 @@ kern_return_t mach_vm_allocate_kernel(vm_map_t map, mach_vm_offset_t* addr, mach
  	}
  };
  
@@ -689,7 +689,7 @@ index 3114947..e2a8d5e 100644
  };
  
  kern_return_t mach_memory_info(host_priv_t host, mach_zone_name_array_t* namesp, mach_msg_type_number_t* namesCntp, mach_zone_info_array_t* infop, mach_msg_type_number_t* infoCntp, mach_memory_info_array_t* memoryInfop, mach_msg_type_number_t* memoryInfoCntp) {
-@@ -591,8 +791,115 @@ kern_return_t mach_vm_machine_attribute(vm_map_t map, mach_vm_address_t addr, ma
+@@ -619,8 +819,115 @@ kern_return_t mach_vm_machine_attribute(vm_map_t map, mach_vm_address_t addr, ma
  };
  
  kern_return_t mach_vm_map_external(vm_map_t target_map, mach_vm_offset_t* address, mach_vm_size_t initial_size, mach_vm_offset_t mask, int flags, ipc_port_t port, vm_object_offset_t offset, boolean_t copy, vm_prot_t cur_protection, vm_prot_t max_protection, vm_inherit_t inheritance) {
@@ -807,7 +807,7 @@ index 3114947..e2a8d5e 100644
  };
  
  kern_return_t mach_vm_msync(vm_map_t map, mach_vm_offset_t address, mach_vm_size_t size, vm_sync_t sync_flags) {
-@@ -620,15 +927,22 @@ kern_return_t mach_vm_msync(vm_map_t map, mach_vm_offset_t address, mach_vm_size
+@@ -648,15 +955,22 @@ kern_return_t mach_vm_msync(vm_map_t map, mach_vm_offset_t address, mach_vm_size
  };
  
  kern_return_t mach_vm_page_info(vm_map_t map, mach_vm_address_t address, vm_page_info_flavor_t flavor, vm_page_info_t info, mach_msg_type_number_t* count) {
@@ -833,7 +833,7 @@ index 3114947..e2a8d5e 100644
  };
  
  kern_return_t mach_vm_protect(vm_map_t map, mach_vm_offset_t start, mach_vm_size_t size, boolean_t set_maximum, vm_prot_t new_protection) {
-@@ -756,7 +1070,8 @@ region_info_out:
+@@ -784,7 +1098,8 @@ region_info_out:
  			return kr;
  		};
  		default:
@@ -843,7 +843,7 @@ index 3114947..e2a8d5e 100644
  	}
  };
  
-@@ -856,7 +1171,7 @@ static kern_return_t mach_vm_remap_external_shared(vm_map_t target_map, mach_vm_
+@@ -884,7 +1199,7 @@ static kern_return_t mach_vm_remap_external_shared(vm_map_t target_map, mach_vm_
  
  	src_existing_entry_count = dtape_map_find_shared_entries_locked(src_map, start_memaddr, map_size, src_existing_entries, sizeof(src_existing_entries) / sizeof(*src_existing_entries));
  
@@ -852,7 +852,7 @@ index 3114947..e2a8d5e 100644
  		// special case for what LLDB does with dyld info
  		dtape_map_shared_descriptor_retain(src_existing_entries[0]->descriptor);
  		descriptor = src_existing_entries[0]->descriptor;
-@@ -1441,6 +1756,10 @@ mach_destroy_memory_entry(
+@@ -1469,6 +1784,10 @@ mach_destroy_memory_entry(
  	named_entry->ref_count -= 1;
  
  	if (named_entry->ref_count == 0) {
@@ -863,7 +863,7 @@ index 3114947..e2a8d5e 100644
  		if (named_entry->is_sub_map) {
  			vm_map_deallocate(named_entry->backing.map);
  		} else if (named_entry->is_copy) {
-@@ -1456,6 +1775,9 @@ mach_destroy_memory_entry(
+@@ -1484,6 +1803,9 @@ mach_destroy_memory_entry(
  
  		named_entry_unlock(named_entry);
  		named_entry_lock_destroy(named_entry);
@@ -874,10 +874,10 @@ index 3114947..e2a8d5e 100644
  #if VM_NAMED_ENTRY_LIST
  		lck_mtx_lock_spin(&vm_named_entry_list_lock_data);
 diff --git a/duct-tape/src/misc.c b/duct-tape/src/misc.c
-index afe60fc..02968b2 100644
+index 34f148e..2571386 100644
 --- a/duct-tape/src/misc.c
 +++ b/duct-tape/src/misc.c
-@@ -48,6 +48,9 @@ ssize_t getrandom(void* buf, size_t buflen, unsigned int flags);
+@@ -87,6 +87,9 @@ ssize_t getrandom(void* buf, size_t buflen, unsigned int flags);
  
  
  void dtape_logv(dtape_log_level_t level, const char* format, va_list args) {
@@ -887,7 +887,7 @@ index afe60fc..02968b2 100644
  	char message[4096];
  	vsnprintf(message, sizeof(message), format, args);
  	dtape_hooks->log(level, message);
-@@ -87,10 +90,28 @@ int scnprintf(char* buffer, size_t buffer_size, const char* format, ...) {
+@@ -126,10 +129,28 @@ int scnprintf(char* buffer, size_t buffer_size, const char* format, ...) {
  void (ipc_kmsg_trace_send)(ipc_kmsg_t kmsg, mach_msg_option_t option) {
  	pid_t dest_pid = -1;
  	ipc_port_t dest = kmsg->ikm_header->msgh_remote_port;
@@ -918,7 +918,7 @@ index afe60fc..02968b2 100644
  
  void Assert(const char* file, int line, const char* expression) {
 diff --git a/duct-tape/src/stubs.c b/duct-tape/src/stubs.c
-index dc1cfa5..39a8c8d 100644
+index 3f81a24..0e9d9a6 100644
 --- a/duct-tape/src/stubs.c
 +++ b/duct-tape/src/stubs.c
 @@ -37,9 +37,18 @@ extern char* getenv(const char* name);
@@ -968,21 +968,10 @@ index dc1cfa5..39a8c8d 100644
  
  bool work_interval_port_type_render_server(mach_port_name_t port_name) {
 diff --git a/duct-tape/src/task.c b/duct-tape/src/task.c
-index a9eb4bc..7ef2800 100644
+index 12b50c9..79a14bd 100644
 --- a/duct-tape/src/task.c
 +++ b/duct-tape/src/task.c
-@@ -521,7 +521,9 @@ kern_return_t task_info(task_t xtask, task_flavor_t flavor, task_info_t task_inf
- 		};
- 
- 		default:
--			dtape_stub_unsafe("unimplemented flavor");
-+			/* Unsupported task-info flavors are guest API errors, not fatal
-+			 * host errors. Chromium probes optional power/accounting data. */
-+			return KERN_INVALID_ARGUMENT;
- 	}
- };
- 
-@@ -585,7 +587,7 @@ kern_return_t task_restartable_ranges_synchronize(task_t task) {
+@@ -617,7 +617,7 @@ kern_return_t task_restartable_ranges_synchronize(task_t task) {
  };
  
  kern_return_t task_set_exc_guard_behavior(task_t task, task_exc_guard_behavior_t behavior) {
@@ -991,7 +980,7 @@ index a9eb4bc..7ef2800 100644
  };
  
  kern_return_t task_set_info(task_t task, task_flavor_t flavor, task_info_t task_info_in, mach_msg_type_number_t task_info_count) {
-@@ -593,7 +595,8 @@ kern_return_t task_set_info(task_t task, task_flavor_t flavor, task_info_t task_
+@@ -625,7 +625,8 @@ kern_return_t task_set_info(task_t task, task_flavor_t flavor, task_info_t task_
  };
  
  kern_return_t task_set_phys_footprint_limit(task_t task, int new_limit_mb, int* old_limit_mb) {
@@ -1002,10 +991,10 @@ index a9eb4bc..7ef2800 100644
  
  kern_return_t task_set_state(task_t task, int flavor, thread_state_t state, mach_msg_type_number_t state_count) {
 diff --git a/duct-tape/src/thread.c b/duct-tape/src/thread.c
-index f4ce909..a6cdb2c 100644
+index d6e2978..e643a32 100644
 --- a/duct-tape/src/thread.c
 +++ b/duct-tape/src/thread.c
-@@ -53,6 +53,7 @@ dtape_thread_t* dtape_thread_create(dtape_task_t* task, uint64_t nsid, void* con
+@@ -68,6 +68,7 @@ dtape_thread_t* dtape_thread_create(dtape_task_t* task, uint64_t nsid, void* con
  	thread->processing_signal = false;
  	thread->name = NULL;
  	thread->waiting_suspended = false;
@@ -1013,7 +1002,7 @@ index f4ce909..a6cdb2c 100644
  	LIST_INIT(&thread->user_states);
  	dtape_mutex_init(&thread->suspension_mutex);
  	dtape_condvar_init(&thread->suspension_condvar);
-@@ -521,11 +522,16 @@ wait_result_t thread_block_parameter(thread_continue_t continuation, void* param
+@@ -591,11 +592,16 @@ wait_result_t thread_block_parameter(thread_continue_t continuation, void* param
  	thread->xnu_thread.parameter = parameter;
  
  	bool waiting = thread->xnu_thread.state & TH_WAIT;
@@ -1031,20 +1020,22 @@ index f4ce909..a6cdb2c 100644
  	}
  
  	thread_lock(&thread->xnu_thread);
-@@ -548,8 +554,20 @@ wait_result_t thread_block(thread_continue_t continuation) {
+@@ -618,16 +624,20 @@ wait_result_t thread_block(thread_continue_t continuation) {
  // thread locked
  boolean_t thread_unblock(thread_t xthread, wait_result_t wresult) {
  	dtape_thread_t* thread = dtape_thread_for_xnu_thread(xthread);
 +	libsimple_lock_lock(&thread->block_suspend_gate);
  	thread->xnu_thread.wait_result = wresult;
+-	// Match XNU's wait-timer cancellation. A callback already dequeued still
+-	// owns its active count, but must not time out a subsequent unrelated wait.
 +	/* Match XNU's thread_unblock: a timer from a previous timed wait must
 +	 * not expire during the thread's next, untimed Mach receive. */
-+	if (thread->xnu_thread.wait_timer_is_set) {
-+		if (timer_call_cancel(&thread->xnu_thread.wait_timer)) {
-+			thread->xnu_thread.wait_timer_active--;
-+		}
-+		thread->xnu_thread.wait_timer_is_set = FALSE;
-+	}
+ 	if (thread->xnu_thread.wait_timer_is_set) {
+ 		if (timer_call_cancel(&thread->xnu_thread.wait_timer)) {
+ 			thread->xnu_thread.wait_timer_active--;
+ 		}
+ 		thread->xnu_thread.wait_timer_is_set = FALSE;
+ 	}
 +	thread->xnu_thread.state &= ~(TH_WAIT | TH_UNINT);
 +	thread->xnu_thread.state |= TH_RUN;
  	dtape_hooks->thread_resume(thread->context);
@@ -1052,7 +1043,7 @@ index f4ce909..a6cdb2c 100644
  	return TRUE;
  };
  
-@@ -782,7 +800,7 @@ thread_set_state(
+@@ -861,7 +871,7 @@ thread_set_state(
  				s64.dr6 = s->dr6;
  				s64.dr7 = s->dr7;
  
@@ -1061,7 +1052,7 @@ index f4ce909..a6cdb2c 100644
  						x86_DEBUG_STATE64_COUNT);
  			}
  			case x86_DEBUG_STATE64:
-@@ -1293,7 +1311,7 @@ kern_return_t thread_info(thread_t xthread, thread_flavor_t flavor, thread_info_
+@@ -1473,7 +1483,7 @@ kern_return_t thread_info(thread_t xthread, thread_flavor_t flavor, thread_info_
  		};
  
  		default:
@@ -1070,7 +1061,7 @@ index f4ce909..a6cdb2c 100644
  	}
  };
  
-@@ -1324,11 +1342,11 @@ kern_return_t thread_wire(host_priv_t host_priv, thread_t thread, boolean_t wire
+@@ -1559,11 +1569,11 @@ kern_return_t thread_wire(host_priv_t host_priv, thread_t thread, boolean_t wire
  };
  
  kern_return_t thread_getstatus_to_user(thread_t thread, int flavor, thread_state_t tstate, mach_msg_type_number_t* count) {
@@ -1085,11 +1076,11 @@ index f4ce909..a6cdb2c 100644
  
  boolean_t thread_should_abort(thread_t thread) {
 diff --git a/duct-tape/src/timer.c b/duct-tape/src/timer.c
-index bbaab01..4f01234 100644
+index caa6778..7ed0825 100644
 --- a/duct-tape/src/timer.c
 +++ b/duct-tape/src/timer.c
-@@ -53,8 +53,9 @@ uint64_t _rtc_nanotime_read(pal_rtc_nanotime_t* rntp) {
- };
+@@ -58,8 +58,9 @@ uint64_t _rtc_nanotime_read(pal_rtc_nanotime_t* rntp) {
+ #endif
  
  void dtape_timer_fired(void) {
 -	uint64_t next_deadline = timer_queue_expire(&timer_queue, mach_absolute_time());
@@ -1100,7 +1091,7 @@ index bbaab01..4f01234 100644
  };
  
  void timer_call_nosync_cpu(int cpu, void (*fn)(void* arg), void* arg) {
-@@ -62,7 +63,8 @@ void timer_call_nosync_cpu(int cpu, void (*fn)(void* arg), void* arg) {
+@@ -67,7 +68,8 @@ void timer_call_nosync_cpu(int cpu, void (*fn)(void* arg), void* arg) {
  };
  
  mpqueue_head_t* timer_queue_assign(uint64_t deadline) {
@@ -1327,7 +1318,7 @@ index deaa574..3adbde2 100644
  }
  
 diff --git a/duct-tape/xnu/osfmk/kern/ipc_kobject.c b/duct-tape/xnu/osfmk/kern/ipc_kobject.c
-index 408cb36..bbddfca 100644
+index d0309d2..3339d6a 100644
 --- a/duct-tape/xnu/osfmk/kern/ipc_kobject.c
 +++ b/duct-tape/xnu/osfmk/kern/ipc_kobject.c
 @@ -148,6 +148,8 @@
@@ -1366,10 +1357,10 @@ index 6e7638f..76f680e 100644
  	} else {
  		ip_unlock(port);
 diff --git a/duct-tape/xnu/osfmk/kern/timer_call.c b/duct-tape/xnu/osfmk/kern/timer_call.c
-index 4983e26..fd37050 100644
+index a797caf..29e75e5 100644
 --- a/duct-tape/xnu/osfmk/kern/timer_call.c
 +++ b/duct-tape/xnu/osfmk/kern/timer_call.c
-@@ -385,6 +385,13 @@ timer_call_entry_enqueue_deadline(
+@@ -390,6 +390,13 @@ timer_call_entry_enqueue_deadline(
  	}
  	new_mpqueue->count++;
  
@@ -1383,7 +1374,7 @@ index 4983e26..fd37050 100644
  	return old_mpqueue;
  }
  
-@@ -1003,6 +1010,9 @@ timer_queue_expire_with_options(
+@@ -1024,6 +1031,9 @@ timer_queue_expire_with_options(
  		queue->earliest_soft_deadline = cur_deadline = UINT64_MAX;
  	}
  
@@ -1394,7 +1385,7 @@ index 4983e26..fd37050 100644
  
  	return cur_deadline;
 diff --git a/duct-tape/xnu/osfmk/vm/vm_map.h b/duct-tape/xnu/osfmk/vm/vm_map.h
-index 15fa8c8..4321a91 100644
+index 2ba1dcb..e276ca0 100644
 --- a/duct-tape/xnu/osfmk/vm/vm_map.h
 +++ b/duct-tape/xnu/osfmk/vm/vm_map.h
 @@ -205,6 +205,12 @@ struct vm_named_entry {
@@ -1540,7 +1531,7 @@ index b960f17..5f0e621 100644
  		int _timerFD;
  		uint64_t _currentTimerDeadline = 0;
 diff --git a/scripts/generate-rpc-wrappers.py b/scripts/generate-rpc-wrappers.py
-index e35221c..1068426 100755
+index 7399199..f9da706 100755
 --- a/scripts/generate-rpc-wrappers.py
 +++ b/scripts/generate-rpc-wrappers.py
 @@ -268,6 +268,22 @@ calls = [
@@ -1567,7 +1558,7 @@ index e35221c..1068426 100755
  	# pthread cancelation
  	#
 diff --git a/src/call.cpp b/src/call.cpp
-index cc10f1d..7df0056 100644
+index 6e3bf32..fb2cef6 100644
 --- a/src/call.cpp
 +++ b/src/call.cpp
 @@ -18,9 +18,20 @@
@@ -1715,7 +1706,7 @@ index cc10f1d..7df0056 100644
  
  	if (header->number == dserver_callnum_s2c) {
  		// this is an S2C reply
-@@ -694,6 +799,60 @@ void DarlingServer::Call::KqchanProcOpen::processCall() {
+@@ -705,6 +810,60 @@ void DarlingServer::Call::KqchanProcOpen::processCall() {
  	_sendReply(code, socket);
  };
  
@@ -1776,7 +1767,7 @@ index cc10f1d..7df0056 100644
  void DarlingServer::Call::ForkWaitForChild::processCall() {
  	int code = 0;
  
-@@ -714,6 +873,24 @@ void DarlingServer::Call::Sigprocess::processCall() {
+@@ -725,6 +884,24 @@ void DarlingServer::Call::Sigprocess::processCall() {
  	int code = 0;
  	int newBSDSignal = 0;
  
@@ -1802,10 +1793,10 @@ index cc10f1d..7df0056 100644
  		try {
  			thread->processSignal(_body.bsd_signal_number, _body.linux_signal_number, _body.code, _body.signal_address, _body.thread_state, _body.float_state);
 diff --git a/src/darlingserver.cpp b/src/darlingserver.cpp
-index f79f057..2bf9cfb 100644
+index 6bd6511..6c08e8a 100644
 --- a/src/darlingserver.cpp
 +++ b/src/darlingserver.cpp
-@@ -497,6 +497,45 @@ static void handle_sigusr1(int signum) {
+@@ -1067,6 +1067,45 @@ static void handle_sigusr1(int signum) {
  };
  #endif
  
@@ -1851,7 +1842,7 @@ index f79f057..2bf9cfb 100644
  int main(int argc, char** argv) {
  	const char* prefix = NULL;
  	uid_t originalUID = -1;
-@@ -515,6 +554,30 @@ int main(int argc, char** argv) {
+@@ -1083,6 +1122,30 @@ int main(int argc, char** argv) {
  	char putOld[4096];
  	char *p;
  
@@ -1882,7 +1873,7 @@ index f79f057..2bf9cfb 100644
  	if (argc < 6) {
  		fprintf(stderr, "darlingserver is not meant to be started manually\n");
  		exit(1);
-@@ -745,6 +808,13 @@ int main(int argc, char** argv) {
+@@ -1370,6 +1433,13 @@ int main(int argc, char** argv) {
  #endif
  
  	// create the server
@@ -2087,7 +2078,7 @@ index 7b8000f..dbaf832 100644
  	}
  
 diff --git a/src/message.cpp b/src/message.cpp
-index 414c1d6..a7f5a94 100644
+index b6b3d37..1cb8df1 100644
 --- a/src/message.cpp
 +++ b/src/message.cpp
 @@ -24,6 +24,25 @@
@@ -2321,7 +2312,7 @@ index 414c1d6..a7f5a94 100644
 +	}
 +};
 diff --git a/src/process.cpp b/src/process.cpp
-index 9cd7b81..180f372 100644
+index 9cd7b81..4faec1d 100644
 --- a/src/process.cpp
 +++ b/src/process.cpp
 @@ -25,9 +25,15 @@

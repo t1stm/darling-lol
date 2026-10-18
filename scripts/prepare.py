@@ -40,7 +40,7 @@ if not (source/'.git').exists():
         print('Initializing Darling submodules (large repositories/LFS assets may take a while)...',flush=True)
         for attempt in range(1,4):
             try:
-                run(['git','-C',str(checkout),'-c','lfs.url=https://github.com/darlinghq/darling-swift.git/info/lfs',
+                run(['git','-C',str(checkout),'-c','lfs.url=https://github.com/VibeDarling/darling-swift.git/info/lfs',
                      'submodule','update','--init','--recursive','--depth','1','--progress'])
                 break
             except subprocess.CalledProcessError:
