@@ -7238,6 +7238,177 @@ index 9e363904e..774557a64 100644
 +const CFStringRef kVTCompressionPropertyKey_TransferFunction = CFSTR("TransferFunction");
 +const CFStringRef kVTCompressionPropertyKey_YCbCrMatrix = CFSTR("YCbCrMatrix");
 +const CFStringRef kVTVideoEncoderSpecification_EnableLowLatencyRateControl = CFSTR("EnableLowLatencyRateControl");
+diff --git a/src/frameworks/VideoToolbox/include/VideoToolbox/VideoToolbox.h b/src/frameworks/VideoToolbox/include/VideoToolbox/VideoToolbox.h
+index bfc91f63a..57b322fa1 100644
+--- a/src/frameworks/VideoToolbox/include/VideoToolbox/VideoToolbox.h
++++ b/src/frameworks/VideoToolbox/include/VideoToolbox/VideoToolbox.h
+@@ -75,23 +75,23 @@ void* VTDecoderSessionGetDestinationPixelBufferAttributes(void);
+ void* VTDecoderSessionGetPixelBufferPool(void);
+ void* VTDecoderSessionSetPixelBufferAttributes(void);
+ void* VTDecoderSessionTrace(void);
+-void* VTDecompressionSessionCanAcceptFormatDescription(void);
++int VTDecompressionSessionCanAcceptFormatDescription(void* session, void* formatDescription);
+ void* VTDecompressionSessionCopyBlackPixelBuffer(void);
+ void* VTDecompressionSessionCopyProperty(void);
+ void* VTDecompressionSessionCopySerializableProperties(void);
+ void* VTDecompressionSessionCopySupportedPropertyDictionary(void);
+-void* VTDecompressionSessionCreate(void);
+-void* VTDecompressionSessionCreateWithOptions(void);
+-void* VTDecompressionSessionDecodeFrame(void);
+-void* VTDecompressionSessionDecodeFrameWithOutputHandler(void);
+-void* VTDecompressionSessionFinishDelayedFrames(void);
++int VTDecompressionSessionCreate(void* allocator, void* videoFormatDescription, void* videoDecoderSpecification, void* destinationImageBufferAttributes, const void* outputCallback, void** decompressionSessionOut);
++int VTDecompressionSessionCreateWithOptions(void* allocator, void* videoFormatDescription, void* videoDecoderSpecification, void* destinationImageBufferAttributes, void* options, const void* outputCallback, void** decompressionSessionOut);
++int VTDecompressionSessionDecodeFrame(void* session, void* sampleBuffer, unsigned int decodeFlags, void* sourceFrameRefCon, void* infoFlagsOut);
++int VTDecompressionSessionDecodeFrameWithOutputHandler(void* session, void* sampleBuffer, unsigned int decodeFlags, void* infoFlagsOut, void* outputHandler);
++int VTDecompressionSessionFinishDelayedFrames(void* session);
+ void* VTDecompressionSessionGetMinAndMaxOutputPresentationTimeStampOfFramesBeingDecoded(void);
+ void* VTDecompressionSessionGetMinOutputPresentationTimeStampOfFramesBeingDecoded(void);
+ void* VTDecompressionSessionGetTypeID(void);
+-void* VTDecompressionSessionInvalidate(void);
++void VTDecompressionSessionInvalidate(void* session);
+ void* VTDecompressionSessionSetProperties(void);
+ void* VTDecompressionSessionSetProperty(void);
+-void* VTDecompressionSessionWaitForAsynchronousFrames(void);
++int VTDecompressionSessionWaitForAsynchronousFrames(void* session);
+ void* VTDistributedCompressionGetSegmentRanges(void);
+ void* VTDistributedCompressionGetSegmentsToReencode(void);
+ void* VTDistributedPreprocessingGetOverlap(void);
+@@ -119,7 +119,7 @@ void* VTFrameSiloGetProgressOfCurrentPass(void);
+ void* VTFrameSiloGetTypeID(void);
+ void* VTFrameSiloInvalidate(void);
+ void* VTFrameSiloSetTimeRangesForNextPass(void);
+-void* VTGetGVADecoderAvailability(void);
++int VTGetGVADecoderAvailability(unsigned int* totalInstanceCountOut, unsigned int* freeInstanceCountOut);
+ void* VTGetHEVCCapabilitesForFormatDescription(void);
+ void* VTImageRotationSessionCopyProperty(void);
+ void* VTImageRotationSessionCopySerializableProperties(void);
+@@ -133,7 +133,7 @@ void* VTImageRotationSessionSetProperties(void);
+ void* VTImageRotationSessionSetProperty(void);
+ void* VTImageRotationSessionTransferImage(void);
+ void* VTImageRotationSessionTransferSubImage(void);
+-void* VTIsHardwareDecodeSupported(void);
++int VTIsHardwareDecodeSupported(void* codecType);
+ void* VTIsMetalDeviceExternal(void);
+ void* VTIsMetalDeviceSlotted(void);
+ void* VTMakeMovedRectWithDictionaryRepresentation(void);
+diff --git a/src/frameworks/VideoToolbox/src/VideoToolbox.m b/src/frameworks/VideoToolbox/src/VideoToolbox.m
+index 70570c907..5e5197e57 100644
+--- a/src/frameworks/VideoToolbox/src/VideoToolbox.m
++++ b/src/frameworks/VideoToolbox/src/VideoToolbox.m
+@@ -334,10 +334,10 @@ void* VTDecoderSessionTrace(void)
+     return NULL;
+ }
+ 
+-void* VTDecompressionSessionCanAcceptFormatDescription(void)
++int VTDecompressionSessionCanAcceptFormatDescription(void* session, void* formatDescription)
+ {
+     if (verbose) puts("STUB: VTDecompressionSessionCanAcceptFormatDescription called");
+-    return NULL;
++    return 0;
+ }
+ 
+ void* VTDecompressionSessionCopyBlackPixelBuffer(void)
+@@ -364,34 +364,36 @@ void* VTDecompressionSessionCopySupportedPropertyDictionary(void)
+     return NULL;
+ }
+ 
+-void* VTDecompressionSessionCreate(void)
++int VTDecompressionSessionCreate(void* allocator, void* videoFormatDescription, void* videoDecoderSpecification, void* destinationImageBufferAttributes, const void* outputCallback, void** decompressionSessionOut)
+ {
+     if (verbose) puts("STUB: VTDecompressionSessionCreate called");
+-    return NULL;
++    if (decompressionSessionOut) *decompressionSessionOut = NULL;
++    return -12906; // kVTVideoDecoderNotAvailableErr
+ }
+ 
+-void* VTDecompressionSessionCreateWithOptions(void)
++int VTDecompressionSessionCreateWithOptions(void* allocator, void* videoFormatDescription, void* videoDecoderSpecification, void* destinationImageBufferAttributes, void* options, const void* outputCallback, void** decompressionSessionOut)
+ {
+     if (verbose) puts("STUB: VTDecompressionSessionCreateWithOptions called");
+-    return NULL;
++    if (decompressionSessionOut) *decompressionSessionOut = NULL;
++    return -12906; // kVTVideoDecoderNotAvailableErr
+ }
+ 
+-void* VTDecompressionSessionDecodeFrame(void)
++int VTDecompressionSessionDecodeFrame(void* session, void* sampleBuffer, unsigned int decodeFlags, void* sourceFrameRefCon, void* infoFlagsOut)
+ {
+     if (verbose) puts("STUB: VTDecompressionSessionDecodeFrame called");
+-    return NULL;
++    return -12906; // kVTVideoDecoderNotAvailableErr
+ }
+ 
+-void* VTDecompressionSessionDecodeFrameWithOutputHandler(void)
++int VTDecompressionSessionDecodeFrameWithOutputHandler(void* session, void* sampleBuffer, unsigned int decodeFlags, void* infoFlagsOut, void* outputHandler)
+ {
+     if (verbose) puts("STUB: VTDecompressionSessionDecodeFrameWithOutputHandler called");
+-    return NULL;
++    return -12906; // kVTVideoDecoderNotAvailableErr
+ }
+ 
+-void* VTDecompressionSessionFinishDelayedFrames(void)
++int VTDecompressionSessionFinishDelayedFrames(void* session)
+ {
+     if (verbose) puts("STUB: VTDecompressionSessionFinishDelayedFrames called");
+-    return NULL;
++    return -12906; // kVTVideoDecoderNotAvailableErr
+ }
+ 
+ void* VTDecompressionSessionGetMinAndMaxOutputPresentationTimeStampOfFramesBeingDecoded(void)
+@@ -412,10 +414,9 @@ void* VTDecompressionSessionGetTypeID(void)
+     return NULL;
+ }
+ 
+-void* VTDecompressionSessionInvalidate(void)
++void VTDecompressionSessionInvalidate(void* session)
+ {
+     if (verbose) puts("STUB: VTDecompressionSessionInvalidate called");
+-    return NULL;
+ }
+ 
+ void* VTDecompressionSessionSetProperties(void)
+@@ -430,10 +431,10 @@ void* VTDecompressionSessionSetProperty(void)
+     return NULL;
+ }
+ 
+-void* VTDecompressionSessionWaitForAsynchronousFrames(void)
++int VTDecompressionSessionWaitForAsynchronousFrames(void* session)
+ {
+     if (verbose) puts("STUB: VTDecompressionSessionWaitForAsynchronousFrames called");
+-    return NULL;
++    return -12906; // kVTVideoDecoderNotAvailableErr
+ }
+ 
+ void* VTDistributedCompressionGetSegmentRanges(void)
+@@ -598,10 +599,12 @@ void* VTFrameSiloSetTimeRangesForNextPass(void)
+     return NULL;
+ }
+ 
+-void* VTGetGVADecoderAvailability(void)
++int VTGetGVADecoderAvailability(unsigned int* totalInstanceCountOut, unsigned int* freeInstanceCountOut)
+ {
+     if (verbose) puts("STUB: VTGetGVADecoderAvailability called");
+-    return NULL;
++    if (totalInstanceCountOut) *totalInstanceCountOut = 0;
++    if (freeInstanceCountOut) *freeInstanceCountOut = 0;
++    return -12906; // kVTVideoDecoderNotAvailableErr
+ }
+ 
+ void* VTGetHEVCCapabilitesForFormatDescription(void)
+@@ -682,10 +685,10 @@ void* VTImageRotationSessionTransferSubImage(void)
+     return NULL;
+ }
+ 
+-void* VTIsHardwareDecodeSupported(void)
++int VTIsHardwareDecodeSupported(void* codecType)
+ {
+     if (verbose) puts("STUB: VTIsHardwareDecodeSupported called");
+-    return NULL;
++    return 0; // false
+ }
+ 
+ void* VTIsMetalDeviceExternal(void)
 diff --git a/src/frameworks/Vision/include/Vision/VNDetectBarcodesRequest.h b/src/frameworks/Vision/include/Vision/VNDetectBarcodesRequest.h
 index 62d827aa2..15383581b 100644
 --- a/src/frameworks/Vision/include/Vision/VNDetectBarcodesRequest.h
