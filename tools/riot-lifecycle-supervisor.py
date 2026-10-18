@@ -23,6 +23,7 @@ def get_darling_pids():
     riot_ux = []
     league_client = []
     league_game = []
+    helpers = []
     uid = os.getuid()
 
     riot_app = str(PREFIX / "Applications" / "Riot Client.app")
@@ -42,11 +43,20 @@ def get_darling_pids():
             if b"RiotClientServices" in cmdline:
                 riot_services.append(pid)
             elif b"RiotClientUx" in cmdline:
-                riot_ux.append(pid)
+                if b"Helper" in cmdline or b"CrashHandler" in cmdline:
+                    helpers.append(pid)
+                else:
+                    riot_ux.append(pid)
             elif b"LeagueClient" in cmdline or b"LeagueClientUx" in cmdline:
-                league_client.append(pid)
+                if b"Helper" in cmdline or b"CrashHandler" in cmdline:
+                    helpers.append(pid)
+                else:
+                    league_client.append(pid)
             elif b"LeagueofLegends" in cmdline or b"League of Legends" in cmdline:
-                league_game.append(pid)
+                if b"CrashHandler" in cmdline:
+                    helpers.append(pid)
+                else:
+                    league_game.append(pid)
             else:
                 try:
                     maps = (entry / "maps").read_text()
@@ -68,12 +78,18 @@ def get_darling_pids():
         "riot_ux": riot_ux,
         "league_client": league_client,
         "league_game": league_game,
+        "helpers": helpers,
     }
 
 def perform_clean_shutdown(child_proc=None):
     print("[lifecycle] Performing clean shutdown of Riot Client services and Darling runtime...", flush=True)
 
     pids = get_darling_pids()
+    for pid in pids.get("helpers", []):
+        try:
+            os.kill(pid, signal.SIGTERM)
+        except OSError:
+            pass
     for pid in pids["riot_services"]:
         try:
             os.kill(pid, signal.SIGTERM)
@@ -150,9 +166,10 @@ def main():
         if league_client_alive or league_game_alive or in_transition:
             continue
 
-        # RULE 1: If League is not running and not in transition:
-        if riot_ux_ever_seen and not riot_ux_alive:
-            print("[lifecycle] RiotClientUx closed and League is not running. Initiating clean shutdown.", flush=True)
+        # RULE 1: If user closed all client and game windows (and not in transition):
+        all_clients_closed = (riot_ux_ever_seen or league_ever_seen) and not riot_ux_alive and not league_client_alive and not league_game_alive
+        if all_clients_closed:
+            print("[lifecycle] All client and match windows closed. Initiating clean shutdown.", flush=True)
             perform_clean_shutdown(child_proc)
             break
 
