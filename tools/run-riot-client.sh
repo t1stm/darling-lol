@@ -163,8 +163,8 @@ if [ -z "${DISPLAY:-}" ]; then
   DISPLAY="${DISPLAY:-:0}"
 fi
 
-# Saneamento de variáveis de ambiente: eliminar qualquer variável que exponha a
-# substring "DARLING" na tabela environ dos processos e em /proc/self/environ.
+# Environment variable sanitization: strip any variables exposing the
+# "DARLING" substring from process environ and /proc/self/environ.
 for var in $(env | awk -F= '$1 ~ /[Dd][Aa][Rr][Ll][Ii][Nn][Gg]/ {print $1}'); do
   unset "$var" 2>/dev/null || true
 done
