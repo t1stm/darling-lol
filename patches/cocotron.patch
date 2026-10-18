@@ -9827,7 +9827,7 @@ index dd6277bd..b74422ce 100644
  #import <fontconfig/fontconfig.h>
  
 diff --git a/QuartzCore/CALayer.m b/QuartzCore/CALayer.m
-index f31347a2..e2440850 100644
+index f31347a2..f3e4f65d 100644
 --- a/QuartzCore/CALayer.m
 +++ b/QuartzCore/CALayer.m
 @@ -1,14 +1,243 @@
@@ -10959,16 +10959,15 @@ index f31347a2..e2440850 100644
          [_delegate displayLayer: self];
 -        return;
 -    }
-+    else {
-+#if 0
- 
+-
 -    size_t width = (size_t) ceil(MAX(_bounds.size.width, 0));
 -    size_t height = (size_t) ceil(MAX(_bounds.size.height, 0));
 -    if (width == 0 || height == 0) {
 -        [self setContents: nil];
 -        return;
 -    }
-+#warning create bitmap context
++    else {
++#if 0
  
 -    CGColorSpaceRef colorSpace = CGColorSpaceCreateDeviceRGB();
 -    CGContextRef context = CGBitmapContextCreate(
@@ -10977,7 +10976,8 @@ index f31347a2..e2440850 100644
 -    CGColorSpaceRelease(colorSpace);
 -    if (context == NULL)
 -        return;
--
++#warning create bitmap context
+ 
 -    CGContextClearRect(context, CGRectMake(0, 0, width, height));
 -    // Layer coordinates: the bounds origin is the bitmap's bottom-left corner,
 -    // or its top-left corner when the layer's content is flipped.
@@ -11134,7 +11134,7 @@ index f31347a2..e2440850 100644
      CABasicAnimation *basic = [CABasicAnimation animationWithKeyPath: key];
  
      [basic setFromValue: [self valueForKey: key]];
-@@ -1081,22 +734,119 @@ static void replaceColor(CGColorRef *slot, CGColorRef value) {
+@@ -1081,22 +734,137 @@ static void replaceColor(CGColorRef *slot, CGColorRef value) {
      _textureId = value;
  }
  
@@ -11147,24 +11147,40 @@ index f31347a2..e2440850 100644
 -    value = [value retain];
 -    [_textureContents release];
 -    _textureContents = value;
--}
 +- (NSUInteger) autoresizingMask { return _autoresizingMask; }
 +- (void) setAutoresizingMask: (NSUInteger) v { _autoresizingMask = v; }
- 
--- (BOOL) _drawsOwnContent {
--    return NO;
--}
++
 +- (BOOL) masksToBounds { return _masksToBounds; }
 +- (void) setMasksToBounds: (BOOL) v { _masksToBounds = v; }
- 
--- (BOOL) _drawLayerContents: (CGRect) bounds opacity: (CGFloat) opacity {
--    return NO;
++
 +- (CGFloat) cornerRadius { return _cornerRadius; }
 +- (void) setCornerRadius: (CGFloat) v { _cornerRadius = v; }
 +
 +- (CGColorRef) backgroundColor { return _backgroundColor; }
-+- (void) setBackgroundColor: (CGColorRef) v { _backgroundColor = v; }
-+
++- (void) setBackgroundColor: (CGColorRef) v {
++    if (_backgroundColor != v) {
++        if (_backgroundColor) CGColorRelease(_backgroundColor);
++        _backgroundColor = v ? CGColorRetain(v) : NULL;
++        if (_context) [_context startTimerIfNeeded];
++    }
+ }
+ 
+-- (BOOL) _drawsOwnContent {
+-    return NO;
++- (void) dealloc {
++    if (_backgroundColor) CGColorRelease(_backgroundColor);
++    if (_textureId && _context) [_context deleteTextureId: _textureId];
++    [_textureId release];
++    [_contents release];
++    [_sublayers release];
++    [_animations release];
++    [_contentsGravity release];
++    [_shadowPath release];
++    [super dealloc];
+ }
+ 
+-- (BOOL) _drawLayerContents: (CGRect) bounds opacity: (CGFloat) opacity {
+-    return NO;
 +- (CGFloat) borderWidth { return _borderWidth; }
 +- (void) setBorderWidth: (CGFloat) v { _borderWidth = v; }
 +
@@ -11268,10 +11284,10 @@ index f31347a2..e2440850 100644
 +
  @end
 diff --git a/QuartzCore/CALayerContext.m b/QuartzCore/CALayerContext.m
-index af95399c..3a7f937b 100644
+index af95399c..cfd3023b 100644
 --- a/QuartzCore/CALayerContext.m
 +++ b/QuartzCore/CALayerContext.m
-@@ -1,72 +1,77 @@
+@@ -1,72 +1,140 @@
  #import <Foundation/NSString.h>
 +#import <Foundation/NSMutableArray.h>
  #import <QuartzCore/CALayer.h>
@@ -11301,7 +11317,70 @@ index af95399c..3a7f937b 100644
 +        if (hasMetalLayer(child))return YES;
 +    return NO;
 +}
++
++static BOOL hasOtherVisibleContent(CALayer *layer) {
++    if ([layer isHidden])
++        return NO;
++    if ([layer backgroundColor] != NULL)
++        return YES;
++    id contents = [layer contents];
++    if (contents != nil && CFGetTypeID((CFTypeRef)contents) != IOSurfaceGetTypeID())
++        return YES;
++    for (CALayer *child in layer.sublayers) {
++        if (hasOtherVisibleContent(child))
++            return YES;
++    }
++    return NO;
++}
  
++static void configureGPUFromMetalSelector(void) {
++    static BOOL configured = NO;
++    if (configured) return;
++    configured = YES;
++    char selector[256] = {0};
++    FILE *f = fopen("/tmp/metal-gpu", "r");
++    if (f) {
++        if (fgets(selector, sizeof(selector), f)) {
++            char *p = selector + strlen(selector);
++            while (p > selector && (p[-1] == '\n' || p[-1] == '\r' || p[-1] == ' ' || p[-1] == '\t'))
++                *(--p) = '\0';
++        }
++        fclose(f);
++    }
++    if (!selector[0]) {
++        const char *env = getenv("METAL_INDIUM_GPU");
++        if (env && env[0])
++            strncpy(selector, env, sizeof(selector) - 1);
++    }
++    BOOL hasNvidia = (access("/dev/nvidia0", F_OK) == 0 || access("/proc/driver/nvidia", F_OK) == 0);
++    if (selector[0]) {
++        if (strcasestr(selector, "nvidia") || strcasestr(selector, "discrete") || strcmp(selector, "1") == 0) {
++            setenv("__NV_PRIME_RENDER_OFFLOAD", "1", 1);
++            setenv("__GLX_VENDOR_LIBRARY_NAME", "nvidia", 1);
++            setenv("__VK_LAYER_NV_optimus", "NVIDIA_only", 1);
++            if (access("/usr/share/glvnd/egl_vendor.d/10_nvidia.json", F_OK) == 0)
++                setenv("__EGL_VENDOR_LIBRARY_FILENAMES", "/usr/share/glvnd/egl_vendor.d/10_nvidia.json", 0);
++            if (access("/usr/share/vulkan/icd.d/nvidia_icd.x86_64.json", F_OK) == 0)
++                setenv("VK_DRIVER_FILES", "/usr/share/vulkan/icd.d/nvidia_icd.x86_64.json", 0);
++        } else if (strcasestr(selector, "intel") || strcasestr(selector, "integrated") || strcasestr(selector, "mesa") || strcasestr(selector, "llvmpipe") || strcmp(selector, "0") == 0) {
++            unsetenv("__NV_PRIME_RENDER_OFFLOAD");
++            unsetenv("__GLX_VENDOR_LIBRARY_NAME");
++            unsetenv("__VK_LAYER_NV_optimus");
++            unsetenv("__EGL_VENDOR_LIBRARY_FILENAMES");
++            if (access("/usr/share/vulkan/icd.d/intel_icd.x86_64.json", F_OK) == 0)
++                setenv("VK_DRIVER_FILES", "/usr/share/vulkan/icd.d/intel_icd.x86_64.json", 0);
++        } else if (strcasestr(selector, "amd") || strcasestr(selector, "radeon") || strcasestr(selector, "radv")) {
++            setenv("DRI_PRIME", "1", 1);
++        }
++    } else if (hasNvidia && getenv("__NV_PRIME_RENDER_OFFLOAD") == NULL) {
++        setenv("__NV_PRIME_RENDER_OFFLOAD", "1", 1);
++        setenv("__GLX_VENDOR_LIBRARY_NAME", "nvidia", 1);
++        setenv("__VK_LAYER_NV_optimus", "NVIDIA_only", 1);
++        if (access("/usr/share/glvnd/egl_vendor.d/10_nvidia.json", F_OK) == 0)
++            setenv("__EGL_VENDOR_LIBRARY_FILENAMES", "/usr/share/glvnd/egl_vendor.d/10_nvidia.json", 0);
++    }
++}
++
 +/* The X11 transport presents Chromium's flattened full-window surface.
 + * Avoid uploading and compositing that same window again into a covered GL
 + * child. Restrict this to the explicitly configured native presentation path. */
@@ -11323,7 +11402,7 @@ index af95399c..3a7f937b 100644
 + * Metal trees must always prepare their drawables, including mixed trees. */
 +static BOOL skipLocalRender(CALayer *layer, CGSize size) {
 +    return layer && getenv("DARLING_CA_SKIP_LOCAL_IOSURFACE_RENDER") &&
-+           !hasMetalLayer(layer) &&
++           !hasMetalLayer(layer) && !hasOtherVisibleContent(layer) &&
 +           (!getenv("RCLOL_GPU_DIRECT_PRESENT") || hasFullWindowSurface(layer, size));
 +}
  @implementation CALayerContext
@@ -11390,7 +11469,7 @@ index af95399c..3a7f937b 100644
      [super dealloc];
  }
  
-@@ -76,24 +81,22 @@
+@@ -76,24 +144,22 @@
  }
  
  - (void) setLayer: (CALayer *) layer {
@@ -11424,7 +11503,7 @@ index af95399c..3a7f937b 100644
  }
  
  - (void) setSubwindow: (CGSubWindow*) subwindow
-@@ -101,29 +104,54 @@
+@@ -101,29 +167,55 @@
      CGSubWindow* oldSubwindow = _subwindow;
  
      if (_cglWindow) {
@@ -11441,6 +11520,7 @@ index af95399c..3a7f937b 100644
 +    _cglWindow = NULL;
 +    if (_subwindow != nil) {
 +        if (_glContext == NULL) {
++            configureGPUFromMetalSelector();
 +            CGLPixelFormatAttribute attributes[] = { 0 };
 +            GLint screens;
 +            CGLError error = CGLChoosePixelFormat(attributes, &_pixelFormat, &screens);
@@ -11486,7 +11566,7 @@ index af95399c..3a7f937b 100644
  }
  
  - (void) assignTextureIdsToLayerTree: (CALayer *) layer {
-@@ -139,69 +167,35 @@
+@@ -139,69 +231,35 @@
          [self assignTextureIdsToLayerTree: child];
  }
  
@@ -11576,7 +11656,7 @@ index af95399c..3a7f937b 100644
      glMatrixMode(GL_PROJECTION);
      glLoadIdentity();
      glOrtho(0, width, 0, height, -1, 1);
-@@ -217,77 +211,71 @@
+@@ -217,77 +275,71 @@
  
      [_deleteTextureIds removeAllObjects];
  
@@ -11696,7 +11776,7 @@ index af95399c..3a7f937b 100644
  }
  
  - (void) deleteTextureId: (NSNumber *) textureId {
-@@ -295,20 +283,9 @@ static BOOL layerTreeNeedsAnotherFrame(CALayer *layer) {
+@@ -295,20 +347,9 @@ static BOOL layerTreeNeedsAnotherFrame(CALayer *layer) {
  }
  
  - (void) flush {
@@ -13388,10 +13468,10 @@ index e7764d06..63533444 100644
  
  #else
 diff --git a/QuartzCore/CARenderer.m b/QuartzCore/CARenderer.m
-index 13ec7deb..b6916db3 100644
+index 13ec7deb..0bbc5a6c 100644
 --- a/QuartzCore/CARenderer.m
 +++ b/QuartzCore/CARenderer.m
-@@ -1,16 +1,12 @@
+@@ -1,16 +1,13 @@
  #import <CoreVideo/CoreVideo.h>
 -#import <Onyx2D/O2Color.h>
 +#import <IOSurface/IOSurface.h>
@@ -13401,6 +13481,7 @@ index 13ec7deb..b6916db3 100644
  #import <QuartzCore/CAMediaTimingFunction.h>
  #import <QuartzCore/CARenderer.h>
 -#import <QuartzCore/CASpringAnimation.h>
++#import <CoreGraphics/CGColor.h>
  #import "CALayerInternal.h"
 -
 -@interface CASpringAnimation (Private)
@@ -13410,7 +13491,7 @@ index 13ec7deb..b6916db3 100644
  
  NSString *const kCARendererColorSpace = @"kCARendererColorSpace";
  
-@@ -95,20 +91,8 @@ static CGFloat mediaTimingScale(CAAnimation *animation,
+@@ -95,20 +92,8 @@ static CGFloat mediaTimingScale(CAAnimation *animation,
  {
      CFTimeInterval begin = [animation beginTime];
      CFTimeInterval duration = [animation duration];
@@ -13432,7 +13513,7 @@ index 13ec7deb..b6916db3 100644
      CAMediaTimingFunction *function = [animation timingFunction];
  
      if (function == nil)
-@@ -238,40 +222,39 @@ static GLint interpolationFromName(NSString *name) {
+@@ -238,40 +223,39 @@ static GLint interpolationFromName(NSString *name) {
          return GL_LINEAR;
  }
  
@@ -13502,7 +13583,7 @@ index 13ec7deb..b6916db3 100644
          return;
      }
  
-@@ -318,152 +301,97 @@ void CATexImage2DCGImage(CGImageRef image) {
+@@ -318,152 +302,99 @@ void CATexImage2DCGImage(CGImageRef image) {
  
      glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, imageWidth, imageHeight, 0,
                   glFormat, glType, pixelBytes);
@@ -13685,8 +13766,9 @@ index 13ec7deb..b6916db3 100644
 -    CGImageRef image = (CGImageRef) layer.contents;
 -
 -    if (image == NULL)
--        return;
--
++    if ([layer isHidden])
+         return;
+ 
      NSNumber *textureId = [layer _textureId];
      GLuint texture = [textureId unsignedIntValue];
 +    GLboolean loadPixelData = GL_FALSE;
@@ -13696,13 +13778,13 @@ index 13ec7deb..b6916db3 100644
 -    // last upload (a layer-backed NSView sets a new image on every display).
 -    BOOL upload = texture == 0 || glIsTexture(texture) == GL_FALSE ||
 -                  [layer _textureContents] != layer.contents;
+-
+-    glEnable(GL_TEXTURE_2D);
+-    glEnableClientState(GL_TEXTURE_COORD_ARRAY);
 +    if (texture == 0)
 +        loadPixelData = GL_TRUE;
 +    else {
  
--    glEnable(GL_TEXTURE_2D);
--    glEnableClientState(GL_TEXTURE_COORD_ARRAY);
--
 -    if (texture != 0)
 +        if (glIsTexture(texture) == GL_FALSE) {
 +            loadPixelData = GL_TRUE;
@@ -13713,11 +13795,10 @@ index 13ec7deb..b6916db3 100644
 -    if (upload) {
 -        CATexImage2DCGImage(image);
 -        [layer _setTextureContents: layer.contents];
-+    if (loadPixelData) {
-+        id contents = (id) layer.contents;
++    id contents = (id) layer.contents;
 +
-+        if (contents != nil &&
-+            CFGetTypeID((CFTypeRef) contents) == IOSurfaceGetTypeID()) {
++    if (loadPixelData && contents != nil) {
++        if (CFGetTypeID((CFTypeRef) contents) == IOSurfaceGetTypeID()) {
 +            CATexImage2DIOSurface((IOSurfaceRef) contents);
 +        } else {
 +            CATexImage2DCGImage((CGImageRef) contents);
@@ -13725,7 +13806,7 @@ index 13ec7deb..b6916db3 100644
  
          GLint minFilter = interpolationFromName(layer.minificationFilter);
          GLint magFilter = interpolationFromName(layer.magnificationFilter);
-@@ -475,130 +403,76 @@ static void roundedRectOutline(CGRect r, CGFloat radius, GLfloat *xy) {
+@@ -475,130 +406,98 @@ static void roundedRectOutline(CGRect r, CGFloat radius, GLfloat *xy) {
          glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_REPEAT);
      }
  
@@ -13835,16 +13916,34 @@ index 13ec7deb..b6916db3 100644
 -parentOpacity: opacity
 -              parentFlipped: flipped];
 -    glPopMatrix();
-+    //  glTranslatef(width/2,height/2,0);
-+    glTexCoordPointer(2, GL_FLOAT, 0, textureVertices);
-+    glVertexPointer(3, GL_FLOAT, 0, vertices);
  
 -    glPopMatrix();
 -}
 +    glTranslatef(position.x - (bounds.size.width * anchorPoint.x),
 +                 position.y - (bounds.size.height * anchorPoint.y), 0);
-+    // glTranslatef(position.x,position.y,0);
-+    // glScalef(bounds.size.width,bounds.size.height,1);
++
++    // 1. Render backgroundColor if set
++    CGColorRef bgColor = [layer backgroundColor];
++    if (bgColor != NULL && bounds.size.width > 0 && bounds.size.height > 0) {
++        size_t numComps = CGColorGetNumberOfComponents(bgColor);
++        const CGFloat *comps = CGColorGetComponents(bgColor);
++        if (comps != NULL && numComps > 0) {
++            CGFloat r = comps[0];
++            CGFloat g = (numComps >= 3) ? comps[1] : comps[0];
++            CGFloat b = (numComps >= 3) ? comps[2] : comps[0];
++            CGFloat a = (numComps >= 4) ? comps[3] : ((numComps == 2) ? comps[1] : 1.0);
++            CGFloat totalAlpha = a * opacity;
++            if (totalAlpha > 0.001) {
++                glDisable(GL_TEXTURE_2D);
++                glDisableClientState(GL_TEXTURE_COORD_ARRAY);
++                glVertexPointer(3, GL_FLOAT, 0, vertices);
++                glColor4f(r * totalAlpha, g * totalAlpha, b * totalAlpha, totalAlpha);
++                glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
++                glEnableClientState(GL_TEXTURE_COORD_ARRAY);
++                glEnable(GL_TEXTURE_2D);
++            }
++        }
++    }
  
 -// Layers that draw their content (-drawInContext:, CATextLayer, CAShapeLayer,
 -// a drawing delegate) produce it when marked as needing display. This runs
@@ -13855,12 +13954,16 @@ index 13ec7deb..b6916db3 100644
 -static void displayLayerTreeIfNeeded(CALayer *layer) {
 -    if (layer.hidden)
 -        return;
-+    //  glRotatef(1,0,0,1);
-+    glColor4f(opacity, opacity, opacity, opacity);
++    // 2. Render layer contents texture if present
++    if (contents != nil && bounds.size.width > 0 && bounds.size.height > 0) {
++        glTexCoordPointer(2, GL_FLOAT, 0, textureVertices);
++        glVertexPointer(3, GL_FLOAT, 0, vertices);
++        glColor4f(opacity, opacity, opacity, opacity);
++        glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
++    }
  
 -    [layer displayIfNeeded];
-+    glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
-+
++    // 3. Render sublayers
 +    for (CALayer *child in layer.sublayers)
 +        [self _renderLayer: child z: z + 1 currentTime: currentTime];
  
@@ -13902,7 +14005,7 @@ index 13ec7deb..b6916db3 100644
  
      glEnable(GL_BLEND);
      glBlendFunc(GL_ONE, GL_ONE_MINUS_SRC_ALPHA);
-@@ -606,10 +480,7 @@ static void displayLayerTreeIfNeeded(CALayer *layer) {
+@@ -606,10 +505,7 @@ static void displayLayerTreeIfNeeded(CALayer *layer) {
      glAlphaFunc(GL_GREATER, 0);
      glEnable(GL_ALPHA_TEST);
  
