@@ -62,7 +62,7 @@
       "revision": "56e083d3dfd714a5949a21be064fd9c9244e28d7",
       "repository": "https://github.com/VibeDarling/darling-cocotron.git",
       "patch": "patches/cocotron.patch",
-      "modified_files": 104,
+      "modified_files": 107,
       "new_files": [
         "AppKit/NSGeometryTrace.h",
         "AppKit/X11.backend/X11RelativeMouse.h",
