@@ -11210,7 +11210,7 @@ index 757dd8c9..cbc313d5 100644
  	CFTimeInterval presentedTime() const;
  
 diff --git a/QuartzCore/CAMetalLayer.mm b/QuartzCore/CAMetalLayer.mm
-index b81e2e14..5df88e0e 100644
+index b81e2e14..87cc4b4b 100644
 --- a/QuartzCore/CAMetalLayer.mm
 +++ b/QuartzCore/CAMetalLayer.mm
 @@ -17,38 +17,333 @@
@@ -11562,7 +11562,7 @@ index b81e2e14..5df88e0e 100644
  + (instancetype)allocWithZone: (NSZone*)zone
  {
  	if (self == [CAMetalLayer class]) {
-@@ -205,63 +500,82 @@ static void reportGLErrors(void) {
+@@ -205,63 +500,89 @@ static void reportGLErrors(void) {
  
  @end
  
@@ -11596,15 +11596,18 @@ index b81e2e14..5df88e0e 100644
 -
  		_drawableCondition = [NSCondition new];
 +		_usableDrawablesBitmap = 0;
++		_frameInFlightIndex = 0;
 +		_vkSurface = VK_NULL_HANDLE;
 +		_vkSwapchain = VK_NULL_HANDLE;
 +		_vkNativeWindow = nullptr;
 +		_vkSubWindow = nullptr;
-+		_vkAcquireSemaphore = VK_NULL_HANDLE;
-+		_vkRenderCompleteSemaphore = VK_NULL_HANDLE;
-+		_vkPresentFence = VK_NULL_HANDLE;
++		for (size_t i = 0; i < NUM_FRAMES_IN_FLIGHT; ++i) {
++			_vkAcquireSemaphores[i] = VK_NULL_HANDLE;
++			_vkRenderCompleteSemaphores[i] = VK_NULL_HANDLE;
++			_vkInFlightFences[i] = VK_NULL_HANDLE;
++			_vkCmdBuffers[i] = VK_NULL_HANDLE;
++		}
 +		_vkCommandPool = VK_NULL_HANDLE;
-+		_vkCmdBuffer = VK_NULL_HANDLE;
  	}
  	return self;
  }
@@ -11617,23 +11620,27 @@ index b81e2e14..5df88e0e 100644
 +	if (_device) {
 +		auto dev = std::dynamic_pointer_cast<Indium::PrivateDevice>(((MTLDeviceInternal*)_device).device);
 +		if (dev) {
-+			if (_vkPresentFence != VK_NULL_HANDLE) {
-+				DynamicVK::vkWaitForFences(dev->device(), 1, &_vkPresentFence, VK_TRUE, 1000000000ULL);
-+				DynamicVK::vkDestroyFence(dev->device(), _vkPresentFence, nullptr);
-+				_vkPresentFence = VK_NULL_HANDLE;
-+			}
-+			if (_vkAcquireSemaphore != VK_NULL_HANDLE) {
-+				DynamicVK::vkDestroySemaphore(dev->device(), _vkAcquireSemaphore, nullptr);
-+				_vkAcquireSemaphore = VK_NULL_HANDLE;
-+			}
-+			if (_vkRenderCompleteSemaphore != VK_NULL_HANDLE) {
-+				DynamicVK::vkDestroySemaphore(dev->device(), _vkRenderCompleteSemaphore, nullptr);
-+				_vkRenderCompleteSemaphore = VK_NULL_HANDLE;
++			for (size_t i = 0; i < NUM_FRAMES_IN_FLIGHT; ++i) {
++				if (_vkInFlightFences[i] != VK_NULL_HANDLE) {
++					DynamicVK::vkWaitForFences(dev->device(), 1, &_vkInFlightFences[i], VK_TRUE, 1000000000ULL);
++					DynamicVK::vkDestroyFence(dev->device(), _vkInFlightFences[i], nullptr);
++					_vkInFlightFences[i] = VK_NULL_HANDLE;
++				}
++				if (_vkAcquireSemaphores[i] != VK_NULL_HANDLE) {
++					DynamicVK::vkDestroySemaphore(dev->device(), _vkAcquireSemaphores[i], nullptr);
++					_vkAcquireSemaphores[i] = VK_NULL_HANDLE;
++				}
++				if (_vkRenderCompleteSemaphores[i] != VK_NULL_HANDLE) {
++					DynamicVK::vkDestroySemaphore(dev->device(), _vkRenderCompleteSemaphores[i], nullptr);
++					_vkRenderCompleteSemaphores[i] = VK_NULL_HANDLE;
++				}
 +			}
 +			if (_vkCommandPool != VK_NULL_HANDLE) {
 +				DynamicVK::vkDestroyCommandPool(dev->device(), _vkCommandPool, nullptr);
 +				_vkCommandPool = VK_NULL_HANDLE;
-+				_vkCmdBuffer = VK_NULL_HANDLE;
++				for (size_t i = 0; i < NUM_FRAMES_IN_FLIGHT; ++i) {
++					_vkCmdBuffers[i] = VK_NULL_HANDLE;
++				}
 +			}
 +			if (_vkSwapchain != VK_NULL_HANDLE) {
 +				DynamicVK::vkDestroySwapchainKHR(dev->device(), _vkSwapchain, nullptr);
@@ -11677,7 +11684,7 @@ index b81e2e14..5df88e0e 100644
  }
  
  - (void)setDevice: (id<MTLDevice>)device
-@@ -290,7 +604,6 @@ static void reportGLErrors(void) {
+@@ -290,7 +611,6 @@ static void reportGLErrors(void) {
  
  - (CGColorSpaceRef)colorspace
  {
@@ -11685,7 +11692,7 @@ index b81e2e14..5df88e0e 100644
  	return _colorspace;
  }
  
-@@ -321,6 +634,7 @@ static void reportGLErrors(void) {
+@@ -321,6 +641,7 @@ static void reportGLErrors(void) {
  
  - (void)setDrawableSize: (CGSize)drawableSize
  {
@@ -11693,7 +11700,7 @@ index b81e2e14..5df88e0e 100644
  	_drawableSize = drawableSize;
  	[self recreateDrawables];
  }
-@@ -339,36 +653,45 @@ static void reportGLErrors(void) {
+@@ -339,36 +660,45 @@ static void reportGLErrors(void) {
  	[self recreateDrawables];
  }
  
@@ -11754,7 +11761,7 @@ index b81e2e14..5df88e0e 100644
  		if (_allowsNextDrawableTimeout) {
  			if (![_drawableCondition waitUntilDate: endTime]) {
  				break;
-@@ -378,8 +701,15 @@ static void reportGLErrors(void) {
+@@ -378,8 +708,15 @@ static void reportGLErrors(void) {
  		}
  	}
  
@@ -11771,7 +11778,7 @@ index b81e2e14..5df88e0e 100644
  		[_drawableCondition unlock];
  		return nil;
  	}
-@@ -394,12 +724,13 @@ static void reportGLErrors(void) {
+@@ -394,12 +731,13 @@ static void reportGLErrors(void) {
  	}
  
  	if (drawableID == UINT8_MAX) {
@@ -11786,7 +11793,7 @@ index b81e2e14..5df88e0e 100644
  
  	drawable = _drawables[drawableID];
  
-@@ -410,20 +741,28 @@ static void reportGLErrors(void) {
+@@ -410,20 +748,28 @@ static void reportGLErrors(void) {
  
  - (void)queuePresent: (NSUInteger)drawableID
  {
@@ -11823,7 +11830,7 @@ index b81e2e14..5df88e0e 100644
  	[_drawableCondition lock];
  	_usableDrawablesBitmap |= 1u << drawableID;
  	[_drawableCondition signal];
-@@ -437,16 +776,14 @@ static void reportGLErrors(void) {
+@@ -437,16 +783,14 @@ static void reportGLErrors(void) {
  	// drop all queued presentations
  	for (NSUInteger i = 0; i < _queuedDrawableCount; ++i) {
  		auto& drawable = _drawables[_queuedDrawables[i]];
@@ -11845,7 +11852,7 @@ index b81e2e14..5df88e0e 100644
  	for (auto& drawable: _drawables) {
  		if (drawable) {
  			drawable->disown();
-@@ -455,14 +792,401 @@ static void reportGLErrors(void) {
+@@ -455,14 +799,411 @@ static void reportGLErrors(void) {
  	}
  	_usableDrawablesBitmap = 0;
  
@@ -12020,6 +12027,14 @@ index b81e2e14..5df88e0e 100644
 +				ensureX11WindowVisible(nativeDpy, topLevelWin);
 +			}
 +
++			// Wait for pending in-flight frames before destroying old swapchain
++			for (size_t i = 0; i < NUM_FRAMES_IN_FLIGHT; ++i) {
++				if (_vkInFlightFences[i] != VK_NULL_HANDLE) {
++					DynamicVK::vkWaitForFences(dev->device(), 1, &_vkInFlightFences[i], VK_TRUE, 1000000000ULL);
++				}
++			}
++			_frameInFlightIndex = 0;
++
 +			// Clean up previous surface/swapchain if any
 +			if (_vkSwapchain != VK_NULL_HANDLE) {
 +				DynamicVK::vkDestroySwapchainKHR(dev->device(), _vkSwapchain, nullptr);
@@ -12045,7 +12060,7 @@ index b81e2e14..5df88e0e 100644
 +				_vkSurface = VK_NULL_HANDLE;
 +				continue;
 +			}
-+
+ 
 +			// 2. vkGetPhysicalDeviceSurfaceSupportKHR
 +			uint32_t qFam = dev->graphicsQueueFamilyIndex() ? *dev->graphicsQueueFamilyIndex() : 0;
 +			VkBool32 supported = VK_FALSE;
@@ -12089,7 +12104,7 @@ index b81e2e14..5df88e0e 100644
 +					chosenColorSpace = formats[0].colorSpace;
 +				}
 +			}
- 
++
 +			uint32_t modeCount = 0;
 +			DynamicVK::vkGetPhysicalDeviceSurfacePresentModesKHR(dev->physicalDevice(), _vkSurface, &modeCount, nullptr);
 +			std::vector<VkPresentModeKHR> modes(modeCount);
@@ -12207,21 +12222,23 @@ index b81e2e14..5df88e0e 100644
 +					}
 +				}
 +
-+				if (_vkAcquireSemaphore == VK_NULL_HANDLE) {
-+					VkSemaphoreCreateInfo semInfo {};
-+					semInfo.sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO;
-+					DynamicVK::vkCreateSemaphore(dev->device(), &semInfo, nullptr, &_vkAcquireSemaphore);
-+				}
-+				if (_vkRenderCompleteSemaphore == VK_NULL_HANDLE) {
-+					VkSemaphoreCreateInfo semInfo {};
-+					semInfo.sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO;
-+					DynamicVK::vkCreateSemaphore(dev->device(), &semInfo, nullptr, &_vkRenderCompleteSemaphore);
-+				}
-+				if (_vkPresentFence == VK_NULL_HANDLE) {
-+					VkFenceCreateInfo fenceInfo {};
-+					fenceInfo.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO;
-+					fenceInfo.flags = VK_FENCE_CREATE_SIGNALED_BIT;
-+					DynamicVK::vkCreateFence(dev->device(), &fenceInfo, nullptr, &_vkPresentFence);
++				for (size_t i = 0; i < NUM_FRAMES_IN_FLIGHT; ++i) {
++					if (_vkAcquireSemaphores[i] == VK_NULL_HANDLE) {
++						VkSemaphoreCreateInfo semInfo {};
++						semInfo.sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO;
++						DynamicVK::vkCreateSemaphore(dev->device(), &semInfo, nullptr, &_vkAcquireSemaphores[i]);
++					}
++					if (_vkRenderCompleteSemaphores[i] == VK_NULL_HANDLE) {
++						VkSemaphoreCreateInfo semInfo {};
++						semInfo.sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO;
++						DynamicVK::vkCreateSemaphore(dev->device(), &semInfo, nullptr, &_vkRenderCompleteSemaphores[i]);
++					}
++					if (_vkInFlightFences[i] == VK_NULL_HANDLE) {
++						VkFenceCreateInfo fenceInfo {};
++						fenceInfo.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO;
++						fenceInfo.flags = VK_FENCE_CREATE_SIGNALED_BIT;
++						DynamicVK::vkCreateFence(dev->device(), &fenceInfo, nullptr, &_vkInFlightFences[i]);
++					}
 +				}
 +				if (_vkCommandPool == VK_NULL_HANDLE) {
 +					VkCommandPoolCreateInfo poolInfo {};
@@ -12234,8 +12251,8 @@ index b81e2e14..5df88e0e 100644
 +					cbAllocInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
 +					cbAllocInfo.commandPool = _vkCommandPool;
 +					cbAllocInfo.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
-+					cbAllocInfo.commandBufferCount = 1;
-+					DynamicVK::vkAllocateCommandBuffers(dev->device(), &cbAllocInfo, &_vkCmdBuffer);
++					cbAllocInfo.commandBufferCount = static_cast<uint32_t>(NUM_FRAMES_IN_FLIGHT);
++					DynamicVK::vkAllocateCommandBuffers(dev->device(), &cbAllocInfo, _vkCmdBuffers.data());
 +				}
 +
 +				break; // successfully initialized swapchain
@@ -12250,7 +12267,7 @@ index b81e2e14..5df88e0e 100644
  	switch (_pixelFormat) {
  		case MTLPixelFormatBGRA8Unorm:      pixelFormat = Indium::PixelFormat::BGRA8Unorm;      break;
  		case MTLPixelFormatBGRA8Unorm_sRGB: pixelFormat = Indium::PixelFormat::BGRA8Unorm_sRGB; break;
-@@ -476,123 +1200,215 @@ static void reportGLErrors(void) {
+@@ -476,123 +1217,216 @@ static void reportGLErrors(void) {
  		default:                            pixelFormat = Indium::PixelFormat::Invalid;         break;
  	}
  
@@ -12336,14 +12353,19 @@ index b81e2e14..5df88e0e 100644
 -		//        or at least a fixed interval.
 -		if (_lastPresentedDrawable) {
 -			_lastPresentedDrawable->didPresent();
++	size_t flightIdx = _frameInFlightIndex;
++
++	// Wait for previous work in this flight slot to complete before reusing resources
++	DynamicVK::vkWaitForFences(dev->device(), 1, &_vkInFlightFences[flightIdx], VK_TRUE, 1000000000ULL);
++
 +	// 1. Acquire next image from swapchain
 +	uint32_t imageIndex = 0;
-+	VkResult res = DynamicVK::vkAcquireNextImageKHR(dev->device(), _vkSwapchain, 1000000000ULL /* 1s */, _vkAcquireSemaphore, VK_NULL_HANDLE, &imageIndex);
++	VkResult res = DynamicVK::vkAcquireNextImageKHR(dev->device(), _vkSwapchain, 1000000000ULL /* 1s */, _vkAcquireSemaphores[flightIdx], VK_NULL_HANDLE, &imageIndex);
 +	if (res == VK_ERROR_OUT_OF_DATE_KHR || res == VK_SUBOPTIMAL_KHR) {
 +		if (res == VK_ERROR_OUT_OF_DATE_KHR) {
 +			char logBuf[256];
-+			snprintf(logBuf, sizeof(logBuf), "presentDirectVulkan frame=%llu drawable=%lu acqRes=%d (out of date, recreating)",
-+				(unsigned long long)frameNum, (unsigned long)drawableID, (int)res);
++			snprintf(logBuf, sizeof(logBuf), "presentDirectVulkan frame=%llu drawable=%lu flight=%zu acqRes=%d (out of date, recreating)",
++				(unsigned long long)frameNum, (unsigned long)drawableID, flightIdx, (int)res);
 +			appendDeviceLog(logBuf);
 +			[self recreateDrawables];
 +			drawable->didPresent();
@@ -12352,22 +12374,20 @@ index b81e2e14..5df88e0e 100644
 -		_lastPresentedDrawable = drawable;
 +	} else if (res != VK_SUCCESS) {
 +		char logBuf[256];
-+		snprintf(logBuf, sizeof(logBuf), "presentDirectVulkan frame=%llu drawable=%lu acqRes=%d (acquire failed)",
-+			(unsigned long long)frameNum, (unsigned long)drawableID, (int)res);
++		snprintf(logBuf, sizeof(logBuf), "presentDirectVulkan frame=%llu drawable=%lu flight=%zu acqRes=%d (acquire failed)",
++			(unsigned long long)frameNum, (unsigned long)drawableID, flightIdx, (int)res);
 +		appendDeviceLog(logBuf);
 +		drawable->didPresent();
 +		return;
-+	}
+ 	}
 +
-+	// Wait for previous present fence
-+	DynamicVK::vkWaitForFences(dev->device(), 1, &_vkPresentFence, VK_TRUE, 1000000000ULL);
-+	DynamicVK::vkResetFencesLocal(dev->device(), 1, &_vkPresentFence);
++	DynamicVK::vkResetFencesLocal(dev->device(), 1, &_vkInFlightFences[flightIdx]);
 +
 +	// 2. Record command buffer
 +	VkCommandBufferBeginInfo beginInfo {};
 +	beginInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
 +	beginInfo.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
-+	DynamicVK::vkBeginCommandBuffer(_vkCmdBuffer, &beginInfo);
++	DynamicVK::vkBeginCommandBuffer(_vkCmdBuffers[flightIdx], &beginInfo);
 +
 +	VkImage srcImage = drawable->texture()->image();
 +	VkImage dstImage = _vkSwapchainImages[imageIndex];
@@ -12375,7 +12395,7 @@ index b81e2e14..5df88e0e 100644
 +	// Barrier 1: dstImage UNDEFINED -> TRANSFER_DST_OPTIMAL, srcImage GENERAL -> TRANSFER_SRC_OPTIMAL
 +	VkImageMemoryBarrier barriers[2] {};
 +	barriers[0].sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
-+	barriers[0].srcAccessMask = VK_ACCESS_NONE;
++	barriers[0].srcAccessMask = 0;
 +	barriers[0].dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
 +	barriers[0].oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
 +	barriers[0].newLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
@@ -12385,7 +12405,7 @@ index b81e2e14..5df88e0e 100644
 +	barriers[0].subresourceRange = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1 };
 +
 +	barriers[1].sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
-+	barriers[1].srcAccessMask = VK_ACCESS_MEMORY_READ_BIT | VK_ACCESS_MEMORY_WRITE_BIT;
++	barriers[1].srcAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
 +	barriers[1].dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
 +	barriers[1].oldLayout = VK_IMAGE_LAYOUT_GENERAL;
 +	barriers[1].newLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
@@ -12394,8 +12414,8 @@ index b81e2e14..5df88e0e 100644
 +	barriers[1].image = srcImage;
 +	barriers[1].subresourceRange = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1 };
 +
-+	DynamicVK::vkCmdPipelineBarrier(_vkCmdBuffer,
-+		VK_PIPELINE_STAGE_ALL_COMMANDS_BIT,
++	DynamicVK::vkCmdPipelineBarrier(_vkCmdBuffers[flightIdx],
++		VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
 +		VK_PIPELINE_STAGE_TRANSFER_BIT,
 +		0, 0, nullptr, 0, nullptr, 2, barriers);
 +
@@ -12408,28 +12428,28 @@ index b81e2e14..5df88e0e 100644
 +	blitRegion.dstOffsets[0] = { 0, 0, 0 };
 +	blitRegion.dstOffsets[1] = { static_cast<int32_t>(_vkSwapchainSize.width), static_cast<int32_t>(_vkSwapchainSize.height), 1 };
 +
-+	DynamicVK::vkCmdBlitImage(_vkCmdBuffer,
++	DynamicVK::vkCmdBlitImage(_vkCmdBuffers[flightIdx],
 +		srcImage, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
 +		dstImage, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
 +		1, &blitRegion, VK_FILTER_LINEAR);
 +
 +	// Barrier 2: dstImage TRANSFER_DST_OPTIMAL -> PRESENT_SRC_KHR, srcImage TRANSFER_SRC_OPTIMAL -> GENERAL
 +	barriers[0].srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
-+	barriers[0].dstAccessMask = VK_ACCESS_MEMORY_READ_BIT;
++	barriers[0].dstAccessMask = 0;
 +	barriers[0].oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
 +	barriers[0].newLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
 +
 +	barriers[1].srcAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
-+	barriers[1].dstAccessMask = VK_ACCESS_MEMORY_READ_BIT | VK_ACCESS_MEMORY_WRITE_BIT;
++	barriers[1].dstAccessMask = 0;
 +	barriers[1].oldLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
 +	barriers[1].newLayout = VK_IMAGE_LAYOUT_GENERAL;
 +
-+	DynamicVK::vkCmdPipelineBarrier(_vkCmdBuffer,
++	DynamicVK::vkCmdPipelineBarrier(_vkCmdBuffers[flightIdx],
 +		VK_PIPELINE_STAGE_TRANSFER_BIT,
-+		VK_PIPELINE_STAGE_ALL_COMMANDS_BIT,
++		VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT,
 +		0, 0, nullptr, 0, nullptr, 2, barriers);
 +
-+	DynamicVK::vkEndCommandBuffer(_vkCmdBuffer);
++	DynamicVK::vkEndCommandBuffer(_vkCmdBuffers[flightIdx]);
 +
 +	// 3. Submit to graphics queue
 +	std::vector<VkSemaphore> waitSemaphores;
@@ -12438,7 +12458,7 @@ index b81e2e14..5df88e0e 100644
 +		waitSemaphores.push_back(drawable->semaphore()->semaphore);
 +		waitStages.push_back(VK_PIPELINE_STAGE_TRANSFER_BIT);
 +	}
-+	waitSemaphores.push_back(_vkAcquireSemaphore);
++	waitSemaphores.push_back(_vkAcquireSemaphores[flightIdx]);
 +	waitStages.push_back(VK_PIPELINE_STAGE_TRANSFER_BIT);
 +
 +	VkSubmitInfo submitInfo {};
@@ -12447,40 +12467,38 @@ index b81e2e14..5df88e0e 100644
 +	submitInfo.pWaitSemaphores = waitSemaphores.data();
 +	submitInfo.pWaitDstStageMask = waitStages.data();
 +	submitInfo.commandBufferCount = 1;
-+	submitInfo.pCommandBuffers = &_vkCmdBuffer;
++	submitInfo.pCommandBuffers = &_vkCmdBuffers[flightIdx];
 +	submitInfo.signalSemaphoreCount = 1;
-+	submitInfo.pSignalSemaphores = &_vkRenderCompleteSemaphore;
++	submitInfo.pSignalSemaphores = &_vkRenderCompleteSemaphores[flightIdx];
 +
 +	VkResult subRes = VK_SUCCESS;
-+	VkResult fenceRes = VK_SUCCESS;
 +	VkResult presRes = VK_SUCCESS;
 +
 +	{
 +		std::lock_guard<std::mutex> qLock(dev->graphicsQueueMutex());
-+		subRes = DynamicVK::vkQueueSubmit(dev->graphicsQueue(), 1, &submitInfo, _vkPresentFence);
-+
-+		// Wait on fence immediately so GPU blit barriers are flushed/finished before presentation
-+		fenceRes = DynamicVK::vkWaitForFences(dev->device(), 1, &_vkPresentFence, VK_TRUE, 1000000000ULL);
++		subRes = DynamicVK::vkQueueSubmit(dev->graphicsQueue(), 1, &submitInfo, _vkInFlightFences[flightIdx]);
 +
 +		// 4. Present
 +		VkPresentInfoKHR presentInfo {};
 +		presentInfo.sType = VK_STRUCTURE_TYPE_PRESENT_INFO_KHR;
 +		presentInfo.waitSemaphoreCount = 1;
-+		presentInfo.pWaitSemaphores = &_vkRenderCompleteSemaphore;
++		presentInfo.pWaitSemaphores = &_vkRenderCompleteSemaphores[flightIdx];
 +		presentInfo.swapchainCount = 1;
 +		presentInfo.pSwapchains = &_vkSwapchain;
 +		presentInfo.pImageIndices = &imageIndex;
 +
 +		presRes = DynamicVK::vkQueuePresentKHR(dev->graphicsQueue(), &presentInfo);
- 	}
++	}
++
++	_frameInFlightIndex = (_frameInFlightIndex + 1) % NUM_FRAMES_IN_FLIGHT;
 +
 +	if (frameNum <= 120 || (frameNum % 60) == 0) {
 +		char logBuf[256];
 +		snprintf(logBuf, sizeof(logBuf),
-+			"presentDirectVulkan frame=%llu drawable=%lu extent=%ux%u acqRes=%d imgIdx=%u subRes=%d fenceRes=%d presRes=%d",
-+			(unsigned long long)frameNum, (unsigned long)drawableID,
++			"presentDirectVulkan frame=%llu drawable=%lu flight=%zu extent=%ux%u acqRes=%d imgIdx=%u subRes=%d presRes=%d",
++			(unsigned long long)frameNum, (unsigned long)drawableID, flightIdx,
 +			(uint32_t)_vkSwapchainSize.width, (uint32_t)_vkSwapchainSize.height,
-+			(int)res, (unsigned int)imageIndex, (int)subRes, (int)fenceRes, (int)presRes);
++			(int)res, (unsigned int)imageIndex, (int)subRes, (int)presRes);
 +		appendDeviceLog(logBuf);
 +	}
 +
@@ -12550,10 +12568,10 @@ index b81e2e14..5df88e0e 100644
  
  #else
 diff --git a/QuartzCore/CAMetalLayerInternal.h b/QuartzCore/CAMetalLayerInternal.h
-index 48693da0..a30a2e4b 100644
+index 48693da0..808e4bdd 100644
 --- a/QuartzCore/CAMetalLayerInternal.h
 +++ b/QuartzCore/CAMetalLayerInternal.h
-@@ -19,12 +19,14 @@
+@@ -19,12 +19,16 @@
  
  #import <QuartzCore/CAMetalLayer.h>
  
@@ -12564,13 +12582,15 @@ index 48693da0..a30a2e4b 100644
  #include <array>
 +#include <vector>
 +#include <vulkan/vulkan.h>
++
++static constexpr size_t NUM_FRAMES_IN_FLIGHT = 3;
  
  class CAMetalDrawableActual;
 +#endif
  
  @interface CAMetalLayerInternal : CAMetalLayer {
  	id<MTLDevice> _device;
-@@ -32,6 +34,7 @@ class CAMetalDrawableActual;
+@@ -32,6 +36,7 @@ class CAMetalDrawableActual;
  	CGColorSpaceRef _colorspace;
  	BOOL _framebufferOnly;
  	CGSize _drawableSize;
@@ -12578,7 +12598,7 @@ index 48693da0..a30a2e4b 100644
  	BOOL _presentsWithTransaction;
  	BOOL _displaySyncEnabled;
  	BOOL _wantsExtendedDynamicRangeContent;
-@@ -40,6 +43,7 @@ class CAMetalDrawableActual;
+@@ -40,6 +45,7 @@ class CAMetalDrawableActual;
  	BOOL _allowsNextDrawableTimeout;
  	NSDictionary* _developerHUDProperties;
  
@@ -12586,22 +12606,24 @@ index 48693da0..a30a2e4b 100644
  	std::array<std::shared_ptr<CAMetalDrawableActual>, 3> _drawables;
  	std::array<NSUInteger, 3> _queuedDrawables;
  	NSUInteger _queuedDrawableCount;
-@@ -47,12 +51,28 @@ class CAMetalDrawableActual;
+@@ -47,12 +53,30 @@ class CAMetalDrawableActual;
  	NSCondition* _drawableCondition;
  	std::shared_ptr<CAMetalDrawableActual> _lastPresentedDrawable;
  
 -	GLuint _tex;
++	size_t _frameInFlightIndex;
++
 +	VkSurfaceKHR _vkSurface;
 +	VkSwapchainKHR _vkSwapchain;
 +	CGSize _vkSwapchainSize;
 +	void* _vkNativeWindow;
 +	void* _vkSubWindow;
 +	std::vector<VkImage> _vkSwapchainImages;
-+	VkSemaphore _vkAcquireSemaphore;
-+	VkSemaphore _vkRenderCompleteSemaphore;
-+	VkFence _vkPresentFence;
++	std::array<VkSemaphore, NUM_FRAMES_IN_FLIGHT> _vkAcquireSemaphores;
++	std::array<VkSemaphore, NUM_FRAMES_IN_FLIGHT> _vkRenderCompleteSemaphores;
++	std::array<VkFence, NUM_FRAMES_IN_FLIGHT> _vkInFlightFences;
 +	VkCommandPool _vkCommandPool;
-+	VkCommandBuffer _vkCmdBuffer;
++	std::array<VkCommandBuffer, NUM_FRAMES_IN_FLIGHT> _vkCmdBuffers;
 +#endif
  }
  
