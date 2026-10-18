@@ -11399,10 +11399,10 @@ index f31347a2..7937f137 100644
 +
  @end
 diff --git a/QuartzCore/CALayerContext.m b/QuartzCore/CALayerContext.m
-index af95399c..cfd3023b 100644
+index af95399c..bf26af07 100644
 --- a/QuartzCore/CALayerContext.m
 +++ b/QuartzCore/CALayerContext.m
-@@ -1,72 +1,140 @@
+@@ -1,72 +1,168 @@
  #import <Foundation/NSString.h>
 +#import <Foundation/NSMutableArray.h>
  #import <QuartzCore/CALayer.h>
@@ -11432,7 +11432,8 @@ index af95399c..cfd3023b 100644
 +        if (hasMetalLayer(child))return YES;
 +    return NO;
 +}
-+
+ 
+-@implementation CALayerContext
 +static BOOL hasOtherVisibleContent(CALayer *layer) {
 +    if ([layer isHidden])
 +        return NO;
@@ -11448,6 +11449,7 @@ index af95399c..cfd3023b 100644
 +    return NO;
 +}
  
+-@synthesize glContext = _glContext;
 +static void configureGPUFromMetalSelector(void) {
 +    static BOOL configured = NO;
 +    if (configured) return;
@@ -11495,7 +11497,11 @@ index af95399c..cfd3023b 100644
 +            setenv("__EGL_VENDOR_LIBRARY_FILENAMES", "/usr/share/glvnd/egl_vendor.d/10_nvidia.json", 0);
 +    }
 +}
-+
+ 
+-- initWithFrame: (CGRect) rect {
+-    self = [super init];
+-    if (self == nil)
+-        return nil;
 +/* The X11 transport presents Chromium's flattened full-window surface.
 + * Avoid uploading and compositing that same window again into a covered GL
 + * child. Restrict this to the explicitly configured native presentation path. */
@@ -11520,38 +11526,60 @@ index af95399c..cfd3023b 100644
 +           !hasMetalLayer(layer) && !hasOtherVisibleContent(layer) &&
 +           (!getenv("RCLOL_GPU_DIRECT_PRESENT") || hasFullWindowSurface(layer, size));
 +}
- @implementation CALayerContext
- 
- @synthesize glContext = _glContext;
-+@synthesize subwindow = _subwindow;
- 
- - initWithFrame: (CGRect) rect {
-     self = [super init];
-     if (self == nil)
-         return nil;
++@implementation CALayerContext
  
 -    CGLError error;
--
++@synthesize subwindow = _subwindow;
+ 
 -    CGLPixelFormatAttribute attributes[1] = {
 -            0,
 -    };
 -    GLint numberOfVirtualScreens;
--
++- (CGRect) frame {
++    return _frame;
++}
+ 
 -    error = CGLChoosePixelFormat(attributes, &_pixelFormat, &numberOfVirtualScreens);
 -    if (error != kCGLNoError) {
 -        NSLog(@"CGLChoosePixelFormat failed with %d", error);
 -        [self release];
 -        return nil;
--    }
--
++- (CGLContextObj) glContext {
++    if (_glContext == NULL) {
++        configureGPUFromMetalSelector();
++        CGLPixelFormatAttribute attributes[] = { 0 };
++        GLint screens;
++        CGLError error = CGLChoosePixelFormat(attributes, &_pixelFormat, &screens);
++        if (error == kCGLNoError)
++            error = CGLCreateContext(_pixelFormat, NULL, &_glContext);
++        if (error != kCGLNoError) {
++            NSLog(@"CGL context creation failed with %d", error);
++            if (_pixelFormat != NULL) {
++                CGLReleasePixelFormat(_pixelFormat);
++                _pixelFormat = NULL;
++            }
++        } else {
++            if (_renderer == nil) {
++                _renderer = [[CARenderer rendererWithCGLContext: _glContext
++                                                        options: nil] retain];
++                [_renderer setLayer: _layer];
++            }
++        }
+     }
++    return _glContext;
++}
+ 
 -    if ((error = CGLCreateContext(_pixelFormat, NULL, &_glContext)) !=
 -        kCGLNoError) {
 -        NSLog(@"CGLCreateContext failed with %d in %s %d", error, __FILE__,
 -              __LINE__);
 -        [self release];
--        return nil;
++- initWithFrame: (CGRect) rect {
++    self = [super init];
++    if (self == nil)
+         return nil;
 -    }
--
+ 
 +    _deleteTextureIds = [[NSMutableArray alloc] init];
      _frame = rect;
 -
@@ -11584,7 +11612,7 @@ index af95399c..cfd3023b 100644
      [super dealloc];
  }
  
-@@ -76,24 +144,22 @@
+@@ -76,24 +172,22 @@
  }
  
  - (void) setLayer: (CALayer *) layer {
@@ -11618,7 +11646,7 @@ index af95399c..cfd3023b 100644
  }
  
  - (void) setSubwindow: (CGSubWindow*) subwindow
-@@ -101,29 +167,55 @@
+@@ -101,29 +195,39 @@
      CGSubWindow* oldSubwindow = _subwindow;
  
      if (_cglWindow) {
@@ -11634,24 +11662,8 @@ index af95399c..cfd3023b 100644
 -    _cglWindow = CGLGetWindowForContext(_glContext, [_subwindow nativeWindow]);
 +    _cglWindow = NULL;
 +    if (_subwindow != nil) {
-+        if (_glContext == NULL) {
-+            configureGPUFromMetalSelector();
-+            CGLPixelFormatAttribute attributes[] = { 0 };
-+            GLint screens;
-+            CGLError error = CGLChoosePixelFormat(attributes, &_pixelFormat, &screens);
-+            if (error == kCGLNoError)
-+                error = CGLCreateContext(_pixelFormat, NULL, &_glContext);
-+            if (error != kCGLNoError) {
-+                NSLog(@"CGL context creation failed with %d", error);
-+                CGLReleasePixelFormat(_pixelFormat);
-+                _pixelFormat = NULL;
-+            } else {
-+                _renderer = [[CARenderer rendererWithCGLContext: _glContext
-+                                                        options: nil] retain];
-+                [_renderer setLayer: _layer];
-+            }
-+        }
-+        if (_glContext != NULL)
++        CGLContextObj ctx = [self glContext];
++        if (ctx != NULL)
 +            _cglWindow = CGLGetWindow([_subwindow nativeWindow]);
 +    }
  
@@ -11681,7 +11693,7 @@ index af95399c..cfd3023b 100644
  }
  
  - (void) assignTextureIdsToLayerTree: (CALayer *) layer {
-@@ -139,69 +231,35 @@
+@@ -139,69 +243,35 @@
          [self assignTextureIdsToLayerTree: child];
  }
  
@@ -11771,7 +11783,7 @@ index af95399c..cfd3023b 100644
      glMatrixMode(GL_PROJECTION);
      glLoadIdentity();
      glOrtho(0, width, 0, height, -1, 1);
-@@ -217,77 +275,71 @@
+@@ -217,77 +287,71 @@
  
      [_deleteTextureIds removeAllObjects];
  
@@ -11891,7 +11903,7 @@ index af95399c..cfd3023b 100644
  }
  
  - (void) deleteTextureId: (NSNumber *) textureId {
-@@ -295,20 +347,9 @@ static BOOL layerTreeNeedsAnotherFrame(CALayer *layer) {
+@@ -295,20 +359,9 @@ static BOOL layerTreeNeedsAnotherFrame(CALayer *layer) {
  }
  
  - (void) flush {
@@ -12761,7 +12773,7 @@ index fcafb25c..757dd8c9 100644
  	void didPresent();
  	void didDrop();
 diff --git a/QuartzCore/CAMetalLayer.mm b/QuartzCore/CAMetalLayer.mm
-index e7764d06..63533444 100644
+index e7764d06..b71b729a 100644
 --- a/QuartzCore/CAMetalLayer.mm
 +++ b/QuartzCore/CAMetalLayer.mm
 @@ -20,283 +20,322 @@
@@ -12784,12 +12796,12 @@ index e7764d06..63533444 100644
 -static void reportGLErrors(void) {
 -	drainAndReportGLErrors("CAMetalLayer");
 -}
--
--@implementation CAMetalLayer
 +// Wait-site counters (flag file /tmp/metal-debug-waits, checked once at process start): the same summary the Indium
 +// hand-off waits write, so the drawable hand-out and the command-buffer hand-offs appear in one histogram.
 +#include <indium/waits.private.hpp>
  
+-@implementation CAMetalLayer
+-
 -// The device, drawables and the rest of the Metal state have no archived form.
 -- (void)encodeWithCoder:(NSCoder *)coder
 -{
@@ -13223,27 +13235,36 @@ index e7764d06..63533444 100644
  @implementation CAMetalLayerInternal
  
  #if DARLING_METAL_ENABLED
-@@ -413,10 +452,6 @@ MTL_UNSUPPORTED_CLASS
+@@ -318,6 +357,7 @@ MTL_UNSUPPORTED_CLASS
+ 		_pixelFormat = MTLPixelFormatBGRA8Unorm;
+ 		_framebufferOnly = YES;
+ 		_drawableSize = _bounds.size; // TODO: multiply by contentsScale, once we add that to CALayer
++		_drawableSizeExplicitlySet = NO;
+ 		_displaySyncEnabled = YES;
+ 		_maximumDrawableCount = 3;
+ 		_allowsNextDrawableTimeout = YES;
+@@ -413,9 +453,6 @@ MTL_UNSUPPORTED_CLASS
  
  - (void)setDrawableSize: (CGSize)drawableSize
  {
 -	if (CGSizeEqualToSize(_drawableSize, drawableSize)) {
 -		return;
 -	}
--	_drawableSizeExplicitlySet = YES;
+ 	_drawableSizeExplicitlySet = YES;
  	_drawableSize = drawableSize;
  	[self recreateDrawables];
- }
-@@ -439,20 +474,18 @@ MTL_UNSUPPORTED_CLASS
- // overridden properties
- //
+@@ -441,16 +478,21 @@ MTL_UNSUPPORTED_CLASS
  
-+// it appears that the drawable size does NOT change after initially being set
-+#if 0
  - (void)setBounds: (CGRect)value
  {
 -	CGSize oldSize = _bounds.size;
  	[super setBounds: value];
++	if (!_drawableSizeExplicitlySet && value.size.width > 0 && value.size.height > 0) {
++		CGFloat scale = self.contentsScale > 0.0 ? self.contentsScale : 1.0;
++		_drawableSize = CGSizeMake(value.size.width * scale, value.size.height * scale);
++		[self recreateDrawables];
++	}
++}
  
 -	if (!_drawableSizeExplicitlySet) {
 -		if (CGSizeEqualToSize(_drawableSize, CGSizeZero) || CGSizeEqualToSize(_drawableSize, oldSize)) {
@@ -13252,24 +13273,54 @@ index e7764d06..63533444 100644
 -				[self recreateDrawables];
 -			}
 -		}
--	}
-+	CGSize drawableSize = value.size;
-+	// TODO: multiply by contentsScale (CALayer doesn't currently have that property)
-+
-+	[self setDrawableSize: drawableSize];
++- (void)setFrame: (CGRect)value
++{
++	[super setFrame: value];
++	if (!_drawableSizeExplicitlySet && value.size.width > 0 && value.size.height > 0) {
++		CGFloat scale = self.contentsScale > 0.0 ? self.contentsScale : 1.0;
++		_drawableSize = CGSizeMake(value.size.width * scale, value.size.height * scale);
++		[self recreateDrawables];
+ 	}
  }
-+#endif
  
- //
- // methods
-@@ -461,12 +494,15 @@ MTL_UNSUPPORTED_CLASS
+@@ -461,12 +503,45 @@ MTL_UNSUPPORTED_CLASS
  - (id<CAMetalDrawable>)nextDrawable
  {
  	std::shared_ptr<CAMetalDrawableActual> drawable = nullptr;
 +	CFTimeInterval waitStart = CACurrentMediaTime();
++
++	if (!_device) {
++		_device = [self.preferredDevice retain];
++	}
++
++	if (_drawables[0] == nullptr || _usableDrawablesBitmap == 0) {
++		[self recreateDrawables];
++	}
  
  	[_drawableCondition lock];
  
++	if (_usableDrawablesBitmap == 0) {
++		@synchronized(self) {
++			if (_lastPresentedDrawable) {
++				_lastPresentedDrawable->didPresent();
++				_lastPresentedDrawable = nullptr;
++			}
++		}
++	}
++
++	if (_usableDrawablesBitmap == 0 && _queuedDrawableCount > 0 && [NSThread isMainThread] && _context) {
++		[_drawableCondition unlock];
++		[_context render];
++		[_context flush];
++		[_drawableCondition lock];
++		@synchronized(self) {
++			if (_lastPresentedDrawable) {
++				_lastPresentedDrawable->didPresent();
++				_lastPresentedDrawable = nullptr;
++			}
++		}
++	}
++
  	NSDate* endTime = [NSDate dateWithTimeIntervalSinceNow: 1];
  
  	while (_usableDrawablesBitmap == 0) {
@@ -13278,8 +13329,24 @@ index e7764d06..63533444 100644
  		if (_allowsNextDrawableTimeout) {
  			if (![_drawableCondition waitUntilDate: endTime]) {
  				break;
-@@ -478,6 +514,8 @@ MTL_UNSUPPORTED_CLASS
+@@ -476,8 +551,24 @@ MTL_UNSUPPORTED_CLASS
+ 		}
+ 	}
  
++	if (_usableDrawablesBitmap == 0) {
++		@synchronized(self) {
++			if (_lastPresentedDrawable) {
++				_lastPresentedDrawable->didPresent();
++				_lastPresentedDrawable = nullptr;
++			}
++		}
++		if (_usableDrawablesBitmap == 0 && (_drawables[0] == nullptr || _drawableSize.width == 0)) {
++			[_drawableCondition unlock];
++			[self recreateDrawables];
++			[_drawableCondition lock];
++		}
++	}
++
  	if (_usableDrawablesBitmap == 0) {
  		// timeout reached
 +		darlingMetalTiming("nextDrawableTimeout", CACurrentMediaTime() - waitStart);
@@ -13287,7 +13354,7 @@ index e7764d06..63533444 100644
  		[_drawableCondition unlock];
  		return nil;
  	}
-@@ -498,6 +536,8 @@ MTL_UNSUPPORTED_CLASS
+@@ -498,6 +589,8 @@ MTL_UNSUPPORTED_CLASS
  	}
  
  	_usableDrawablesBitmap &= ~(1u << drawableID);
@@ -13296,7 +13363,7 @@ index e7764d06..63533444 100644
  
  	drawable = _drawables[drawableID];
  
-@@ -508,38 +548,36 @@ MTL_UNSUPPORTED_CLASS
+@@ -508,38 +601,49 @@ MTL_UNSUPPORTED_CLASS
  
  - (void)queuePresent: (NSUInteger)drawableID
  {
@@ -13334,7 +13401,7 @@ index e7764d06..63533444 100644
 -	[self display];
 +    // Present only after the Vulkan/GL synchronization has been prepared, on
 +    // the window thread. display alone does not drive the layer compositor.
-+    dispatch_async(dispatch_get_main_queue(), ^{
++    void (^renderBlock)(void) = ^{
 +        if (intervalSample) intervalSample->renderStart.store(presentIntervalNow());
 +        darlingMetalTrace("present-block-runs", 0, 0);
 +        CFTimeInterval blockStart = CACurrentMediaTime();
@@ -13345,7 +13412,20 @@ index e7764d06..63533444 100644
 +        [self->_context flush];
 +        if (intervalSample) intervalSample->flushDone.store(presentIntervalNow(), std::memory_order_release);
 +        darlingMetalTiming("mainBlockFlush", CACurrentMediaTime() - renderDone);
-+    });
++
++        @synchronized(self) {
++            if (self->_lastPresentedDrawable) {
++                self->_lastPresentedDrawable->didPresent();
++                self->_lastPresentedDrawable = nullptr;
++            }
++        }
++    };
++
++    if ([NSThread isMainThread]) {
++        renderBlock();
++    } else {
++        dispatch_async(dispatch_get_main_queue(), renderBlock);
++    }
  }
  
  - (void)releaseDrawable: (NSUInteger)drawableID
@@ -13354,45 +13434,72 @@ index e7764d06..63533444 100644
  	[_drawableCondition lock];
  	_usableDrawablesBitmap |= 1u << drawableID;
  	[_drawableCondition signal];
-@@ -571,7 +609,7 @@ MTL_UNSUPPORTED_CLASS
+@@ -556,9 +660,10 @@ MTL_UNSUPPORTED_CLASS
+ 
+ 		// disown it first so it doesn't try to release itself
+ 		// (and end up deadlocking in `releaseDrawable:`)
+-		drawable->disown();
+-
+-		drawable->didDrop();
++		if (drawable) {
++			drawable->disown();
++			drawable->didDrop();
++		}
+ 	}
+ 	_queuedDrawableCount = 0;
+ 
+@@ -571,7 +676,33 @@ MTL_UNSUPPORTED_CLASS
  	}
  	_usableDrawablesBitmap = 0;
  
 -	if (!_device || !_context || _drawableSize.width == 0 || _drawableSize.height == 0) {
++	if (!_device) {
++		_device = [self.preferredDevice retain];
++	}
++
++	if (!_context && self.superlayer) {
++		_context = [self.superlayer _context];
++	}
++
++	if (_drawableSize.width == 0 || _drawableSize.height == 0) {
++		CGFloat scale = self.contentsScale > 0.0 ? self.contentsScale : 1.0;
++		if (self.bounds.size.width > 0 && self.bounds.size.height > 0) {
++			_drawableSize = CGSizeMake(self.bounds.size.width * scale, self.bounds.size.height * scale);
++		} else if (self.frame.size.width > 0 && self.frame.size.height > 0) {
++			_drawableSize = CGSizeMake(self.frame.size.width * scale, self.frame.size.height * scale);
++		} else if (self.superlayer && self.superlayer.bounds.size.width > 0 && self.superlayer.bounds.size.height > 0) {
++			_drawableSize = CGSizeMake(self.superlayer.bounds.size.width * scale, self.superlayer.bounds.size.height * scale);
++		} else if (self.superlayer && self.superlayer.frame.size.width > 0 && self.superlayer.frame.size.height > 0) {
++			_drawableSize = CGSizeMake(self.superlayer.frame.size.width * scale, self.superlayer.frame.size.height * scale);
++		} else if (_context) {
++			CGRect cf = [_context frame];
++			if (cf.size.width > 0 && cf.size.height > 0) {
++				_drawableSize = CGSizeMake(cf.size.width * scale, cf.size.height * scale);
++			}
++		}
++	}
++
 +	if (!_device || !_context || !_context.glContext || _drawableSize.width == 0 || _drawableSize.height == 0) {
  		// can't create new drawables
  		[_drawableCondition unlock];
  		return;
-@@ -613,37 +651,33 @@ MTL_UNSUPPORTED_CLASS
- 		if (_tex != 0) {
- 			reportGLErrors();
- 			glDeleteTextures(1, &_tex);
--			_tex = 0;
-+			reportGLErrors();
-+			glCreateTextures(GL_TEXTURE_2D, 1, &_tex);
-+			reportGLErrors();
-+			glTextureStorage2D(_tex, 1, GL_RGBA8, _drawableSize.width, _drawableSize.height);
-+			reportGLErrors();
-+			glTextureParameteri(_tex, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
-+			glTextureParameteri(_tex, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
-+			glTextureParameteri(_tex, GL_TEXTURE_WRAP_S, GL_REPEAT);
-+			glTextureParameteri(_tex, GL_TEXTURE_WRAP_T, GL_REPEAT);
-+			// The layer is opaque, as on macOS: never let the drawable's alpha reach the compositor (its blending and
-+			// alpha test turned the game's low-alpha effect regions into black quads). The drawable is copied in with
-+			// glCopyImageSubData, so the swizzle has to be on this texture, the one that is actually sampled.
-+			glTextureParameteri(_tex, GL_TEXTURE_SWIZZLE_A, GL_ONE);
+@@ -616,7 +747,6 @@ MTL_UNSUPPORTED_CLASS
+ 			_tex = 0;
  			reportGLErrors();
  		}
 -		reportGLErrors();
--		glCreateTextures(GL_TEXTURE_2D, 1, &_tex);
--		reportGLErrors();
--		glTextureStorage2D(_tex, 1, GL_RGBA8, _drawableSize.width, _drawableSize.height);
--		reportGLErrors();
--		glTextureParameteri(_tex, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
--		glTextureParameteri(_tex, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
--		glTextureParameteri(_tex, GL_TEXTURE_WRAP_S, GL_REPEAT);
--		glTextureParameteri(_tex, GL_TEXTURE_WRAP_T, GL_REPEAT);
--		reportGLErrors();
+ 		glCreateTextures(GL_TEXTURE_2D, 1, &_tex);
+ 		reportGLErrors();
+ 		glTextureStorage2D(_tex, 1, GL_RGBA8, _drawableSize.width, _drawableSize.height);
+@@ -625,25 +755,23 @@ MTL_UNSUPPORTED_CLASS
+ 		glTextureParameteri(_tex, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+ 		glTextureParameteri(_tex, GL_TEXTURE_WRAP_S, GL_REPEAT);
+ 		glTextureParameteri(_tex, GL_TEXTURE_WRAP_T, GL_REPEAT);
++		// The layer is opaque, as on macOS: never let the drawable's alpha reach the compositor (its blending and
++		// alpha test turned the game's low-alpha effect regions into black quads). The drawable is copied in with
++		// glCopyImageSubData, so the swizzle has to be on this texture, the one that is actually sampled.
++		glTextureParameteri(_tex, GL_TEXTURE_SWIZZLE_A, GL_ONE);
+ 		reportGLErrors();
  	}
  
  	CGLSetCurrentContext(prev);
@@ -13418,7 +13525,7 @@ index e7764d06..63533444 100644
  
  	[_drawableCondition lock];
  	if (_queuedDrawableCount > 0) {
-@@ -654,17 +688,64 @@ MTL_UNSUPPORTED_CLASS
+@@ -654,17 +782,87 @@ MTL_UNSUPPORTED_CLASS
  	[_drawableCondition unlock];
  
  	if (drawable) {
@@ -13438,6 +13545,23 @@ index e7764d06..63533444 100644
 +		drawable->synchronizeRender();
 +		darlingMetalTiming("synchronizeRender", CACurrentMediaTime() - syncStart);
 +
++		CGLContextObj prevCtx = CGLGetCurrentContext();
++		if (_context && _context.glContext) {
++			CGLSetCurrentContext(_context.glContext);
++		}
++
++		@synchronized(self) {
++			if (_tex == 0 && _drawableSize.width > 0 && _drawableSize.height > 0) {
++				glCreateTextures(GL_TEXTURE_2D, 1, &_tex);
++				glTextureStorage2D(_tex, 1, GL_RGBA8, (GLsizei)_drawableSize.width, (GLsizei)_drawableSize.height);
++				glTextureParameteri(_tex, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
++				glTextureParameteri(_tex, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
++				glTextureParameteri(_tex, GL_TEXTURE_WRAP_S, GL_REPEAT);
++				glTextureParameteri(_tex, GL_TEXTURE_WRAP_T, GL_REPEAT);
++				glTextureParameteri(_tex, GL_TEXTURE_SWIZZLE_A, GL_ONE);
++			}
++		}
++
 +		reportGLErrors();
 +		{
 +			// Diagnostic: statistics of the imported Vulkan image itself, before the copy
@@ -13455,9 +13579,11 @@ index e7764d06..63533444 100644
 +				darlingMetalTrace("source-stats", (long) lit, (long) (total / (width * height)));
 +			}
 +		}
- 		reportGLErrors();
-+		glCopyImageSubData(drawable->texture()->glTexture(), GL_TEXTURE_2D, 0, 0, 0, 0, _tex, GL_TEXTURE_2D, 0, 0, 0, 0, _drawableSize.width, _drawableSize.height, 1);
 +		reportGLErrors();
++		if (_tex != 0) {
++			glCopyImageSubData(drawable->texture()->glTexture(), GL_TEXTURE_2D, 0, 0, 0, 0, _tex, GL_TEXTURE_2D, 0, 0, 0, 0, _drawableSize.width, _drawableSize.height, 1);
++		}
+ 		reportGLErrors();
 +
 +		// Diagnostic: every 150th presented frame, log pixel statistics of what is about to be shown
 +		// and save a few of them as /tmp/metal-frame-<n>.ppm.
@@ -13490,10 +13616,14 @@ index e7764d06..63533444 100644
 +				}
 +			}
 +		}
++
++		if (prevCtx) {
++			CGLSetCurrentContext(prevCtx);
++		}
  	}
  
  	@synchronized(self) {
-@@ -683,51 +764,6 @@ MTL_UNSUPPORTED_CLASS
+@@ -683,51 +881,6 @@ MTL_UNSUPPORTED_CLASS
  	return [NSNumber numberWithUnsignedInt: _tex];
  }
  
@@ -13545,7 +13675,7 @@ index e7764d06..63533444 100644
  //
  // overridden methods
  //
-@@ -752,9 +788,34 @@ MTL_UNSUPPORTED_CLASS
+@@ -752,9 +905,34 @@ MTL_UNSUPPORTED_CLASS
  {
  	[super _setContext: context];
  
@@ -13556,7 +13686,7 @@ index e7764d06..63533444 100644
 +        return;
 +    }
 +
-+	if (_tex == 0) {
++	if (_tex == 0 && _drawableSize.width > 0 && _drawableSize.height > 0) {
 +		// create our textures now using the context's CGLContext
 +		CGLContextObj prev = CGLGetCurrentContext();
 +		CGLSetCurrentContext(context.glContext);
@@ -13570,10 +13700,10 @@ index e7764d06..63533444 100644
 +		glTextureParameteri(_tex, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
 +		glTextureParameteri(_tex, GL_TEXTURE_WRAP_S, GL_REPEAT);
 +		glTextureParameteri(_tex, GL_TEXTURE_WRAP_T, GL_REPEAT);
-+			// The layer is opaque, as on macOS: never let the drawable's alpha reach the compositor (its blending and
-+			// alpha test turned the game's low-alpha effect regions into black quads). The drawable is copied in with
-+			// glCopyImageSubData, so the swizzle has to be on this texture, the one that is actually sampled.
-+			glTextureParameteri(_tex, GL_TEXTURE_SWIZZLE_A, GL_ONE);
++		// The layer is opaque, as on macOS: never let the drawable's alpha reach the compositor (its blending and
++		// alpha test turned the game's low-alpha effect regions into black quads). The drawable is copied in with
++		// glCopyImageSubData, so the swizzle has to be on this texture, the one that is actually sampled.
++		glTextureParameteri(_tex, GL_TEXTURE_SWIZZLE_A, GL_ONE);
 +		reportGLErrors();
 +
 +		CGLSetCurrentContext(prev);
@@ -13582,6 +13712,18 @@ index e7764d06..63533444 100644
  }
  
  #else
+diff --git a/QuartzCore/CAMetalLayerInternal.h b/QuartzCore/CAMetalLayerInternal.h
+index 86f9fdab..8b12160f 100644
+--- a/QuartzCore/CAMetalLayerInternal.h
++++ b/QuartzCore/CAMetalLayerInternal.h
+@@ -57,6 +57,7 @@ class CAMetalDrawableActual;
+ - (BOOL)hasQueuedDrawables;
+ 
+ - (void)prepareRender;
++- (void)recreateDrawables;
+ 
+ @end
+ 
 diff --git a/QuartzCore/CARenderer.m b/QuartzCore/CARenderer.m
 index 13ec7deb..0bbc5a6c 100644
 --- a/QuartzCore/CARenderer.m
@@ -14609,14 +14751,15 @@ index c6cd5999..56755918 100644
  - (void) display;
  - (void) displayIfNeeded;
 diff --git a/QuartzCore/include/QuartzCore/CALayerContext.h b/QuartzCore/include/QuartzCore/CALayerContext.h
-index fd77cb24..92f5a236 100644
+index fd77cb24..3de61c9a 100644
 --- a/QuartzCore/include/QuartzCore/CALayerContext.h
 +++ b/QuartzCore/include/QuartzCore/CALayerContext.h
-@@ -22,6 +22,7 @@
+@@ -22,6 +22,8 @@
  }
  
  @property(readonly) CGLContextObj glContext;
 +@property(readonly) CGSubWindow *subwindow;
++@property(readonly) CGRect frame;
  
  - initWithFrame: (CGRect) rect;
  
