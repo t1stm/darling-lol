@@ -9827,7 +9827,7 @@ index dd6277bd..b74422ce 100644
  #import <fontconfig/fontconfig.h>
  
 diff --git a/QuartzCore/CALayer.m b/QuartzCore/CALayer.m
-index f31347a2..f3e4f65d 100644
+index f31347a2..7937f137 100644
 --- a/QuartzCore/CALayer.m
 +++ b/QuartzCore/CALayer.m
 @@ -1,14 +1,243 @@
@@ -10432,7 +10432,7 @@ index f31347a2..f3e4f65d 100644
      _superlayer = nil;
      _sublayers = [NSArray new];
      _delegate = nil;
-@@ -384,443 +548,26 @@ static char swiftUIViewTestPropertiesAssociationKey;
+@@ -384,443 +548,32 @@ static char swiftUIViewTestPropertiesAssociationKey;
      _opacity = 1.0;
      _opaque = YES;
      _contents = nil;
@@ -10673,6 +10673,12 @@ index f31347a2..f3e4f65d 100644
 +        [child _setSuperLayer: nil];
 +        [child _setContext: nil];
 +    }
++    if (_backgroundColor) CGColorRelease(_backgroundColor);
++    if (_textureId && _context) [_context deleteTextureId: _textureId];
++    [_textureId release];
++    [_contents release];
++    [_contentsGravity release];
++    [_shadowPath release];
      [_sublayers release];
 -    [_name release];
 -    [_layoutManager release];
@@ -10880,7 +10886,7 @@ index f31347a2..f3e4f65d 100644
  - (void) _setSuperLayer: (CALayer *) parent {
      _superlayer = parent;
  }
-@@ -833,40 +580,34 @@ static void replaceColor(CGColorRef *slot, CGColorRef value) {
+@@ -833,40 +586,34 @@ static void replaceColor(CGColorRef *slot, CGColorRef value) {
  }
  
  - (void) addSublayer: (CALayer *) layer {
@@ -10944,7 +10950,7 @@ index f31347a2..f3e4f65d 100644
  }
  
  - (void) replaceSublayer: (CALayer *) layer with: (CALayer *) other {
-@@ -881,106 +622,22 @@ static void replaceColor(CGColorRef *slot, CGColorRef value) {
+@@ -881,106 +628,22 @@ static void replaceColor(CGColorRef *slot, CGColorRef value) {
      layer->_superlayer = nil;
  }
  
@@ -10959,16 +10965,16 @@ index f31347a2..f3e4f65d 100644
          [_delegate displayLayer: self];
 -        return;
 -    }
--
++    else {
++#if 0
+ 
 -    size_t width = (size_t) ceil(MAX(_bounds.size.width, 0));
 -    size_t height = (size_t) ceil(MAX(_bounds.size.height, 0));
 -    if (width == 0 || height == 0) {
 -        [self setContents: nil];
 -        return;
 -    }
-+    else {
-+#if 0
- 
+-
 -    CGColorSpaceRef colorSpace = CGColorSpaceCreateDeviceRGB();
 -    CGContextRef context = CGBitmapContextCreate(
 -            NULL, width, height, 8, 0, colorSpace,
@@ -11059,7 +11065,7 @@ index f31347a2..f3e4f65d 100644
  }
  
  - (void) drawInContext: (CGContextRef) context {
-@@ -993,20 +650,22 @@ static void replaceColor(CGColorRef *slot, CGColorRef value) {
+@@ -993,20 +656,22 @@ static void replaceColor(CGColorRef *slot, CGColorRef value) {
  }
  
  - (void) removeFromSuperlayer {
@@ -11087,7 +11093,7 @@ index f31347a2..f3e4f65d 100644
  }
  
  - (void) addAnimation: (CAAnimation *) animation forKey: (NSString *) key {
-@@ -1017,6 +676,19 @@ static void replaceColor(CGColorRef *slot, CGColorRef value) {
+@@ -1017,6 +682,19 @@ static void replaceColor(CGColorRef *slot, CGColorRef value) {
      [_context startTimerIfNeeded];
  }
  
@@ -11107,7 +11113,7 @@ index f31347a2..f3e4f65d 100644
  - (CAAnimation *) animationForKey: (NSString *) key {
      return [_animations objectForKey: key];
  }
-@@ -1044,26 +716,7 @@ static void replaceColor(CGColorRef *slot, CGColorRef value) {
+@@ -1044,26 +722,7 @@ static void replaceColor(CGColorRef *slot, CGColorRef value) {
      return [super valueForKey: key];
  }
  
@@ -11134,7 +11140,7 @@ index f31347a2..f3e4f65d 100644
      CABasicAnimation *basic = [CABasicAnimation animationWithKeyPath: key];
  
      [basic setFromValue: [self valueForKey: key]];
-@@ -1081,22 +734,137 @@ static void replaceColor(CGColorRef *slot, CGColorRef value) {
+@@ -1081,22 +740,125 @@ static void replaceColor(CGColorRef *slot, CGColorRef value) {
      _textureId = value;
  }
  
@@ -11147,9 +11153,12 @@ index f31347a2..f3e4f65d 100644
 -    value = [value retain];
 -    [_textureContents release];
 -    _textureContents = value;
+-}
 +- (NSUInteger) autoresizingMask { return _autoresizingMask; }
 +- (void) setAutoresizingMask: (NSUInteger) v { _autoresizingMask = v; }
-+
+ 
+-- (BOOL) _drawsOwnContent {
+-    return NO;
 +- (BOOL) masksToBounds { return _masksToBounds; }
 +- (void) setMasksToBounds: (BOOL) v { _masksToBounds = v; }
 +
@@ -11163,20 +11172,6 @@ index f31347a2..f3e4f65d 100644
 +        _backgroundColor = v ? CGColorRetain(v) : NULL;
 +        if (_context) [_context startTimerIfNeeded];
 +    }
- }
- 
--- (BOOL) _drawsOwnContent {
--    return NO;
-+- (void) dealloc {
-+    if (_backgroundColor) CGColorRelease(_backgroundColor);
-+    if (_textureId && _context) [_context deleteTextureId: _textureId];
-+    [_textureId release];
-+    [_contents release];
-+    [_sublayers release];
-+    [_animations release];
-+    [_contentsGravity release];
-+    [_shadowPath release];
-+    [super dealloc];
  }
  
 -- (BOOL) _drawLayerContents: (CGRect) bounds opacity: (CGFloat) opacity {
