@@ -5586,7 +5586,7 @@ index 5f62ad0..5957bec 100644
  	DynamicVK::vkCmdBindDescriptorSets(buf->commandBuffer(), VK_PIPELINE_BIND_POINT_COMPUTE, _pso->layout(), 0, descriptorSets.size(), descriptorSets.data(), 0, nullptr);
  };
 diff --git a/src/indium/device.cpp b/src/indium/device.cpp
-index 04cc37b..f712c7a 100644
+index 04cc37b..2a45c64 100644
 --- a/src/indium/device.cpp
 +++ b/src/indium/device.cpp
 @@ -1,6 +1,9 @@
@@ -5708,7 +5708,23 @@ index 04cc37b..f712c7a 100644
 +			default: return "other";
 +		}
 +	}
-+
+ 
+-			for (const auto& embeddedSampler: info.embeddedSamplers) {
+-				Indium::EmbeddedSamplerDescriptor descriptor;
+-				descriptor.widthAddressMode = static_cast<Indium::EmbeddedSamplerDescriptor::AddressMode>(embeddedSampler.widthAddressMode);
+-				descriptor.heightAddressMode = static_cast<Indium::EmbeddedSamplerDescriptor::AddressMode>(embeddedSampler.heightAddressMode);
+-				descriptor.depthAddressMode = static_cast<Indium::EmbeddedSamplerDescriptor::AddressMode>(embeddedSampler.depthAddressMode);
+-				descriptor.magnificationFilter = static_cast<Indium::EmbeddedSamplerDescriptor::Filter>(embeddedSampler.magnificationFilter);
+-				descriptor.minificationFilter = static_cast<Indium::EmbeddedSamplerDescriptor::Filter>(embeddedSampler.minificationFilter);
+-				descriptor.mipmapFilter = static_cast<Indium::EmbeddedSamplerDescriptor::MipFilter>(embeddedSampler.mipmapFilter);
+-				descriptor.usesNormalizedCoordinates = embeddedSampler.usesNormalizedCoordinates;
+-				descriptor.compareFunction = static_cast<Indium::EmbeddedSamplerDescriptor::CompareFunction>(embeddedSampler.compareFunction);
+-				descriptor.anisotropyLevel = embeddedSampler.anisotropyLevel;
+-				descriptor.borderColor = static_cast<Indium::EmbeddedSamplerDescriptor::BorderColor>(embeddedSampler.borderColor);
+-				descriptor.lodMin = embeddedSampler.lodMin;
+-				descriptor.lodMax = embeddedSampler.lodMax;
+-
+-				functionInfo.embeddedSamplers.push_back(descriptor);
 +	std::string memoryFlagsString(VkMemoryPropertyFlags flags) {
 +		static const std::pair<VkMemoryPropertyFlags, const char*> names[] = {
 +			{ VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, "DEVICE_LOCAL" },
@@ -5748,23 +5764,7 @@ index 04cc37b..f712c7a 100644
 +				+ " heap=" + std::to_string(type.heapIndex));
 +		}
 +	}
- 
--			for (const auto& embeddedSampler: info.embeddedSamplers) {
--				Indium::EmbeddedSamplerDescriptor descriptor;
--				descriptor.widthAddressMode = static_cast<Indium::EmbeddedSamplerDescriptor::AddressMode>(embeddedSampler.widthAddressMode);
--				descriptor.heightAddressMode = static_cast<Indium::EmbeddedSamplerDescriptor::AddressMode>(embeddedSampler.heightAddressMode);
--				descriptor.depthAddressMode = static_cast<Indium::EmbeddedSamplerDescriptor::AddressMode>(embeddedSampler.depthAddressMode);
--				descriptor.magnificationFilter = static_cast<Indium::EmbeddedSamplerDescriptor::Filter>(embeddedSampler.magnificationFilter);
--				descriptor.minificationFilter = static_cast<Indium::EmbeddedSamplerDescriptor::Filter>(embeddedSampler.minificationFilter);
--				descriptor.mipmapFilter = static_cast<Indium::EmbeddedSamplerDescriptor::MipFilter>(embeddedSampler.mipmapFilter);
--				descriptor.usesNormalizedCoordinates = embeddedSampler.usesNormalizedCoordinates;
--				descriptor.compareFunction = static_cast<Indium::EmbeddedSamplerDescriptor::CompareFunction>(embeddedSampler.compareFunction);
--				descriptor.anisotropyLevel = embeddedSampler.anisotropyLevel;
--				descriptor.borderColor = static_cast<Indium::EmbeddedSamplerDescriptor::BorderColor>(embeddedSampler.borderColor);
--				descriptor.lodMin = embeddedSampler.lodMin;
--				descriptor.lodMax = embeddedSampler.lodMax;
--
--				functionInfo.embeddedSamplers.push_back(descriptor);
++
 +	struct GpuSelector {
 +		std::string value;
 +		std::string source; // empty when the loader's default order should decide
@@ -5827,7 +5827,12 @@ index 04cc37b..f712c7a 100644
 +		appendDeviceLog("vkEnumeratePhysicalDevices failed when counting devices; Metal will have no device");
 +		return;
 +	}
-+
+ 
+-auto result = DynamicVK::vkEnumeratePhysicalDevices(globalInstance, &count, nullptr);
+-		if (result != VK_SUCCESS && result != VK_INCOMPLETE) {
+-			std::cerr << "vkEnumeratePhysicalDevices failed with VkResult " << result << std::endl;
+-			return;
+-		}
 +	physicalDevices.resize(count);
 +	result = DynamicVK::vkEnumeratePhysicalDevices(globalInstance, &count, physicalDevices.data());
 +	if (result != VK_SUCCESS && result != VK_INCOMPLETE) {
@@ -5835,7 +5840,8 @@ index 04cc37b..f712c7a 100644
 +		return;
 +	}
  
--auto result = DynamicVK::vkEnumeratePhysicalDevices(globalInstance, &count, nullptr);
+-		physicalDevices.resize(count);
+-		result = DynamicVK::vkEnumeratePhysicalDevices(globalInstance, &count, physicalDevices.data());
 -		if (result != VK_SUCCESS && result != VK_INCOMPLETE) {
 -			std::cerr << "vkEnumeratePhysicalDevices failed with VkResult " << result << std::endl;
 -			return;
@@ -5851,31 +5857,13 @@ index 04cc37b..f712c7a 100644
 +		+ " skipCPUDevices=" + (skipCPUDevices ? "1" : "0") + " allDevices=" + (allDevices ? "1" : "0")
 +		+ " physicalDeviceCount=" + std::to_string(physicalDevices.size()));
  
--		physicalDevices.resize(count);
--		result = DynamicVK::vkEnumeratePhysicalDevices(globalInstance, &count, physicalDevices.data());
--		if (result != VK_SUCCESS && result != VK_INCOMPLETE) {
--			std::cerr << "vkEnumeratePhysicalDevices failed with VkResult " << result << std::endl;
+-		if (count == 0) {
+-			std::cerr << "vkEnumeratePhysicalDevices reported no physical devices" << std::endl;
 -			return;
 -		}
 +	std::vector<DeviceCandidate> candidates;
  
--		if (count == 0) {
--			std::cerr << "vkEnumeratePhysicalDevices reported no physical devices" << std::endl;
--			return;
-+	for (auto&& device: physicalDevices) {
-+		VkPhysicalDeviceProperties properties;
-+		DynamicVK::vkGetPhysicalDeviceProperties(device, &properties);
-+
-+		VkPhysicalDeviceIDProperties idProperties {};
-+		idProperties.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_ID_PROPERTIES;
-+		VkPhysicalDeviceProperties2 properties2 {};
-+		properties2.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2;
-+		properties2.pNext = &idProperties;
-+		if (DynamicVK::vkGetPhysicalDeviceProperties2) {
-+			DynamicVK::vkGetPhysicalDeviceProperties2(device, &properties2);
- 		}
- 
--	for (auto&& device: physicalDevices) {
+ 	for (auto&& device: physicalDevices) {
 -		VkPhysicalDeviceProperties props;
 -		DynamicVK::vkGetPhysicalDeviceProperties(device, &props);
 -
@@ -5886,6 +5874,18 @@ index 04cc37b..f712c7a 100644
 -			          << VK_API_VERSION_MAJOR(props.apiVersion) << '.'
 -			          << VK_API_VERSION_MINOR(props.apiVersion)
 -			          << ", and 1.3 is required" << std::endl;
++		VkPhysicalDeviceProperties properties;
++		DynamicVK::vkGetPhysicalDeviceProperties(device, &properties);
++
++		VkPhysicalDeviceIDProperties idProperties {};
++		idProperties.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_ID_PROPERTIES;
++		VkPhysicalDeviceProperties2 properties2 {};
++		properties2.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2;
++		properties2.pNext = &idProperties;
++		if (DynamicVK::vkGetPhysicalDeviceProperties2) {
++			DynamicVK::vkGetPhysicalDeviceProperties2(device, &properties2);
++		}
++
 +		std::string line = "physical name=\"" + std::string(properties.deviceName) + "\""
 +			+ " type=" + deviceTypeName(properties.deviceType)
 +			+ " vendorID=0x" + hexValue(properties.vendorID, 4)
@@ -5901,7 +5901,7 @@ index 04cc37b..f712c7a 100644
  			continue;
  		}
  
-@@ -157,29 +240,105 @@ auto result = DynamicVK::vkEnumeratePhysicalDevices(globalInstance, &count, null
+@@ -157,29 +240,132 @@ auto result = DynamicVK::vkEnumeratePhysicalDevices(globalInstance, &count, null
  		DynamicVK::vkGetPhysicalDeviceFeatures2(device, &features);
  
  		if (!features12.timelineSemaphore) {
@@ -5939,7 +5939,7 @@ index 04cc37b..f712c7a 100644
 +				selectedIndex = index;
 +				selectedReason = selector.source + " index " + selector.value;
 +			}
- 		}
++		}
 +		if (selectedIndex < 0) {
 +			for (size_t i = 0; i < candidates.size(); ++i) {
 +				if (nameContains(candidates[i].properties.deviceName, selector.value)) {
@@ -5948,28 +5948,55 @@ index 04cc37b..f712c7a 100644
 +					break;
 +				}
 +			}
-+		}
+ 		}
 +		if (selectedIndex < 0) {
 +			appendDeviceLog("selector " + selector.source + " value=\"" + selector.value + "\" matched no supported device; falling back to the loader default");
 +		}
 +	}
- 
--		accepted.push_back({ rank, std::make_shared<PrivateDevice>(std::move(device)) });
++
 +	const bool haveHardwareDevice = std::any_of(candidates.begin(), candidates.end(), [](const DeviceCandidate& candidate) {
 +		return candidate.properties.deviceType != VK_PHYSICAL_DEVICE_TYPE_CPU;
 +	});
 +
 +	if (selectedIndex < 0) {
++		auto scoreDevice = [](VkPhysicalDeviceType type) -> int {
++			switch (type) {
++				case VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU:
++					return 40;
++				case VK_PHYSICAL_DEVICE_TYPE_INTEGRATED_GPU:
++					return 30;
++				case VK_PHYSICAL_DEVICE_TYPE_VIRTUAL_GPU:
++					return 20;
++				case VK_PHYSICAL_DEVICE_TYPE_CPU:
++					return 10;
++				default:
++					return 1;
++			}
++		};
++
++		int bestScore = -1;
 +		for (size_t i = 0; i < candidates.size(); ++i) {
 +			if (skipCPUDevices && haveHardwareDevice && candidates[i].properties.deviceType == VK_PHYSICAL_DEVICE_TYPE_CPU) {
 +				continue;
 +			}
-+			selectedIndex = (long) i;
-+			selectedReason = skipCPUDevices ? "loader-first-hardware" : "loader-first";
-+			break;
++			int score = scoreDevice(candidates[i].properties.deviceType);
++			if (score > bestScore) {
++				bestScore = score;
++				selectedIndex = (long) i;
++			}
++		}
++		if (selectedIndex >= 0) {
++			if (candidates[selectedIndex].properties.deviceType == VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU) {
++				selectedReason = (selectedIndex == 0) ? "loader-first" : "heuristic-discrete";
++			} else if (skipCPUDevices && haveHardwareDevice) {
++				selectedReason = "loader-first-hardware";
++			} else {
++				selectedReason = "loader-first";
++			}
 +		}
 +	}
-+
+ 
+-		accepted.push_back({ rank, std::make_shared<PrivateDevice>(std::move(device)) });
 +	if (selectedIndex < 0) {
 +		appendDeviceLog("no usable supported Vulkan device found; Metal will have no device");
 +		return;
@@ -6021,7 +6048,7 @@ index 04cc37b..f712c7a 100644
  };
  
  void Indium::finitGlobalDeviceList() {
-@@ -190,8 +349,16 @@ Indium::Device::~Device() {};
+@@ -190,8 +376,16 @@ Indium::Device::~Device() {};
  
  Indium::PrivateDevice::PrivateDevice(VkPhysicalDevice physicalDevice):
  	_physicalDevice(physicalDevice)
@@ -6039,7 +6066,7 @@ index 04cc37b..f712c7a 100644
  
  	std::vector<VkQueueFamilyProperties> queueFamilies;
  	uint32_t count = 0;
-@@ -329,7 +496,6 @@ Indium::PrivateDevice::PrivateDevice(VkPhysicalDevice physicalDevice):
+@@ -329,7 +523,6 @@ Indium::PrivateDevice::PrivateDevice(VkPhysicalDevice physicalDevice):
  		{ VK_KHR_EXTERNAL_MEMORY_FD_EXTENSION_NAME, Feature::ExternalMemoryFD },
  		{ VK_KHR_EXTERNAL_SEMAPHORE_FD_EXTENSION_NAME, Feature::ExternalSemaphoreFD },
  		{ VK_KHR_SHADER_NON_SEMANTIC_INFO_EXTENSION_NAME, Feature::NonSemanticInfo },
@@ -6047,7 +6074,7 @@ index 04cc37b..f712c7a 100644
  	};
  
  	for (const auto& prop: extProps) {
-@@ -341,6 +507,36 @@ Indium::PrivateDevice::PrivateDevice(VkPhysicalDevice physicalDevice):
+@@ -341,6 +534,36 @@ Indium::PrivateDevice::PrivateDevice(VkPhysicalDevice physicalDevice):
  		}
  	}
  
@@ -6084,7 +6111,7 @@ index 04cc37b..f712c7a 100644
  	VkDeviceCreateInfo deviceCreateInfo {};
  	deviceCreateInfo.sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO;
  	deviceCreateInfo.pQueueCreateInfos = queueCreateInfos.data();
-@@ -354,6 +550,7 @@ Indium::PrivateDevice::PrivateDevice(VkPhysicalDevice physicalDevice):
+@@ -354,6 +577,7 @@ Indium::PrivateDevice::PrivateDevice(VkPhysicalDevice physicalDevice):
  	}
  
  	_features = indiumFeatures;
@@ -6092,7 +6119,7 @@ index 04cc37b..f712c7a 100644
  
  	for (const auto& index: queueFamilyIndices) {
  		VkQueue queue;
-@@ -405,6 +602,9 @@ Indium::PrivateDevice::PrivateDevice(VkPhysicalDevice physicalDevice):
+@@ -405,6 +629,9 @@ Indium::PrivateDevice::PrivateDevice(VkPhysicalDevice physicalDevice):
  };
  
  Indium::PrivateDevice::~PrivateDevice() {
@@ -6102,7 +6129,7 @@ index 04cc37b..f712c7a 100644
  	if (_oneshotCommandPool) {
  		DynamicVK::vkDestroyCommandPool(_device, _oneshotCommandPool, nullptr);
  	}
-@@ -416,122 +616,21 @@ std::string Indium::PrivateDevice::name() const {
+@@ -416,122 +643,21 @@ std::string Indium::PrivateDevice::name() const {
  	return _properties.deviceName;
  };
  
@@ -6240,7 +6267,7 @@ index 04cc37b..f712c7a 100644
  }
  
  std::shared_ptr<Indium::CommandQueue> Indium::PrivateDevice::newCommandQueue() {
-@@ -543,9 +642,9 @@ std::shared_ptr<Indium::RenderPipelineState> Indium::PrivateDevice::newRenderPip
+@@ -543,9 +669,9 @@ std::shared_ptr<Indium::RenderPipelineState> Indium::PrivateDevice::newRenderPip
  };
  
  std::shared_ptr<Indium::ComputePipelineState> Indium::PrivateDevice::newComputePipelineState(const ComputePipelineDescriptor& descriptor, PipelineOption options, std::shared_ptr<ComputePipelineReflection> reflection) {
@@ -6253,7 +6280,7 @@ index 04cc37b..f712c7a 100644
  	return std::make_shared<PrivateComputePipelineState>(shared_from_this(), descriptor);
  };
  
-@@ -566,171 +665,33 @@ std::shared_ptr<Indium::Library> Indium::PrivateDevice::newLibrary(const void* d
+@@ -566,171 +692,33 @@ std::shared_ptr<Indium::Library> Indium::PrivateDevice::newLibrary(const void* d
  	size_t translatedSize = 0;
  	Iridium::OutputInfo outputInfo;
  	auto translatedData = Iridium::translate(data, length, translatedSize, outputInfo);
@@ -6445,7 +6472,7 @@ index 04cc37b..f712c7a 100644
  std::shared_ptr<Indium::Texture> Indium::PrivateDevice::newTexture(const TextureDescriptor& descriptor) {
  	return std::make_shared<ConcreteTexture>(shared_from_this(), descriptor);
  };
-@@ -747,6 +708,19 @@ std::shared_ptr<Indium::Device> Indium::createSystemDefaultDevice() {
+@@ -747,6 +735,19 @@ std::shared_ptr<Indium::Device> Indium::createSystemDefaultDevice() {
  	return globalDeviceList.empty() ? nullptr : globalDeviceList.front();
  };
  
@@ -6465,7 +6492,7 @@ index 04cc37b..f712c7a 100644
  void Indium::PrivateDevice::pollEvents(uint64_t timeoutNanoseconds) {
  	// this is held for the entire duration of the poll so we can
  	// ensure we're the only one polling, which allows us to avoid
-@@ -758,9 +732,35 @@ void Indium::PrivateDevice::pollEvents(uint64_t timeoutNanoseconds) {
+@@ -758,9 +759,35 @@ void Indium::PrivateDevice::pollEvents(uint64_t timeoutNanoseconds) {
  	const std::vector<VkSemaphore> semaphores = _eventLoopSemaphores;
  	const std::vector<uint64_t> values = _eventLoopWaitValues;
  	const std::vector<std::function<void()>> callbacks = _eventLoopCallbacks;
@@ -6501,7 +6528,7 @@ index 04cc37b..f712c7a 100644
  	VkSemaphoreWaitInfo info {};
  	info.sType = VK_STRUCTURE_TYPE_SEMAPHORE_WAIT_INFO;
  	info.semaphoreCount = semaphores.size();
-@@ -768,7 +768,19 @@ void Indium::PrivateDevice::pollEvents(uint64_t timeoutNanoseconds) {
+@@ -768,7 +795,19 @@ void Indium::PrivateDevice::pollEvents(uint64_t timeoutNanoseconds) {
  	info.pValues = values.data();
  	info.flags = VK_SEMAPHORE_WAIT_ANY_BIT;
  
@@ -6522,7 +6549,7 @@ index 04cc37b..f712c7a 100644
  
  	if (result == VK_TIMEOUT) {
  		// timed out with no semaphores ready
-@@ -839,15 +851,30 @@ void Indium::PrivateDevice::waitForSemaphore(VkSemaphore semaphore, uint64_t tar
+@@ -839,15 +878,30 @@ void Indium::PrivateDevice::waitForSemaphore(VkSemaphore semaphore, uint64_t tar
  		_eventLoopSemaphores.push_back(semaphore);
  		_eventLoopWaitValues.push_back(targetValue);
  		_eventLoopCallbacks.push_back(callback);
@@ -6556,7 +6583,7 @@ index 04cc37b..f712c7a 100644
  	VkSemaphoreTypeCreateInfo typeInfo {};
  	typeInfo.sType = VK_STRUCTURE_TYPE_SEMAPHORE_TYPE_CREATE_INFO;
  	typeInfo.semaphoreType = VK_SEMAPHORE_TYPE_TIMELINE;
-@@ -870,7 +897,14 @@ Indium::TimelineSemaphore Indium::PrivateDevice::getTimelineSemaphore() {
+@@ -870,7 +924,14 @@ Indium::TimelineSemaphore Indium::PrivateDevice::getTimelineSemaphore() {
  };
  
  void Indium::PrivateDevice::putTimelineSemaphore(const TimelineSemaphore& semaphore) {
@@ -6572,7 +6599,7 @@ index 04cc37b..f712c7a 100644
  };
  
  std::shared_ptr<Indium::TimelineSemaphore> Indium::PrivateDevice::getWrappedTimelineSemaphore() {
-@@ -916,3 +950,160 @@ std::shared_ptr<Indium::BinarySemaphore> Indium::PrivateDevice::getWrappedBinary
+@@ -916,3 +977,160 @@ std::shared_ptr<Indium::BinarySemaphore> Indium::PrivateDevice::getWrappedBinary
  		delete ptr;
  	});
  };
