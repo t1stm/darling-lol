@@ -225,7 +225,7 @@
       "revision": "79095644e9bdd1acc6564f8d46bb4eff1c58d161",
       "repository": "https://github.com/VibeDarling/darling-metal.git",
       "patch": "patches/metal.patch",
-      "modified_files": 31,
+      "modified_files": 32,
       "new_files": [
         "include/Metal/MTLArgument.h",
         "include/Metal/MTLExceptionBridge.h",
