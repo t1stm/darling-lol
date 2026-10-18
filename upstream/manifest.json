@@ -8,7 +8,7 @@
       "revision": "1d451b15ffc0937b41017bf3461cbf9fd587f977",
       "repository": "https://github.com/VibeDarling/darling.git",
       "patch": "patches/darling.patch",
-      "modified_files": 92,
+      "modified_files": 94,
       "new_files": [
         "src/CoreAudio/AudioTrace.h",
         "src/CoreAudio/CoreAudio/AudioConverterShim.c",
