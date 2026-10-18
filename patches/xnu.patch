@@ -1851,7 +1851,7 @@ index 7d5ef80..46debb8 100644
  	[521] = sys_abort_with_payload,
  	[524] = sys_setattrlistat,
 diff --git a/darling/src/libsystem_kernel/emulation/src/xnu_syscall/bsd/helper/misc/sysctl_hw.c b/darling/src/libsystem_kernel/emulation/src/xnu_syscall/bsd/helper/misc/sysctl_hw.c
-index f273989..058b985 100644
+index f273989..be17f93 100644
 --- a/darling/src/libsystem_kernel/emulation/src/xnu_syscall/bsd/helper/misc/sysctl_hw.c
 +++ b/darling/src/libsystem_kernel/emulation/src/xnu_syscall/bsd/helper/misc/sysctl_hw.c
 @@ -9,6 +9,8 @@
@@ -1871,23 +1871,25 @@ index f273989..058b985 100644
  	_HW_PHYSICAL_CPU = 1000,
  	_HW_PHYSICAL_CPU_MAX,
  	_HW_LOGICAL_CPU,
-@@ -24,10 +27,14 @@ enum {
+@@ -24,10 +27,16 @@ enum {
  	_HW_CPUSUBTYPE,
  	_HW_CPUTHREADTYPE,
  	_HW_64BITCAPABLE,
 -	_HW_CPUFREQUENCY = 15,
++	_HW_PACKAGES,
 +	_HW_CPUFREQUENCY_COMPAT = 15,
 +	_HW_CPUFREQUENCY = 1500,
 +	_HW_CACHECONFIG = 1200,
 +	_HW_CACHESIZE,
  };
  
++static sysctl_handler(handle_packages);
  static sysctl_handler(handle_availcpu);
 +static sysctl_handler(handle_ncpu);
  static sysctl_handler(handle_physicalcpu);
  static sysctl_handler(handle_physicalcpu_max);
  static sysctl_handler(handle_logicalcpu);
-@@ -39,11 +46,78 @@ static sysctl_handler(handle_cpusubtype);
+@@ -39,11 +48,78 @@ static sysctl_handler(handle_cpusubtype);
  static sysctl_handler(handle_cputhreadtype);
  static sysctl_handler(handle_cpu64bitcapable);
  static sysctl_handler(handle_machine);
@@ -1967,7 +1969,7 @@ index f273989..058b985 100644
  	{ .oid = _HW_PHYSICAL_CPU, .type = CTLTYPE_INT, .exttype = "", .name = "physicalcpu", .handler = handle_physicalcpu },
  	{ .oid = _HW_PHYSICAL_CPU_MAX, .type = CTLTYPE_INT, .exttype = "", .name = "physicalcpu_max", .handler = handle_physicalcpu_max },
  	{ .oid = _HW_LOGICAL_CPU, .type = CTLTYPE_INT, .exttype = "", .name = "logicalcpu", .handler = handle_logicalcpu },
-@@ -55,7 +129,12 @@ const struct known_sysctl sysctls_hw[] = {
+@@ -55,7 +131,13 @@ const struct known_sysctl sysctls_hw[] = {
  	{ .oid = _HW_CPUTHREADTYPE, .type = CTLTYPE_INT, .exttype = "", .name = "cputhreadtype", .handler = handle_cputhreadtype },
  	{ .oid = _HW_64BITCAPABLE, .type = CTLTYPE_INT, .exttype = "", .name = "cpu64bit_capable", .handler = handle_cpu64bitcapable },
  	{ .oid = HW_MACHINE, .type = CTLTYPE_STRING, .exttype = "S", .name = "machine", .handler = handle_machine },
@@ -1978,10 +1980,11 @@ index f273989..058b985 100644
 +	{ .oid = _HW_CPUFREQUENCY_COMPAT, .type = CTLTYPE_INT, .exttype = "I", .name = "cpufrequency_compat", .handler = handle_cpufrequency_compat },
 +	{ .oid = _HW_CACHECONFIG, .type = CTLTYPE_OPAQUE, .exttype = "Q", .name = "cacheconfig", .handler = handle_cacheconfig },
 +	{ .oid = _HW_CACHESIZE, .type = CTLTYPE_OPAQUE, .exttype = "Q", .name = "cachesize", .handler = handle_cachesize },
++	{ .oid = _HW_PACKAGES, .type = CTLTYPE_INT, .exttype = "I", .name = "packages", .handler = handle_packages },
  	{ .oid = -1 }
  };
  
-@@ -71,6 +150,32 @@ static const struct host_basic_info* gethostinfo(void)
+@@ -71,6 +153,32 @@ static const struct host_basic_info* gethostinfo(void)
  		hself = mach_host_self();
  		host_info(hself, HOST_BASIC_INFO, &hinfo, &hcount);
  		mach_port_deallocate(mach_task_self(), hself);
@@ -2014,7 +2017,7 @@ index f273989..058b985 100644
  	}
  
  	return &hinfo;
-@@ -83,6 +188,13 @@ sysctl_handler(handle_availcpu)
+@@ -83,6 +191,13 @@ sysctl_handler(handle_availcpu)
  	return 0;
  }
  
@@ -2028,7 +2031,21 @@ index f273989..058b985 100644
  sysctl_handler(handle_physicalcpu)
  {
  	sysctl_handle_size(sizeof(int));
-@@ -169,16 +281,49 @@ sysctl_handler(handle_cputhreadtype)
+@@ -111,6 +226,13 @@ sysctl_handler(handle_logicalcpu_max)
+ 	return 0;
+ }
+ 
++sysctl_handler(handle_packages)
++{
++	sysctl_handle_size(sizeof(int));
++	*((int*) old) = 1;
++	return 0;
++}
++
+ sysctl_handler(handle_memsize)
+ {
+ 
+@@ -169,16 +291,49 @@ sysctl_handler(handle_cputhreadtype)
  	return 0;
  }
  
@@ -2085,7 +2102,7 @@ index f273989..058b985 100644
  }
  
  sysctl_handler(handle_cpu64bitcapable)
-@@ -193,3 +338,104 @@ sysctl_handler(handle_machine)
+@@ -193,3 +348,104 @@ sysctl_handler(handle_machine)
  	copyout_string(need_uname()->machine, (char*) old, oldlen);
  	return 0;
  }
@@ -3294,7 +3311,7 @@ new file mode 100644
 +	return -ENOSYS;
 +}
 diff --git a/darling/src/libsystem_kernel/emulation/src/xnu_syscall/bsd/impl/misc/proc_info.c b/darling/src/libsystem_kernel/emulation/src/xnu_syscall/bsd/impl/misc/proc_info.c
-index c2f70fb..af904ed 100644
+index c2f70fb..b3fd5b6 100644
 --- a/darling/src/libsystem_kernel/emulation/src/xnu_syscall/bsd/impl/misc/proc_info.c
 +++ b/darling/src/libsystem_kernel/emulation/src/xnu_syscall/bsd/impl/misc/proc_info.c
 @@ -83,6 +83,38 @@ long sys_proc_info(uint32_t callnum, int32_t pid, uint32_t flavor,
@@ -3336,6 +3353,88 @@ index c2f70fb..af904ed 100644
  		case 1: // proc_listpids
  		default:
  			__simple_printf("sys_proc_info(): Unsupported callnum: %d\n",
+@@ -112,11 +144,16 @@ static long _proc_pidinfo_regionpath(int32_t pid, uint64_t arg, void* buffer, in
+ static long _proc_pidinfo_taskinfo(int32_t pid, void* buffer, int32_t bufsize);
+ static long _proc_pidinfo_taskallinfo(int32_t pid, void* buffer, int32_t bufsize);
+ static long _proc_pidinfo_listthreads(int32_t pid, void* buffer, int32_t bufsize);
++static long _proc_pidinfo_listfds(int32_t pid, void* buffer, int32_t bufsize);
+ 
+ long _proc_pidinfo(int32_t pid, uint32_t flavor, uint64_t arg, void* buffer, int32_t bufsize)
+ {
+ 	switch (flavor)
+ 	{
++		case PROC_PIDLISTFDS:
++		{
++			return _proc_pidinfo_listfds(pid, buffer, bufsize);
++		}
+ 		// arg is a memory location we want to know about
+ 		// We return information on the mapping where the address belongs or any following mapping
+ 		// Then we return -ESRCH.
+@@ -827,3 +864,64 @@ bail:
+ 	close_internal(fd);
+ 	return count * sizeof(uint64_t);
+ }
++
++static long _proc_pidinfo_listfds(int32_t pid, void* buffer, int32_t bufsize)
++{
++	struct proc_fdinfo* fds = (struct proc_fdinfo*)buffer;
++	int32_t maxCount = (buffer && bufsize > 0) ? (bufsize / (int32_t)sizeof(struct proc_fdinfo)) : 0;
++	int32_t count = 0;
++	int fd, ret;
++	long basep = 0;
++	char dents[256];
++	char path[64];
++	bool is_self = (pid <= 0 || pid == (int32_t)LINUX_SYSCALL0(__NR_getpid));
++
++	if (pid <= 0)
++		__simple_sprintf(path, "/proc/self/fd");
++	else
++		__simple_sprintf(path, "/proc/%d/fd", pid);
++
++	fd = sys_open_nocancel(path, BSD_O_RDONLY | BSD_O_DIRECTORY, 0);
++	if (fd < 0)
++		return -ESRCH;
++
++	while ((ret = sys_getdirentries(fd, (char*) dents, sizeof(dents), &basep)) > 0)
++	{
++		int pos = 0;
++
++		while (pos < ret)
++		{
++			struct bsd_dirent* dent = (struct bsd_dirent*) &dents[pos];
++
++			if (!isdigit(dent->d_name[0]))
++			{
++				pos += dent->d_reclen;
++				continue;
++			}
++
++			int this_fd = (int)__simple_atoi(dent->d_name, NULL);
++			if (is_self && this_fd == fd)
++			{
++				pos += dent->d_reclen;
++				continue;
++			}
++
++			if (fds && count < maxCount)
++			{
++				fds[count].proc_fd = this_fd;
++				fds[count].proc_fdtype = PROX_FDTYPE_VNODE;
++			}
++			++count;
++
++			pos += dent->d_reclen;
++		}
++	}
++
++	close_internal(fd);
++
++	if (!buffer || bufsize == 0)
++		return count * sizeof(struct proc_fdinfo);
++
++	int32_t filled = (count < maxCount) ? count : maxCount;
++	return filled * sizeof(struct proc_fdinfo);
++}
 diff --git a/darling/src/libsystem_kernel/emulation/src/xnu_syscall/bsd/impl/misc/ptrace.c b/darling/src/libsystem_kernel/emulation/src/xnu_syscall/bsd/impl/misc/ptrace.c
 index 0a8f1e4..a19f12e 100644
 --- a/darling/src/libsystem_kernel/emulation/src/xnu_syscall/bsd/impl/misc/ptrace.c
@@ -6226,7 +6325,7 @@ diff --git a/darling/src/libsystem_kernel/emulation/src/xnu_syscall/bsd/impl/mis
 +        case CS_OPS_STATUS:
 +            if (!useraddr) return -EFAULT;
 +            if (usersize < sizeof(uint32_t)) return -ERANGE;
-+            { uint32_t flags = 0;
++            { uint32_t flags = CS_VALID | CS_HARD | CS_KILL | CS_RESTRICT | CS_RUNTIME; // (0x10b01)
 +              return darling_security_write(useraddr, &flags, sizeof(flags)); }
 +        case CS_OPS_CDHASH:
 +        case CS_OPS_BLOB:
