@@ -1053,7 +1053,7 @@ index 0000000..0a7136c
 +#endif
 diff --git a/private-include/Metal/MTLDeviceInfo.h b/private-include/Metal/MTLDeviceInfo.h
 new file mode 100644
-index 0000000..64aaf15
+index 0000000..9958daf
 --- /dev/null
 +++ b/private-include/Metal/MTLDeviceInfo.h
 @@ -0,0 +1,166 @@
@@ -1074,7 +1074,7 @@ index 0000000..64aaf15
 +namespace MTLDeviceInfo {
 +
 +// Used when neither the cleaned nor the raw Vulkan name has any characters.
-+static constexpr const char* kFallbackName = "Darling Indium Device";
++static constexpr const char* kFallbackName = "Generic Display Adapter";
 +// A real Mac never reports registry ID 0, and apps use it as a key for the device.
 +static constexpr uint64_t kDefaultRegistryID = 0x100000439ULL;
 +
