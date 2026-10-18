@@ -3488,7 +3488,7 @@ new file mode 100644
 +namespace MTLDeviceInfo {
 +
 +// Used when neither the cleaned nor the raw Vulkan name has any characters.
-+static constexpr const char* kFallbackName = "Darling Indium Device";
++static constexpr const char* kFallbackName = "Generic Display Adapter";
 +
 +static inline bool isSpace(char c) {
 +	return c == ' ' || c == '\t' || c == '\n' || c == '\r' || c == '\f' || c == '\v';
