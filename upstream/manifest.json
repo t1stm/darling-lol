@@ -258,7 +258,7 @@
       "revision": "a6a452b3c23e3546a1e0a95d0cf2e49b4451b3c2",
       "repository": "https://github.com/VibeDarling/darling-xnu.git",
       "patch": "patches/xnu.patch",
-      "modified_files": 53,
+      "modified_files": 54,
       "new_files": [
         "darling/src/libsystem_kernel/emulation/include/common/cpu_frequency.h",
         "darling/src/libsystem_kernel/emulation/include/common/cpu_topology.h",

@@ -3530,6 +3530,51 @@ index 0f4f11f..7d0eba4 100644
  
  	if (ret < 0)
  		ret = errno_linux_to_bsd(ret);
+diff --git a/darling/src/libsystem_kernel/emulation/src/xnu_syscall/bsd/impl/process/execve.c b/darling/src/libsystem_kernel/emulation/src/xnu_syscall/bsd/impl/process/execve.c
+index 05bd1b6..382135d 100644
+--- a/darling/src/libsystem_kernel/emulation/src/xnu_syscall/bsd/impl/process/execve.c
++++ b/darling/src/libsystem_kernel/emulation/src/xnu_syscall/bsd/impl/process/execve.c
+@@ -166,8 +166,21 @@ long sys_execve(const char* fname, const char** argvp, const char** envp)
+ 		// count original arguments
+ 		while (argvp[len++]);
+ 
++		int is_league_ux = ((vc.path != NULL && strstr(vc.path, "LeagueClientUx") != NULL) ||
++		                    (fname != NULL && strstr(fname, "LeagueClientUx") != NULL));
++		int has_flag = 0;
++		if (is_league_ux) {
++			for (int i = 0; i < len - 1; i++) {
++				if (argvp[i] && strstr(argvp[i], "--disable-accelerated-video-decode")) {
++					has_flag = 1;
++					break;
++				}
++			}
++		}
++		int extra_args = (is_league_ux && !has_flag) ? 1 : 0;
++
+ 		// allocate a new argvp and argv0
+-		modargvp = (const char**) __builtin_alloca(sizeof(void*) * (len+1));
++		modargvp = (const char**) __builtin_alloca(sizeof(void*) * (len + 1 + extra_args));
+ 		buf = __builtin_alloca(strlen(mldr_path) + 2 + strlen(vc.path));
+ 
+ 		// set up the new argv0 (mldr path + "!" + executable path)
+@@ -177,9 +190,16 @@ long sys_execve(const char* fname, const char** argvp, const char** envp)
+ 		modargvp[0] = buf;
+ 
+ 		// append original arguments
+-		for (int i = 1; i < len+1; i++)
++		for (int i = 1; i < len; i++)
+ 			modargvp[i] = argvp[i-1];
+ 
++		if (extra_args) {
++			modargvp[len] = "--disable-accelerated-video-decode";
++			modargvp[len + 1] = NULL;
++		} else {
++			modargvp[len] = NULL;
++		}
++
+ 		argvp = modargvp;
+ 		path_to_exec = mldr_path;
+ 	}
 diff --git a/darling/src/libsystem_kernel/emulation/src/xnu_syscall/bsd/impl/process/fork.c b/darling/src/libsystem_kernel/emulation/src/xnu_syscall/bsd/impl/process/fork.c
 index 7e00222..74dd7f9 100644
 --- a/darling/src/libsystem_kernel/emulation/src/xnu_syscall/bsd/impl/process/fork.c

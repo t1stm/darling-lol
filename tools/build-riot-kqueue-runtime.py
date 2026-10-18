@@ -50,7 +50,7 @@ repairs += [('src/xnu_syscall/bsd/impl/'+name,repair_flags,
                  'psynch/psynch_cvbroad.c','psynch/psynch_cvclrprepost.c','psynch/psynch_cvsignal.c',
                  'psynch/psynch_rw_rdlock.c','psynch/psynch_rw_unlock.c','psynch/psynch_rw_wrlock.c','psynch/ulock_wake.c',
                  # select busy-loop trace (opt-in) and the network flag conversions
-                 'select/select.c','network/recvfrom.c','network/recvmsg.c','network/sendto.c','network/sendmsg.c','unistd/read.c','unistd/close.c','process/fork.c',
+                 'select/select.c','network/recvfrom.c','network/recvmsg.c','network/sendto.c','network/sendmsg.c','unistd/read.c','unistd/close.c','process/fork.c','process/execve.c',
                  # the allocator's reclamation hint
                  'mman/madvise.c')]
 # RPC guards use the full native signal mask. Rebuild both users of the
