@@ -2,7 +2,7 @@
 
 ## 1. Executive Summary
 
-This document provides a comprehensive technical reference for all unpushed changes currently residing on the local `main` branch ahead of `origin/main` (29 commits). 
+This document provides a comprehensive technical reference for all unpushed changes currently residing on the local `main` branch ahead of `origin/main` (31 commits). 
 
 The accumulated changes advance the runtime across five primary pillars:
 1. **Darwin / XNU Kernel & Security ABI Compliance**: Truthful kernel information queries, realistic code-signing semantics, and file descriptor introspection.
@@ -76,12 +76,14 @@ All modifications strictly conform to official Apple Darwin, XNU, POSIX, FreeDes
   - `de661c9`: *QuartzCore: resolve CAMetalLayer drawable timeout and starvation*
   - `e8dd652`: *OpenGL: close failed X11 connections in CGLCreateContext display recovery*
   - `334d1a5`: *fix(cocotron): resolve native display and swapchain target in CAMetalLayer*
+  - `84170b3`: *perf(cocotron): eliminate synchronous CPU fence wait and add multi-flight presentation*
 - **Technical Details:**
   - **Direct Vulkan Presentation (`VkSurfaceKHR` + `VkSwapchainKHR`)**: Completely bypassed legacy cross-API OpenGL/EGL image import pipelines in `CAMetalLayer.mm`. Rendered Metal drawables are presented directly to the X11/Xwayland surface via Vulkan WSI.
   - **Multi-Tier Native X11 Display Resolution**: Resolved `nativeDpy` using 5 fallback levels (`subwinObj nativeDisplay`, runtime ivar inspection, parent window ivar, AppKit active display, and dynamic `XOpenDisplay`).
   - **Dynamic `libX11` Symbol Resolution**: Implemented `resolveX11Symbols()` to dynamically bind `XQueryTree`, `XMapRaised`, `XMapWindow`, `XUnmapWindow`, `XFlush`, and `XOpenDisplay`.
   - **Hierarchy Traversal & Xwayland Compatibility**: In `getTopLevelWindow`, traverses window parents via `parentNativeWindow` and `XQueryTree` up to root-child. Supports configurable presentation target via `DARLING_VULKAN_PRESENT_TARGET` (`auto`, `subwin`, `toplevel`), automatically falling back to top-level and unmapping (`XUnmapWindow`) opaque child windows if subwindow presentation fails.
   - **Elimination of `SIGABRT` Crashes**: Replaced `abort()` stubs in `-[CAMetalDrawable presentAtTime:]` and `-[CAMetalDrawable presentAfterMinimumDuration:]` with forwarding to `[self present]`, resolving the fatal signal 6 crash at frame 18-19.
+  - **Multi-Flight Pipelining & CPU Unblocking**: Removed the blocking `vkWaitForFences` synchronous wait preceding `vkQueuePresentKHR` that previously forced the CPU render thread to idle until the GPU completed blitting. Introduced a `NUM_FRAMES_IN_FLIGHT` ring buffer with dedicated in-flight command buffers, fences, and semaphores, allowing the CPU to record frame $N$ while the GPU presents frame $N-1$, and narrowed Vulkan pipeline barriers from `VK_PIPELINE_STAGE_ALL_COMMANDS_BIT` to `COLOR_ATTACHMENT_OUTPUT` and `BOTTOM_OF_PIPE`.
   - **Discrete GPU Priority**: Configured `Indium::initGlobalDeviceList` to prefer `VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU` over integrated GPUs, and sanitized fallback MTLDevice name to `"Generic Display Adapter"`.
   - **Connection Leak Fix in OpenGL Recovery**: Ensured failed X11 display connections in `CGLCreateContext` recovery paths are explicitly closed via `XCloseDisplay`, preventing file descriptor exhaustion.
 

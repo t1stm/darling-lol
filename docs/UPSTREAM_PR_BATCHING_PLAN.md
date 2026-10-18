@@ -87,6 +87,7 @@ flowchart TD
   - `de661c9`: `QuartzCore: resolve CAMetalLayer drawable timeout and starvation`
   - `e8dd652`: `OpenGL: close failed X11 connections in CGLCreateContext display recovery`
   - `334d1a5`: `fix(cocotron): resolve native display and swapchain target in CAMetalLayer`
+  - `84170b3`: `perf(cocotron): eliminate synchronous CPU fence wait and add multi-flight presentation`
 - **Scope & Rationale:**
   - Prioritizes discrete GPU over integrated GPU in `Indium::initGlobalDeviceList`.
   - Sanitizes GPU fallback name to standard `"Generic Display Adapter"`.
