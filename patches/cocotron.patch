@@ -11307,7 +11307,7 @@ index 757dd8c9..cbc313d5 100644
  	CFTimeInterval presentedTime() const;
  
 diff --git a/QuartzCore/CAMetalLayer.mm b/QuartzCore/CAMetalLayer.mm
-index b81e2e14..87cc4b4b 100644
+index b81e2e14..b52dcb0d 100644
 --- a/QuartzCore/CAMetalLayer.mm
 +++ b/QuartzCore/CAMetalLayer.mm
 @@ -17,38 +17,333 @@
@@ -11949,7 +11949,7 @@ index b81e2e14..87cc4b4b 100644
  	for (auto& drawable: _drawables) {
  		if (drawable) {
  			drawable->disown();
-@@ -455,14 +799,411 @@ static void reportGLErrors(void) {
+@@ -455,14 +799,443 @@ static void reportGLErrors(void) {
  	}
  	_usableDrawablesBitmap = 0;
  
@@ -12209,8 +12209,40 @@ index b81e2e14..87cc4b4b 100644
 +				DynamicVK::vkGetPhysicalDeviceSurfacePresentModesKHR(dev->physicalDevice(), _vkSurface, &modeCount, modes.data());
 +			}
 +
++			char modesLog[256];
++			int mOff = snprintf(modesLog, sizeof(modesLog), "Surface present modes (count=%u):", modeCount);
++			for (auto m : modes) {
++				if (mOff < (int)sizeof(modesLog) - 16) {
++					mOff += snprintf(modesLog + mOff, sizeof(modesLog) - mOff, " %d", (int)m);
++				}
++			}
++			appendDeviceLog(modesLog);
++
++			const char* vsyncEnv = getenv("RCLOL_GPU_DIRECT_VSYNC");
++			BOOL syncEnabled = _displaySyncEnabled;
++			if (vsyncEnv && vsyncEnv[0] == '0') {
++				syncEnabled = NO;
++			}
++			const char* pmEnv = getenv("DARLING_VULKAN_PRESENT_MODE");
++
 +			VkPresentModeKHR chosenPresentMode = VK_PRESENT_MODE_FIFO_KHR;
-+			if (!_displaySyncEnabled) {
++			if (pmEnv && strcmp(pmEnv, "mailbox") == 0) {
++				for (auto m : modes) {
++					if (m == VK_PRESENT_MODE_MAILBOX_KHR) {
++						chosenPresentMode = VK_PRESENT_MODE_MAILBOX_KHR;
++						break;
++					}
++				}
++			} else if (pmEnv && strcmp(pmEnv, "immediate") == 0) {
++				for (auto m : modes) {
++					if (m == VK_PRESENT_MODE_IMMEDIATE_KHR) {
++						chosenPresentMode = VK_PRESENT_MODE_IMMEDIATE_KHR;
++						break;
++					}
++				}
++			} else if (pmEnv && strcmp(pmEnv, "fifo") == 0) {
++				chosenPresentMode = VK_PRESENT_MODE_FIFO_KHR;
++			} else if (!syncEnabled) {
 +				for (auto m : modes) {
 +					if (m == VK_PRESENT_MODE_IMMEDIATE_KHR) {
 +						chosenPresentMode = VK_PRESENT_MODE_IMMEDIATE_KHR;
@@ -12364,7 +12396,7 @@ index b81e2e14..87cc4b4b 100644
  	switch (_pixelFormat) {
  		case MTLPixelFormatBGRA8Unorm:      pixelFormat = Indium::PixelFormat::BGRA8Unorm;      break;
  		case MTLPixelFormatBGRA8Unorm_sRGB: pixelFormat = Indium::PixelFormat::BGRA8Unorm_sRGB; break;
-@@ -476,123 +1217,216 @@ static void reportGLErrors(void) {
+@@ -476,123 +1249,239 @@ static void reportGLErrors(void) {
  		default:                            pixelFormat = Indium::PixelFormat::Invalid;         break;
  	}
  
@@ -12384,7 +12416,8 @@ index b81e2e14..87cc4b4b 100644
  	}
  
  	[_drawableCondition unlock];
--
++}
+ 
 -	@synchronized(self) {
 -		// resize the render texture
 -		if (_tex != 0) {
@@ -12401,63 +12434,62 @@ index b81e2e14..87cc4b4b 100644
 -			glTextureParameteri(_tex, GL_TEXTURE_WRAP_T, GL_REPEAT);
 -			reportGLErrors();
 -		}
--	}
--
--	CGLSetCurrentContext(prev);
- }
- 
--- (void)prepareRender
 +- (void)presentDirectVulkan: (NSUInteger)drawableID
- {
--	std::shared_ptr<CAMetalDrawableActual> drawable = nullptr;
++{
 +	static std::atomic<uint64_t> s_presentFrameCount{0};
 +	uint64_t frameNum = ++s_presentFrameCount;
- 
--	[_drawableCondition lock];
--	if (_queuedDrawableCount > 0) {
--		drawable = _drawables[_queuedDrawables[0]];
--		--_queuedDrawableCount;
--		std::copy(_queuedDrawables.begin() + 1, _queuedDrawables.end(), _queuedDrawables.begin());
++
++	static uint64_t s_lastFrameNs = 0;
++	struct timespec tsEntry;
++	clock_gettime(CLOCK_MONOTONIC, &tsEntry);
++	uint64_t entryNs = (uint64_t)tsEntry.tv_sec * 1000000000ULL + tsEntry.tv_nsec;
++	uint64_t dtUs = s_lastFrameNs ? (entryNs - s_lastFrameNs) / 1000ULL : 0;
++	s_lastFrameNs = entryNs;
++
 +	auto dev = std::dynamic_pointer_cast<Indium::PrivateDevice>(((MTLDeviceInternal*)self.device).device);
 +	if (!dev || _vkSwapchain == VK_NULL_HANDLE) {
 +		return;
  	}
--	[_drawableCondition unlock];
  
--	if (drawable) {
--		// wait for the drawable to be fully rendered before copying it to the render texture
--		// (this is a GPU-side wait)
--		drawable->synchronizeRender();
+-	CGLSetCurrentContext(prev);
+-}
 +	std::shared_ptr<CAMetalDrawableActual> drawable = _drawables[drawableID];
 +	if (!drawable) {
 +		return;
 +	}
  
--		reportGLErrors();
--		glCopyImageSubData(drawable->texture()->glTexture(), GL_TEXTURE_2D, 0, 0, 0, 0, _tex, GL_TEXTURE_2D, 0, 0, 0, 0, _drawableSize.width, _drawableSize.height, 1);
--		reportGLErrors();
+-- (void)prepareRender
+-{
+-	std::shared_ptr<CAMetalDrawableActual> drawable = nullptr;
 +	if (frameNum <= 5 && _vkNativeWindow) {
 +		void* nativeDpy = _CGSNativeDisplay(CGSMainConnectionID());
 +		ensureX11WindowVisible(nativeDpy, _vkNativeWindow);
 +		if (_vkSubWindow && _vkSubWindow != _vkNativeWindow) {
 +			ensureX11WindowVisible(nativeDpy, _vkSubWindow);
 +		}
- 	}
++	}
  
--	@synchronized(self) {
--		// FIXME: this is wrong, but there's no good way to tell when the texture is actually fully rendered/presented.
--		//        this is at least close enough. it should balance out in the long run since we're supposed to be invoked on vsync
--		//        or at least a fixed interval.
--		if (_lastPresentedDrawable) {
--			_lastPresentedDrawable->didPresent();
+-	[_drawableCondition lock];
+-	if (_queuedDrawableCount > 0) {
+-		drawable = _drawables[_queuedDrawables[0]];
+-		--_queuedDrawableCount;
+-		std::copy(_queuedDrawables.begin() + 1, _queuedDrawables.end(), _queuedDrawables.begin());
 +	size_t flightIdx = _frameInFlightIndex;
 +
 +	// Wait for previous work in this flight slot to complete before reusing resources
++	struct timespec tsFenceStart, tsFenceEnd;
++	clock_gettime(CLOCK_MONOTONIC, &tsFenceStart);
 +	DynamicVK::vkWaitForFences(dev->device(), 1, &_vkInFlightFences[flightIdx], VK_TRUE, 1000000000ULL);
++	clock_gettime(CLOCK_MONOTONIC, &tsFenceEnd);
++	uint64_t fenceUs = ((uint64_t)(tsFenceEnd.tv_sec - tsFenceStart.tv_sec) * 1000000000ULL + (tsFenceEnd.tv_nsec - tsFenceStart.tv_nsec)) / 1000ULL;
 +
 +	// 1. Acquire next image from swapchain
++	struct timespec tsAcqStart, tsAcqEnd;
++	clock_gettime(CLOCK_MONOTONIC, &tsAcqStart);
 +	uint32_t imageIndex = 0;
 +	VkResult res = DynamicVK::vkAcquireNextImageKHR(dev->device(), _vkSwapchain, 1000000000ULL /* 1s */, _vkAcquireSemaphores[flightIdx], VK_NULL_HANDLE, &imageIndex);
++	clock_gettime(CLOCK_MONOTONIC, &tsAcqEnd);
++	uint64_t acqUs = ((uint64_t)(tsAcqEnd.tv_sec - tsAcqStart.tv_sec) * 1000000000ULL + (tsAcqEnd.tv_nsec - tsAcqStart.tv_nsec)) / 1000ULL;
 +	if (res == VK_ERROR_OUT_OF_DATE_KHR || res == VK_SUBOPTIMAL_KHR) {
 +		if (res == VK_ERROR_OUT_OF_DATE_KHR) {
 +			char logBuf[256];
@@ -12467,8 +12499,7 @@ index b81e2e14..87cc4b4b 100644
 +			[self recreateDrawables];
 +			drawable->didPresent();
 +			return;
- 		}
--		_lastPresentedDrawable = drawable;
++		}
 +	} else if (res != VK_SUCCESS) {
 +		char logBuf[256];
 +		snprintf(logBuf, sizeof(logBuf), "presentDirectVulkan frame=%llu drawable=%lu flight=%zu acqRes=%d (acquire failed)",
@@ -12477,7 +12508,12 @@ index b81e2e14..87cc4b4b 100644
 +		drawable->didPresent();
 +		return;
  	}
-+
+-	[_drawableCondition unlock];
+ 
+-	if (drawable) {
+-		// wait for the drawable to be fully rendered before copying it to the render texture
+-		// (this is a GPU-side wait)
+-		drawable->synchronizeRender();
 +	DynamicVK::vkResetFencesLocal(dev->device(), 1, &_vkInFlightFences[flightIdx]);
 +
 +	// 2. Record command buffer
@@ -12570,10 +12606,15 @@ index b81e2e14..87cc4b4b 100644
 +
 +	VkResult subRes = VK_SUCCESS;
 +	VkResult presRes = VK_SUCCESS;
++	uint64_t subUs = 0, presUs = 0;
 +
 +	{
++		struct timespec tsSubStart, tsSubEnd, tsPresEnd;
 +		std::lock_guard<std::mutex> qLock(dev->graphicsQueueMutex());
++		clock_gettime(CLOCK_MONOTONIC, &tsSubStart);
 +		subRes = DynamicVK::vkQueueSubmit(dev->graphicsQueue(), 1, &submitInfo, _vkInFlightFences[flightIdx]);
++		clock_gettime(CLOCK_MONOTONIC, &tsSubEnd);
++		subUs = ((uint64_t)(tsSubEnd.tv_sec - tsSubStart.tv_sec) * 1000000000ULL + (tsSubEnd.tv_nsec - tsSubStart.tv_nsec)) / 1000ULL;
 +
 +		// 4. Present
 +		VkPresentInfoKHR presentInfo {};
@@ -12585,23 +12626,37 @@ index b81e2e14..87cc4b4b 100644
 +		presentInfo.pImageIndices = &imageIndex;
 +
 +		presRes = DynamicVK::vkQueuePresentKHR(dev->graphicsQueue(), &presentInfo);
++		clock_gettime(CLOCK_MONOTONIC, &tsPresEnd);
++		presUs = ((uint64_t)(tsPresEnd.tv_sec - tsSubEnd.tv_sec) * 1000000000ULL + (tsPresEnd.tv_nsec - tsSubEnd.tv_nsec)) / 1000ULL;
 +	}
-+
+ 
+-		reportGLErrors();
+-		glCopyImageSubData(drawable->texture()->glTexture(), GL_TEXTURE_2D, 0, 0, 0, 0, _tex, GL_TEXTURE_2D, 0, 0, 0, 0, _drawableSize.width, _drawableSize.height, 1);
+-		reportGLErrors();
 +	_frameInFlightIndex = (_frameInFlightIndex + 1) % NUM_FRAMES_IN_FLIGHT;
 +
 +	if (frameNum <= 120 || (frameNum % 60) == 0) {
-+		char logBuf[256];
++		char logBuf[320];
 +		snprintf(logBuf, sizeof(logBuf),
-+			"presentDirectVulkan frame=%llu drawable=%lu flight=%zu extent=%ux%u acqRes=%d imgIdx=%u subRes=%d presRes=%d",
-+			(unsigned long long)frameNum, (unsigned long)drawableID, flightIdx,
-+			(uint32_t)_vkSwapchainSize.width, (uint32_t)_vkSwapchainSize.height,
-+			(int)res, (unsigned int)imageIndex, (int)subRes, (int)presRes);
++			"presentDirectVulkan frame=%llu dtUs=%llu fenceUs=%llu acqUs=%llu subUs=%llu presUs=%llu imgIdx=%u presRes=%d",
++			(unsigned long long)frameNum, (unsigned long long)dtUs,
++			(unsigned long long)fenceUs, (unsigned long long)acqUs,
++			(unsigned long long)subUs, (unsigned long long)presUs,
++			(unsigned int)imageIndex, (int)presRes);
 +		appendDeviceLog(logBuf);
-+	}
-+
+ 	}
+ 
+-	@synchronized(self) {
+-		// FIXME: this is wrong, but there's no good way to tell when the texture is actually fully rendered/presented.
+-		//        this is at least close enough. it should balance out in the long run since we're supposed to be invoked on vsync
+-		//        or at least a fixed interval.
+-		if (_lastPresentedDrawable) {
+-			_lastPresentedDrawable->didPresent();
+-		}
+-		_lastPresentedDrawable = drawable;
 +	if (presRes == VK_ERROR_OUT_OF_DATE_KHR) {
 +		[self recreateDrawables];
-+	}
+ 	}
 +
 +	// 5. Notify drawable presented
 +	drawable->didPresent();

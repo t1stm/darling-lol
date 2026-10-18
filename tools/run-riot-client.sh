@@ -22,10 +22,13 @@ unset RCLOL_APP_ARG3 RCLOL_APP_ARG3_SLOT RCLOL_UX_ARG1 RCLOL_UX_ARG1_SLOT
 unset RCLOL_UX_ARG2 RCLOL_UX_ARG2_SLOT
 # The paired runtime presents completed GPU textures without CPU readback.
 # Explicit 0 or an empty value selects the CPU fallback for diagnostics.
-for option in RCLOL_GPU_DIRECT_PRESENT RCLOL_GPU_DIRECT_ASYNC RCLOL_GPU_DIRECT_VSYNC DARLING_CA_PRESENT_AT_COMMIT DARLING_CA_SKIP_LOCAL_IOSURFACE_RENDER RCLOL_FORWARD_MOUSE_MOVED RCLOL_MOUSE_CONFINEMENT; do
+for option in RCLOL_GPU_DIRECT_PRESENT RCLOL_GPU_DIRECT_ASYNC DARLING_CA_PRESENT_AT_COMMIT DARLING_CA_SKIP_LOCAL_IOSURFACE_RENDER RCLOL_FORWARD_MOUSE_MOVED RCLOL_MOUSE_CONFINEMENT; do
  eval 'value=${'"$option"'-1}'
  case "$value" in 0|'') unset "$option";; *) export "$option=$value";; esac
 done
+# VSync defaults to 0 (uncapped) unless explicitly requested
+eval 'vsync_val=${RCLOL_GPU_DIRECT_VSYNC-0}'
+case "$vsync_val" in 0|'') unset RCLOL_GPU_DIRECT_VSYNC;; *) export RCLOL_GPU_DIRECT_VSYNC="$vsync_val";; esac
 prefix=$prefix_dir
 # RIOT_GUEST_HOME is host-side; DYLD paths must be relative to the guest root.
 case "$guest_home" in
@@ -141,8 +144,12 @@ fi
 if [ -n "${RCLOL_REFRESH_HZ-}" ]; then export RCLOL_REFRESH_HZ; fi
 # Vulkan WSI & Mesa optimizations
 export MESA_NO_ERROR="${MESA_NO_ERROR:-1}"
-# NVIDIA proprietary driver: limit pre-rendered frames.
-export __GL_MaxFramesAllowed="${__GL_MaxFramesAllowed:-1}"
+# Disable VSync / Sync to VBlank by default across driver stacks to allow uncapped presentation
+export __GL_SYNC_TO_VBLANK="${__GL_SYNC_TO_VBLANK:-0}"
+export vblank_mode="${vblank_mode:-0}"
+export MESA_VK_WSI_PRESENT_MODE="${MESA_VK_WSI_PRESENT_MODE:-immediate}"
+# NVIDIA proprietary driver: limit pre-rendered frames (default 0 lets driver buffer dynamically)
+export __GL_MaxFramesAllowed="${__GL_MaxFramesAllowed:-0}"
 export __GL_THREADED_OPTIMIZATIONS="${__GL_THREADED_OPTIMIZATIONS:-1}"
 export __GL_YIELD="${__GL_YIELD:-NOTHING}"
 # Reduce timer slack for tighter scheduling in the game process tree.
@@ -204,7 +211,7 @@ if [ -z "${DISPLAY:-}" ]; then
   DISPLAY="${DISPLAY:-:0}"
 fi
 
-exec env -u ELECTRON_RUN_AS_NODE -u DYLD_INSERT_LIBRARIES \
+exec env -u ELECTRON_RUN_AS_NODE -u DYLD_INSERT_LIBRARIES -u LD_PRELOAD \
   LANG="${RCLOL_GUEST_LOCALE:-en_US.UTF-8}" LC_ALL="${RCLOL_GUEST_LOCALE:-en_US.UTF-8}" \
   mesa_glthread="${RCLOL_MESA_GLTHREAD-${mesa_glthread-false}}" \
   XMODIFIERS="${RCLOL_XMODIFIERS:-@im=none}" DISPLAY="${DISPLAY}" \
