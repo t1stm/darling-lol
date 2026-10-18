@@ -1,6 +1,6 @@
 # Upstream Pull Request Batching Plan (`darling-lol`)
 
-This document defines the strategy for decomposing the commits ahead of `origin/main` into cohesive, modular, and cleanly reviewable Pull Requests for the upstream repository ([`lucannez64/darling-lol`](https://github.com/lucannez64/darling-lol)).
+This document defines the strategy for decomposing the commits ahead of `upstream/main` into cohesive, modular, and cleanly reviewable Pull Requests for the upstream repository ([`lucannez64/darling-lol`](https://github.com/lucannez64/darling-lol)). For comprehensive architectural context and subsystem design rationale, refer to the [Technical Architecture & Runtime Conformance Guide](ARCHITECTURE_AND_RUNTIME_CONFORMANCE.md).
 
 ---
 

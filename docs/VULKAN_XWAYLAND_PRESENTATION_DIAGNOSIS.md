@@ -1,5 +1,8 @@
 # Pure Vulkan Pipeline, Xwayland Presentation, and Render Diagnostics
 
+> [!NOTE]
+> For the overall subsystem design and runtime compliance architecture across Darling, see the [Technical Architecture & Runtime Conformance Guide](ARCHITECTURE_AND_RUNTIME_CONFORMANCE.md).
+
 ## 1. Architectural Overview
 
 The rendering subsystem of the game engine within Darling was transitioned from legacy OpenGL/CGL/EGL interop to a **100% Pure Vulkan presentation pipeline** (`CAMetalLayer` -> `VkSurfaceKHR` + `VkSwapchainKHR`).

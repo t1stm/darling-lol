@@ -1,8 +1,8 @@
 # Snapshot status — 2026-10-14
 
 > [!NOTE]
-> For the latest architectural status, unpushed commits, and Pure Vulkan presentation updates, see:
-> - [Technical Architecture Summary of Unpushed Work](UNPUSHED_WORK_AND_ARCHITECTURE_SUMMARY.md)
+> For the latest architectural status, runtime conformance design, and Pure Vulkan presentation updates, see:
+> - [Technical Architecture & Runtime Conformance Guide](ARCHITECTURE_AND_RUNTIME_CONFORMANCE.md)
 > - [Pure Vulkan Pipeline, Xwayland Presentation, and Render Diagnostics](VULKAN_XWAYLAND_PRESENTATION_DIAGNOSIS.md)
 > - [Upstream Pull Request Batching Plan](UPSTREAM_PR_BATCHING_PLAN.md)
 

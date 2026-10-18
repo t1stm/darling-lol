@@ -1,14 +1,14 @@
-# Technical Architecture Summary: Unpushed Work Ahead of Origin (`origin/main..HEAD`)
+# Technical Architecture & Runtime Conformance Guide
 
 ## 1. Executive Summary
 
-This document provides a comprehensive technical reference for all unpushed changes currently residing on the local `main` branch ahead of `origin/main` (31 commits). 
+This document serves as the comprehensive technical reference for the architecture and runtime conformance design implemented in the `darling-lol` project. It documents the core architectural subsystems, Apple Darwin / POSIX / FreeDesktop / Vulkan ABI compliance layers, and systemic stability enhancements developed to run modern graphical Darwin workloads natively on Linux.
 
-The accumulated changes advance the runtime across five primary pillars:
+The architecture is structured across five primary pillars:
 1. **Darwin / XNU Kernel & Security ABI Compliance**: Truthful kernel information queries, realistic code-signing semantics, and file descriptor introspection.
 2. **VideoToolbox Codec Decompression Graceful Fallback**: Software video decoding fallback preventing Chromium CEF / Electron client interface freezes.
 3. **AppKit, Window Management & FreeDesktop Desktop Integration**: Native Linux system tray integration, titlebar CSD drag isolation, and removal of duplicate window decorations.
-4. **Pure Vulkan Presentation Pipeline**: Elimination of OpenGL/CGL/EGL interop bottlenecks in favor of a direct Vulkan WSI swapchain pipeline (`CAMetalLayer` -> `VkSurfaceKHR` + `VkSwapchainKHR`), accompanied by multi-tier display resolution and Xwayland compatibility.
+4. **Pure Vulkan Presentation Pipeline**: Elimination of OpenGL/CGL/EGL interop bottlenecks in favor of a direct Vulkan WSI swapchain pipeline (`CAMetalLayer` -> `VkSurfaceKHR` + `VkSwapchainKHR`), accompanied by multi-tier display resolution, multi-flight pipelining, and Xwayland compatibility.
 5. **Tooling, Hybrid GPU Runner, Lifecycle Supervisor & Environment Hygiene**: Automated lifecycle supervisor preventing orphaned background processes, NVIDIA PRIME hybrid GPU alignment, dual-framework installation synchronization, and strict environment sanitization.
 
 All modifications strictly conform to official Apple Darwin, XNU, POSIX, FreeDesktop, and Vulkan/Metal ABI specifications.
@@ -117,7 +117,7 @@ All modifications strictly conform to official Apple Darwin, XNU, POSIX, FreeDes
 ## 3. Upstream Alignment & Verification Status
 
 1. **Upstream PR Batching**:
-   - The unpushed changes are organized into 5 modular, independently reviewable PR batches documented in `docs/UPSTREAM_PR_BATCHING_PLAN.md`.
+   - The architectural changes are organized into 5 modular, independently reviewable PR batches documented in [Upstream PR Batching Plan](UPSTREAM_PR_BATCHING_PLAN.md).
 2. **Patch Validation**:
    - Verified that all patch sets validate with zero errors:
      ```bash
@@ -125,5 +125,6 @@ All modifications strictly conform to official Apple Darwin, XNU, POSIX, FreeDes
      All 30 component patches validated
      ```
 3. **Documentation References**:
-   - For presentation diagnostics and Xwayland root cause details, see `docs/VULKAN_XWAYLAND_PRESENTATION_DIAGNOSIS.md`.
-   - For pull request decomposition and dependency mapping, see `docs/UPSTREAM_PR_BATCHING_PLAN.md`.
+   - For presentation diagnostics and Xwayland root cause details, see [Pure Vulkan Pipeline, Xwayland Presentation, and Render Diagnostics](VULKAN_XWAYLAND_PRESENTATION_DIAGNOSIS.md).
+   - For pull request decomposition and dependency mapping, see [Upstream PR Batching Plan](UPSTREAM_PR_BATCHING_PLAN.md).
+   - For historical performance benchmarks and runtime notes, see [Snapshot Status](STATUS.md).
