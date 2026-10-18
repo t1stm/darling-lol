@@ -5217,7 +5217,7 @@ index f4925b66..0296203b 100644
 +    static BOOL checkedShm;
 +    if (!checkedShm) {
 +        checkedShm = YES;
-+        const char *transportPath = getenv("DARLING_XSHM_LIBRARY");
++        const char *transportPath = getenv("RCLOL_XSHM_LIBRARY") ? getenv("RCLOL_XSHM_LIBRARY") : getenv("DARLING_XSHM_LIBRARY");
 +        const char *shmOption = getenv("RCLOL_XSHM");
 +        void *transport = (shmOption && shmOption[0] == '0') ? NULL :
 +            dlopen(transportPath ? transportPath : "/usr/lib/native/libDarlingXShm.dylib",
@@ -8507,7 +8507,7 @@ index 5dcac115..5de4f03f 100644
 +     * IOSurface still needs a pixel handoff to the X11 consumer. */
 +    if (value != nil &&
 +        CFGetTypeID((CFTypeRef)value) == IOSurfaceGetTypeID())
-+        if(getenv("DARLING_CA_PRESENT_AT_COMMIT"))rememberCommittedSurface((IOSurfaceRef)value);
++        if(getenv("RCLOL_CA_PRESENT_AT_COMMIT") || getenv("DARLING_CA_PRESENT_AT_COMMIT"))rememberCommittedSurface((IOSurfaceRef)value);
 +        else publishRemoteIOSurface((IOSurfaceRef)value);
 +
 +    if (needsPresent) {
@@ -8533,7 +8533,7 @@ index 5dcac115..5de4f03f 100644
 +    _textureId = nil;
 +    if (_contents != nil &&
 +        CFGetTypeID((CFTypeRef)_contents) == IOSurfaceGetTypeID())
-+        if(getenv("DARLING_CA_PRESENT_AT_COMMIT"))rememberCommittedSurface((IOSurfaceRef)_contents);
++        if(getenv("RCLOL_CA_PRESENT_AT_COMMIT") || getenv("DARLING_CA_PRESENT_AT_COMMIT"))rememberCommittedSurface((IOSurfaceRef)_contents);
 +        else publishRemoteIOSurface((IOSurfaceRef)_contents);
 +    if (_context != nil) {
 +        [_context render];
@@ -8975,7 +8975,7 @@ index 5dce8c56..d325ba5f 100644
  - (void) render {
 +    if (_cglWindow == NULL || _layer == nil)
 +        return;
-+    if(getenv("DARLING_CA_SKIP_LOCAL_IOSURFACE_RENDER") &&
++    if((getenv("RCLOL_CA_SKIP_LOCAL_IOSURFACE_RENDER") || getenv("DARLING_CA_SKIP_LOCAL_IOSURFACE_RENDER")) &&
 +       !hasMetalLayer(_layer) && hasFullWindowSurface(_layer,_frame.size))return;
      [self renderLayer: _layer];
  }
@@ -9034,7 +9034,7 @@ index 5dce8c56..d325ba5f 100644
  
  - (void) flush {
 -    CGLFlushDrawable(_glContext);
-+    if(getenv("DARLING_CA_SKIP_LOCAL_IOSURFACE_RENDER") && _layer &&
++    if((getenv("RCLOL_CA_SKIP_LOCAL_IOSURFACE_RENDER") || getenv("DARLING_CA_SKIP_LOCAL_IOSURFACE_RENDER")) && _layer &&
 +       !hasMetalLayer(_layer) && hasFullWindowSurface(_layer,_frame.size))return;
 +    if (_glContext != NULL && _cglWindow != NULL)
 +        CGLFlushDrawable(_glContext);
@@ -10149,7 +10149,7 @@ index 5f7998b9..b8968893 100644
 +    BOOL commitsImplicit = [stack count] == 1 && [stack lastObject] == implicitTransactionGroup;
 +    [self _commitImplicitTransaction];
 +    /* An implicit commit already publishes its completed frame. */
-+    if(!getenv("DARLING_CA_PRESENT_AT_COMMIT") || !commitsImplicit)
++    if((!getenv("RCLOL_CA_PRESENT_AT_COMMIT") && !getenv("DARLING_CA_PRESENT_AT_COMMIT")) || !commitsImplicit)
 +        DarlingCAPublishCommittedIOSurface();
  }
  

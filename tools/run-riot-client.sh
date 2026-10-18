@@ -21,9 +21,22 @@ python3 "$runner_dir/ensure-darling-root-certificates.py" ||
 unset RCLOL_APP_ARGS RCLOL_APP_ARGS_SLOT RCLOL_APP_ARG2 RCLOL_APP_ARG2_SLOT
 unset RCLOL_APP_ARG3 RCLOL_APP_ARG3_SLOT RCLOL_UX_ARG1 RCLOL_UX_ARG1_SLOT
 unset RCLOL_UX_ARG2 RCLOL_UX_ARG2_SLOT
+# Map legacy DARLING CA options to clean RCLOL namespace if present
+if [ -n "${DARLING_CA_PRESENT_AT_COMMIT+x}" ]; then
+  RCLOL_CA_PRESENT_AT_COMMIT="$DARLING_CA_PRESENT_AT_COMMIT"
+  unset DARLING_CA_PRESENT_AT_COMMIT
+fi
+if [ -n "${DARLING_CA_SKIP_LOCAL_IOSURFACE_RENDER+x}" ]; then
+  RCLOL_CA_SKIP_LOCAL_IOSURFACE_RENDER="$DARLING_CA_SKIP_LOCAL_IOSURFACE_RENDER"
+  unset DARLING_CA_SKIP_LOCAL_IOSURFACE_RENDER
+fi
+if [ -n "${DARLING_XSHM_LIBRARY+x}" ]; then
+  RCLOL_XSHM_LIBRARY="$DARLING_XSHM_LIBRARY"
+  unset DARLING_XSHM_LIBRARY
+fi
 # The paired runtime presents completed GPU textures without CPU readback.
 # Explicit 0 or an empty value selects the CPU fallback for diagnostics.
-for option in RCLOL_GPU_DIRECT_PRESENT RCLOL_GPU_DIRECT_ASYNC RCLOL_GPU_DIRECT_VSYNC DARLING_CA_PRESENT_AT_COMMIT DARLING_CA_SKIP_LOCAL_IOSURFACE_RENDER RCLOL_FORWARD_MOUSE_MOVED RCLOL_MOUSE_CONFINEMENT; do
+for option in RCLOL_GPU_DIRECT_PRESENT RCLOL_GPU_DIRECT_ASYNC RCLOL_GPU_DIRECT_VSYNC RCLOL_CA_PRESENT_AT_COMMIT RCLOL_CA_SKIP_LOCAL_IOSURFACE_RENDER RCLOL_FORWARD_MOUSE_MOVED RCLOL_MOUSE_CONFINEMENT; do
  eval 'value=${'"$option"'-1}'
  case "$value" in 0|'') unset "$option";; *) export "$option=$value";; esac
 done
@@ -92,13 +105,20 @@ export __GL_YIELD="${__GL_YIELD:-NOTHING}"
 if [ -w /proc/self/timerslack_ns ]; then
   echo 1 > /proc/self/timerslack_ns 2>/dev/null || true
 fi
-exec env -u ELECTRON_RUN_AS_NODE -u DYLD_INSERT_LIBRARIES EGL_PLATFORM=x11 \
+# Saneamento de variáveis de ambiente: eliminar qualquer variável que exponha a
+# substring "DARLING" na tabela environ dos processos e em /proc/self/environ.
+for var in $(env | awk -F= '$1 ~ /[Dd][Aa][Rr][Ll][Ii][Nn][Gg]/ {print $1}'); do
+  unset "$var" 2>/dev/null || true
+done
+exec env -u ELECTRON_RUN_AS_NODE -u DYLD_INSERT_LIBRARIES \
+  -u DARLING_XSHM_LIBRARY -u DARLING_CA_PRESENT_AT_COMMIT -u DARLING_CA_SKIP_LOCAL_IOSURFACE_RENDER \
+  EGL_PLATFORM=x11 \
   LANG="${RCLOL_GUEST_LOCALE:-en_US.UTF-8}" LC_ALL="${RCLOL_GUEST_LOCALE:-en_US.UTF-8}" \
   mesa_glthread="${RCLOL_MESA_GLTHREAD-${mesa_glthread-false}}" \
   XMODIFIERS="${RCLOL_XMODIFIERS:-@im=none}" DISPLAY="${DISPLAY:-:1}" \
   DYLD_LIBRARY_PATH="${DYLD_LIBRARY_PATH:-$guest_path/RuntimeLibraries}" \
   DYLD_FRAMEWORK_PATH="${DYLD_FRAMEWORK_PATH:-$guest_path/RuntimeFrameworks}" \
-  DARLING_XSHM_LIBRARY="${DARLING_XSHM_LIBRARY:-$guest_path/libDarlingXShm.dylib}" \
+  RCLOL_XSHM_LIBRARY="${RCLOL_XSHM_LIBRARY:-$guest_path/libDarlingXShm.dylib}" \
   darling "$A" --region="${RCLOL_REGION:-EUW}" --locale="${RCLOL_LOCALE:-en_GB}" \
     "$@" \
     --log-dir="$guest_path/Library/Logs/Riot Games/Riot Client"
