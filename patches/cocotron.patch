@@ -126,7 +126,7 @@ index d543e329..e320a3af 100644
  {
      return [NSMethodSignature signatureWithObjCTypes: "v@:"];
 diff --git a/AppKit/NSApplication.m b/AppKit/NSApplication.m
-index 8e7508e2..6fc86b32 100644
+index 8e7508e2..c11d5dc1 100644
 --- a/AppKit/NSApplication.m
 +++ b/AppKit/NSApplication.m
 @@ -17,6 +17,9 @@ COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER
@@ -139,7 +139,15 @@ index 8e7508e2..6fc86b32 100644
  #import <AppKit/NSAlert.h>
  #import <AppKit/NSApplication.h>
  #import <AppKit/NSColorPanel.h>
-@@ -271,6 +274,11 @@ NSApplication *NSApp = nil;
+@@ -37,6 +40,7 @@ CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE. */
+ #import <AppKit/NSSheetContext.h>
+ #import <AppKit/NSSpellChecker.h>
+ #import <AppKit/NSSystemInfoPanel.h>
++#import <AppKit/NSStatusBar.h>
+ #import <AppKit/NSWindow-Private.h>
+ #import <AppKit/NSWorkspace.h>
+ #import <CoreGraphics/CGWindow.h>
+@@ -271,6 +275,11 @@ NSApplication *NSApp = nil;
      return _isRunning;
  }
  
@@ -151,7 +159,7 @@ index 8e7508e2..6fc86b32 100644
  - (NSWindow *) makeWindowsPerform: (SEL) selector inOrder: (BOOL) inOrder {
      NSUnimplementedMethod();
      return nil;
-@@ -382,7 +390,18 @@ NSApplication *NSApp = nil;
+@@ -382,7 +391,18 @@ NSApplication *NSApp = nil;
  - (void) setDelegate: delegate {
      if (delegate != _delegate) {
          [self unregisterDelegate];
@@ -171,7 +179,7 @@ index 8e7508e2..6fc86b32 100644
          [self registerDelegate];
      }
  }
-@@ -550,6 +569,13 @@ NSApplication *NSApp = nil;
+@@ -550,6 +570,13 @@ NSApplication *NSApp = nil;
  }
  
  - (void) finishLaunching {
@@ -185,7 +193,7 @@ index 8e7508e2..6fc86b32 100644
      NSAutoreleasePool *pool = [NSAutoreleasePool new];
      BOOL needsUntitled = YES;
  
-@@ -558,7 +584,6 @@ NSApplication *NSApp = nil;
+@@ -558,7 +585,6 @@ NSApplication *NSApp = nil;
                            object: self];
      NS_HANDLER [self reportException: localException];
      NS_ENDHANDLER
@@ -193,7 +201,7 @@ index 8e7508e2..6fc86b32 100644
      // Load the application icon if we have one
      NSString *iconName = [[[NSBundle mainBundle] infoDictionary]
              objectForKey: @"CFBundleIconFile"];
-@@ -614,7 +639,6 @@ NSApplication *NSApp = nil;
+@@ -614,7 +640,6 @@ NSApplication *NSApp = nil;
                            object: self];
      NS_HANDLER [self reportException: localException];
      NS_ENDHANDLER
@@ -201,11 +209,40 @@ index 8e7508e2..6fc86b32 100644
              [pool release];
  }
  
-@@ -652,7 +676,15 @@ NSApplication *NSApp = nil;
+@@ -643,16 +668,43 @@ NSApplication *NSApp = nil;
+ 
+ - (void) _checkForTerminate {
+     int count = [_windows count];
++    BOOL hasVisible = NO;
+ 
+     while (--count >= 0) {
+         NSWindow *check = [_windows objectAtIndex: count];
+ 
+         if (![check isKindOfClass: [NSPanel class]] && [check isVisible]) {
+-            return;
++            hasVisible = YES;
++            break;
          }
      }
  
 -    [self terminate: self];
++    static BOOL s_hasEverHadVisibleWindow = NO;
++    if (hasVisible) {
++        s_hasEverHadVisibleWindow = YES;
++        return;
++    }
++
++    if (s_hasEverHadVisibleWindow) {
++        NSString *procName = [[NSProcessInfo processInfo] processName];
++        if ([procName isEqualToString: @"RiotClientUx"]) {
++            NSArray *statusItems = [[NSStatusBar systemStatusBar] statusItems];
++            if (!statusItems || [statusItems count] == 0) {
++                [self terminate: self];
++                return;
++            }
++        }
++    }
++
 +    // darling-lol: match AppKit and only terminate when the delegate opts
 +    // in via applicationShouldTerminateAfterLastWindowClosed:. The previous
 +    // unconditional terminate killed faceless/splash-screen apps (notably
@@ -218,7 +255,7 @@ index 8e7508e2..6fc86b32 100644
  }
  
  - (void) _checkForAppActivation {
-@@ -666,17 +698,13 @@ NSApplication *NSApp = nil;
+@@ -666,17 +718,13 @@ NSApplication *NSApp = nil;
  }
  
  - (void) run {
@@ -239,7 +276,7 @@ index 8e7508e2..6fc86b32 100644
  
      do {
          pool = [NSAutoreleasePool new];
-@@ -716,6 +744,12 @@ NSApplication *NSApp = nil;
+@@ -716,6 +764,12 @@ NSApplication *NSApp = nil;
  }
  
  - (void) sendEvent: (NSEvent *) event {
@@ -252,7 +289,7 @@ index 8e7508e2..6fc86b32 100644
      if ([event type] == NSKeyDown) {
          unsigned modifierFlags = [event modifierFlags];
  
-@@ -742,6 +776,61 @@ NSApplication *NSApp = nil;
+@@ -742,6 +796,61 @@ NSApplication *NSApp = nil;
      do {
          NSAutoreleasePool *pool = [NSAutoreleasePool new];
  
@@ -2324,10 +2361,18 @@ index 8ac2bbdc..03b32e54 100644
  
          [_subviews
 diff --git a/AppKit/NSWindow.m b/AppKit/NSWindow.m
-index d545120a..847b6e15 100644
+index d545120a..ce6dbe7e 100644
 --- a/AppKit/NSWindow.m
 +++ b/AppKit/NSWindow.m
-@@ -45,6 +45,21 @@ CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE. */
+@@ -19,6 +19,7 @@ IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN
+ CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE. */
+ 
+ #import <AppKit/NSApplication.h>
++#import <Foundation/NSProcessInfo.h>
+ #import <AppKit/NSColor.h>
+ #import <AppKit/NSCursor.h>
+ #import <AppKit/NSDisplay.h>
+@@ -45,6 +46,21 @@ CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE. */
  #import <AppKit/NSWindowAnimationContext.h>
  #import <ApplicationServices/ApplicationServices.h>
  #import <CoreGraphics/CGWindow.h>
@@ -2349,7 +2394,7 @@ index d545120a..847b6e15 100644
  
  const NSNotificationName NSWindowDidBecomeKeyNotification =
          @"NSWindowDidBecomeKeyNotification";
-@@ -204,6 +219,25 @@ NSInteger NSBitsPerPixelFromDepth(NSWindowDepth depth) {
+@@ -204,6 +220,25 @@ NSInteger NSBitsPerPixelFromDepth(NSWindowDepth depth) {
  
  @end
  
@@ -2375,7 +2420,7 @@ index d545120a..847b6e15 100644
  @implementation NSWindow
  
  @synthesize identifier = _identifier;
-@@ -218,13 +252,18 @@ static BOOL _allowsAutomaticWindowTabbing;
+@@ -218,13 +253,18 @@ static BOOL _allowsAutomaticWindowTabbing;
  /* This method is Cococtron specific and can be override by subclasses, do not
   * change method name */
  + (BOOL) hasMainMenuForStyleMask: (NSWindowStyleMask) styleMask {
@@ -2396,7 +2441,7 @@ index d545120a..847b6e15 100644
  }
  
  + (NSRect) frameRectForContentRect: (NSRect) contentRect
-@@ -318,6 +357,7 @@ static BOOL _allowsAutomaticWindowTabbing;
+@@ -318,6 +358,7 @@ static BOOL _allowsAutomaticWindowTabbing;
          [NSApplication sharedApplication];
      }
      _styleMask = styleMask;
@@ -2404,7 +2449,7 @@ index d545120a..847b6e15 100644
      _backingType = backing;
      _isDeferred = defer;
  
-@@ -351,7 +391,7 @@ static BOOL _allowsAutomaticWindowTabbing;
+@@ -351,7 +392,7 @@ static BOOL _allowsAutomaticWindowTabbing;
      [_backgroundView _setWindow: self];
      [_backgroundView setNextResponder: self];
  
@@ -2413,7 +2458,7 @@ index d545120a..847b6e15 100644
      _contentView = [[NSView alloc] initWithFrame: contentViewFrame];
      [_contentView setAutoresizesSubviews: YES];
      [_contentView
-@@ -399,6 +439,8 @@ static BOOL _allowsAutomaticWindowTabbing;
+@@ -399,6 +440,8 @@ static BOOL _allowsAutomaticWindowTabbing;
  }
  
  - (void) dealloc {
@@ -2422,7 +2467,7 @@ index d545120a..847b6e15 100644
      [[NSNotificationCenter defaultCenter] removeObserver: self];
      [_childWindows release];
      [_title release];
-@@ -934,6 +976,22 @@ static BOOL _allowsAutomaticWindowTabbing;
+@@ -934,6 +977,22 @@ static BOOL _allowsAutomaticWindowTabbing;
      return _animationContext;
  }
  
@@ -2445,7 +2490,7 @@ index d545120a..847b6e15 100644
  - (void) setFrame: (NSRect) newFrame
            display: (BOOL) display
            animate: (BOOL) animate
-@@ -944,8 +1002,19 @@ static BOOL _allowsAutomaticWindowTabbing;
+@@ -944,8 +1003,19 @@ static BOOL _allowsAutomaticWindowTabbing;
      _frame = newFrame;
      _makeSureIsOnAScreen = YES;
  
@@ -2466,7 +2511,7 @@ index d545120a..847b6e15 100644
  
      if (didSize) {
          [self resetCursorRects];
-@@ -1025,7 +1094,43 @@ static BOOL _allowsAutomaticWindowTabbing;
+@@ -1025,7 +1095,43 @@ static BOOL _allowsAutomaticWindowTabbing;
  }
  
  - (void) setMovable: (BOOL) movable {
@@ -2511,7 +2556,7 @@ index d545120a..847b6e15 100644
  }
  
  - (void) setBackingType: (NSBackingStoreType) value {
-@@ -1234,6 +1339,7 @@ static BOOL _allowsAutomaticWindowTabbing;
+@@ -1234,6 +1340,7 @@ static BOOL _allowsAutomaticWindowTabbing;
  
  - (void) setIgnoresMouseEvents: (BOOL) value {
      _ignoresMouseEvents = value;
@@ -2519,7 +2564,7 @@ index d545120a..847b6e15 100644
  }
  
  - (void) setAspectRatio: (NSSize) value {
-@@ -1413,8 +1519,34 @@ static BOOL _allowsAutomaticWindowTabbing;
+@@ -1413,8 +1520,34 @@ static BOOL _allowsAutomaticWindowTabbing;
  }
  
  - (NSButton *) standardWindowButton: (NSWindowButton) value {
@@ -2556,7 +2601,7 @@ index d545120a..847b6e15 100644
  }
  
  - (NSButtonCell *) defaultButtonCell {
-@@ -1425,6 +1557,17 @@ static BOOL _allowsAutomaticWindowTabbing;
+@@ -1425,6 +1558,17 @@ static BOOL _allowsAutomaticWindowTabbing;
      return [_sheetContext sheet];
  }
  
@@ -2574,7 +2619,7 @@ index d545120a..847b6e15 100644
  - (id) windowController {
      return _windowController;
  }
-@@ -1511,10 +1654,7 @@ static BOOL _allowsAutomaticWindowTabbing;
+@@ -1511,10 +1655,7 @@ static BOOL _allowsAutomaticWindowTabbing;
      return [_platformWindow isMiniaturized];
  }
  
@@ -2586,7 +2631,7 @@ index d545120a..847b6e15 100644
  
  - (BOOL) inLiveResize {
      return _isInLiveResize;
-@@ -1561,6 +1701,127 @@ static BOOL _allowsAutomaticWindowTabbing;
+@@ -1561,6 +1702,127 @@ static BOOL _allowsAutomaticWindowTabbing;
      return point;
  }
  
@@ -2714,7 +2759,7 @@ index d545120a..847b6e15 100644
  - (NSRect) frameRectForContentRect: (NSRect) contentRect {
      // hasMainMenu is an instance method so we can't just use the class method
      //  frameRectForContentRect:styleMask:
-@@ -1580,6 +1841,10 @@ static BOOL _allowsAutomaticWindowTabbing;
+@@ -1580,6 +1842,10 @@ static BOOL _allowsAutomaticWindowTabbing;
  }
  
  - (NSRect) contentRectForFrameRect: (NSRect) frameRect {
@@ -2725,7 +2770,7 @@ index d545120a..847b6e15 100644
      NSRect result = [[NSDisplay currentDisplay] insetRect: frameRect
                             forNativeWindowBorderWithStyle: [self styleMask]];
  
-@@ -2155,6 +2420,7 @@ static BOOL _allowsAutomaticWindowTabbing;
+@@ -2155,6 +2421,7 @@ static BOOL _allowsAutomaticWindowTabbing;
  - (void) orderWindow: (NSWindowOrderingMode) place
            relativeTo: (NSInteger) relativeTo
  {
@@ -2733,7 +2778,7 @@ index d545120a..847b6e15 100644
      // The move notifications are sent under unknown conditions around
      // orderFront: in the Apple AppKit, we do them all the time here until it's
      // figured out. I suspect it is a side effect of off-screen windows being at
-@@ -2208,6 +2474,8 @@ static BOOL _allowsAutomaticWindowTabbing;
+@@ -2208,6 +2475,8 @@ static BOOL _allowsAutomaticWindowTabbing;
          break;
      }
  
@@ -2742,7 +2787,7 @@ index d545120a..847b6e15 100644
      [self postNotificationName: NSWindowDidMoveNotification];
  }
  
-@@ -2257,6 +2525,12 @@ static BOOL _allowsAutomaticWindowTabbing;
+@@ -2257,6 +2526,12 @@ static BOOL _allowsAutomaticWindowTabbing;
  }
  
  - (void) sendEvent: (NSEvent *) event {
@@ -2755,7 +2800,7 @@ index d545120a..847b6e15 100644
      // Some events can cause our window to be destroyed
      // So make sure self lives at least through this current run loop...
      [[self retain] autorelease];
-@@ -2300,6 +2574,10 @@ static BOOL _allowsAutomaticWindowTabbing;
+@@ -2300,6 +2575,10 @@ static BOOL _allowsAutomaticWindowTabbing;
  
      case NSLeftMouseDown: {
          NSView *view = [_backgroundView hitTest: [event locationInWindow]];
@@ -2766,7 +2811,7 @@ index d545120a..847b6e15 100644
  
          if ([view acceptsFirstResponder]) {
              if ([view needsPanelToBecomeKey]) {
-@@ -2307,6 +2585,27 @@ static BOOL _allowsAutomaticWindowTabbing;
+@@ -2307,6 +2586,27 @@ static BOOL _allowsAutomaticWindowTabbing;
              }
          }
  
@@ -2794,7 +2839,7 @@ index d545120a..847b6e15 100644
          // Event goes to view, not first responder.
          [view mouseDown: event];
          _mouseDownLocationInWindow = [event locationInWindow];
-@@ -2330,6 +2629,31 @@ static BOOL _allowsAutomaticWindowTabbing;
+@@ -2330,6 +2630,31 @@ static BOOL _allowsAutomaticWindowTabbing;
          _mouseDownLocationInWindow = NSMakePoint(NAN, NAN);
          break;
  
@@ -2826,7 +2871,7 @@ index d545120a..847b6e15 100644
      case NSMouseMoved: {
          NSView *hit = [_backgroundView hitTest: [event locationInWindow]];
  
-@@ -2536,6 +2860,7 @@ static BOOL _allowsAutomaticWindowTabbing;
+@@ -2536,6 +2861,7 @@ static BOOL _allowsAutomaticWindowTabbing;
      } else {
          [[self platformWindow] hideWindow];
      }
@@ -2834,7 +2879,18 @@ index d545120a..847b6e15 100644
  }
  
  - (void) orderFront: (id) sender {
-@@ -3064,6 +3389,13 @@ static BOOL _allowsAutomaticWindowTabbing;
+@@ -2577,6 +2903,10 @@ static BOOL _allowsAutomaticWindowTabbing;
+             [NSApp abortModal];
+         } else {
+             [self close];
++            if ([[[NSProcessInfo processInfo] processName] isEqualToString: @"RiotClientUx"] &&
++                ![self isKindOfClass: [NSPanel class]]) {
++                [NSApp terminate: self];
++            }
+         }
+     }
+ }
+@@ -3064,6 +3394,13 @@ static BOOL _allowsAutomaticWindowTabbing;
      if (didSize) {
          // Don't redraw everything unless we really have to.
          [_backgroundView setFrameSize: _frame.size];
@@ -2848,7 +2904,7 @@ index d545120a..847b6e15 100644
          [_backgroundView setNeedsDisplay: YES];
          [self resetCursorRects];
          [self saveFrameUsingName: _autosaveFrameName];
-@@ -3260,8 +3592,7 @@ static BOOL _allowsAutomaticWindowTabbing;
+@@ -3260,8 +3597,7 @@ static BOOL _allowsAutomaticWindowTabbing;
                  mouseWasInside && !mouseIsInside) {
                  [exited addObject: area];
              }
@@ -2858,7 +2914,7 @@ index d545120a..847b6e15 100644
                  [moved addObject: area];
              }
              if (options & NSTrackingCursorUpdate && !mouseWasInside &&
-@@ -3459,7 +3790,7 @@ static BOOL _allowsAutomaticWindowTabbing;
+@@ -3459,7 +3795,7 @@ static BOOL _allowsAutomaticWindowTabbing;
  }
  
  - (CGSubWindow *) _createSubWindowWithFrame: (CGRect) frame {
@@ -5135,6 +5191,37 @@ index 0e91a5d1..1e4cec1b 100644
  }
  
  - (void) selectionNotify: (XSelectionEvent *) event {
+diff --git a/AppKit/X11.backend/X11SubWindow.h b/AppKit/X11.backend/X11SubWindow.h
+index 65b63a3e..632d38ee 100644
+--- a/AppKit/X11.backend/X11SubWindow.h
++++ b/AppKit/X11.backend/X11SubWindow.h
+@@ -10,5 +10,7 @@
+ }
+ 
+ - initWithParentWindow: (X11Window *) parent frame: (CGRect) frame;
++- (void *) parentNativeWindow;
++- (X11Window *) parentWindow;
+ 
+ @end
+diff --git a/AppKit/X11.backend/X11SubWindow.m b/AppKit/X11.backend/X11SubWindow.m
+index 738ab457..2416d55e 100644
+--- a/AppKit/X11.backend/X11SubWindow.m
++++ b/AppKit/X11.backend/X11SubWindow.m
+@@ -39,6 +39,14 @@
+     return (void *) _window;
+ }
+ 
++- (void *) parentNativeWindow {
++    return _parent ? (void *)[_parent windowHandle] : NULL;
++}
++
++- (X11Window *) parentWindow {
++    return _parent;
++}
++
+ - (void) show {
+     XMapWindow(_display, _window);
+ }
 diff --git a/AppKit/X11.backend/X11Window.h b/AppKit/X11.backend/X11Window.h
 index bfe3839a..c91f8ceb 100644
 --- a/AppKit/X11.backend/X11Window.h
@@ -7631,6 +7718,18 @@ index f3991816..7862bdbb 100644
  // Mouse location in CG coordinates, i.e. relative to the upper left corner
  -(CGPoint) mouseLocation;
  
+diff --git a/CoreGraphics/include/CoreGraphics/CGSubWindow.h b/CoreGraphics/include/CoreGraphics/CGSubWindow.h
+index de7a3496..964817dd 100644
+--- a/CoreGraphics/include/CoreGraphics/CGSubWindow.h
++++ b/CoreGraphics/include/CoreGraphics/CGSubWindow.h
+@@ -6,6 +6,7 @@
+ @interface CGSubWindow : NSObject
+ 
+ - (void *) nativeWindow;
++- (void *) parentNativeWindow;
+ 
+ - (void) show;
+ - (void) hide;
 diff --git a/CoreGraphics/include/CoreGraphics/CGWindow.h b/CoreGraphics/include/CoreGraphics/CGWindow.h
 index e1112f40..3a4fa2d6 100644
 --- a/CoreGraphics/include/CoreGraphics/CGWindow.h
@@ -11076,10 +11175,10 @@ index 757dd8c9..cbc313d5 100644
  	CFTimeInterval presentedTime() const;
  
 diff --git a/QuartzCore/CAMetalLayer.mm b/QuartzCore/CAMetalLayer.mm
-index b81e2e14..b2b05eeb 100644
+index b81e2e14..48f894f1 100644
 --- a/QuartzCore/CAMetalLayer.mm
 +++ b/QuartzCore/CAMetalLayer.mm
-@@ -17,7 +17,6 @@
+@@ -17,38 +17,257 @@
   * along with Darling.  If not, see <http://www.gnu.org/licenses/>.
   */
  
@@ -11087,8 +11186,9 @@ index b81e2e14..b2b05eeb 100644
  #import "CAMetalLayerInternal.h"
  #import "CAMetalDrawableInternal.h"
  #import <Foundation/NSRaise.h>
-@@ -25,30 +24,149 @@
+ #import <Metal/MTLDeviceInternal.h>
  #import <QuartzCore/CALayerContext.h>
++#import <objc/runtime.h>
  #import <Metal/stubs.h>
  
 +#include <indium/waits.private.hpp>
@@ -11114,8 +11214,10 @@ index b81e2e14..b2b05eeb 100644
 +static void ensureX11WindowVisible(void* dpy, void* win) {
 +	if (!dpy || !win) return;
 +	typedef int (*XMapRaised_t)(void*, unsigned long);
++	typedef int (*XMapWindow_t)(void*, unsigned long);
 +	typedef int (*XFlush_t)(void*);
 +	static XMapRaised_t pfnXMapRaised = nullptr;
++	static XMapWindow_t pfnXMapWindow = nullptr;
 +	static XFlush_t pfnXFlush = nullptr;
 +	static std::once_flag flag;
 +	std::call_once(flag, []() {
@@ -11124,12 +11226,17 @@ index b81e2e14..b2b05eeb 100644
 +		if (!h) h = dlopen("libX11.so", RTLD_LAZY | RTLD_GLOBAL);
 +		if (h) {
 +			pfnXMapRaised = (XMapRaised_t)dlsym(h, "XMapRaised");
++			pfnXMapWindow = (XMapWindow_t)dlsym(h, "XMapWindow");
 +			pfnXFlush = (XFlush_t)dlsym(h, "XFlush");
 +		} else {
 +			pfnXMapRaised = (XMapRaised_t)dlsym(RTLD_DEFAULT, "XMapRaised");
++			pfnXMapWindow = (XMapWindow_t)dlsym(RTLD_DEFAULT, "XMapWindow");
 +			pfnXFlush = (XFlush_t)dlsym(RTLD_DEFAULT, "XFlush");
 +		}
 +	});
++	if (pfnXMapWindow) {
++		pfnXMapWindow(dpy, (unsigned long)(uintptr_t)win);
++	}
 +	if (pfnXMapRaised) {
 +		pfnXMapRaised(dpy, (unsigned long)(uintptr_t)win);
 +	}
@@ -11141,20 +11248,113 @@ index b81e2e14..b2b05eeb 100644
 -static void reportGLErrors(void) {
 -#if 0
 -	GLenum err;
++static void* getTopLevelWindow(void* dpy, id subwinObj, void* nativeWin) {
++	if (!dpy || !nativeWin) return nativeWin;
+ 
+-	while ((err = glGetError()) != GL_NO_ERROR) {
+-		printf("*** OPENGL ERROR: %d ***\n", err);
++	if (subwinObj && [subwinObj respondsToSelector:@selector(parentNativeWindow)]) {
++		void* pw = [subwinObj parentNativeWindow];
++		if (pw != NULL) return pw;
+ 	}
+-#endif
++
++	if (subwinObj && [subwinObj respondsToSelector:@selector(parentWindow)]) {
++		id pwObj = [subwinObj performSelector:@selector(parentWindow)];
++		if (pwObj && [pwObj respondsToSelector:@selector(windowHandle)]) {
++			typedef unsigned long (*HandleFn)(id, SEL);
++			HandleFn fn = (HandleFn)[pwObj methodForSelector:@selector(windowHandle)];
++			if (fn) {
++				unsigned long h = fn(pwObj, @selector(windowHandle));
++				if (h != 0) return (void*)(uintptr_t)h;
++			}
++		}
++	}
++
++	// 1. Try Objective-C reflection on subwinObj to retrieve parent X11Window
++	if (subwinObj) {
++		@try {
++			Ivar parentIvar = class_getInstanceVariable([subwinObj class], "_parent");
++			if (parentIvar) {
++				id parentObj = object_getIvar(subwinObj, parentIvar);
++				if (parentObj) {
++					if ([parentObj respondsToSelector:@selector(windowHandle)]) {
++						typedef unsigned long (*HandleFn)(id, SEL);
++						HandleFn fn = (HandleFn)[parentObj methodForSelector:@selector(windowHandle)];
++						if (fn) {
++							unsigned long h = fn(parentObj, @selector(windowHandle));
++							if (h != 0) {
++								return (void*)(uintptr_t)h;
++							}
++						}
++					}
++					Ivar winIvar = class_getInstanceVariable([parentObj class], "_window");
++					if (winIvar) {
++						ptrdiff_t offset = ivar_getOffset(winIvar);
++						unsigned long w = *(unsigned long*)((char*)(__bridge void*)parentObj + offset);
++						if (w != 0) {
++							return (void*)(uintptr_t)w;
++						}
++					}
++				}
++			}
++		} @catch (id ex) {}
++	}
++
++	// 2. Query X11 tree hierarchy up to root window (for Xwayland top-level surface)
++	typedef int (*XQueryTree_t)(void*, unsigned long, unsigned long*, unsigned long*, unsigned long**, unsigned int*);
++	typedef int (*XFree_t)(void*);
++	static XQueryTree_t pfnXQueryTree = nullptr;
++	static XFree_t pfnXFree = nullptr;
++	static std::once_flag treeFlag;
++	std::call_once(treeFlag, []() {
++		void* h = dlopen("libX11.so.6", RTLD_LAZY | RTLD_NOLOAD);
++		if (!h) h = dlopen("libX11.so.6", RTLD_LAZY | RTLD_GLOBAL);
++		if (!h) h = dlopen("libX11.so", RTLD_LAZY | RTLD_GLOBAL);
++		if (h) {
++			pfnXQueryTree = (XQueryTree_t)dlsym(h, "XQueryTree");
++			pfnXFree = (XFree_t)dlsym(h, "XFree");
++		} else {
++			pfnXQueryTree = (XQueryTree_t)dlsym(RTLD_DEFAULT, "XQueryTree");
++			pfnXFree = (XFree_t)dlsym(RTLD_DEFAULT, "XFree");
++		}
++	});
++
++	if (pfnXQueryTree && pfnXFree) {
++		unsigned long curr = (unsigned long)(uintptr_t)nativeWin;
++		unsigned long root = 0, parent = 0;
++		unsigned long* children = nullptr;
++		unsigned int nchildren = 0;
++
++		while (curr != 0) {
++			if (!pfnXQueryTree(dpy, curr, &root, &parent, &children, &nchildren)) {
++				break;
++			}
++			if (children) {
++				pfnXFree(children);
++				children = nullptr;
++			}
++			if (parent == 0 || parent == root) {
++				return (void*)(uintptr_t)curr;
++			}
++			curr = parent;
++		}
++	}
++
++	return nativeWin;
++}
++
 +static bool darlingMetalDebug()
 +{
 +	static const bool enabled = access("/tmp/metal-debug-trace", F_OK) == 0;
 +	return enabled;
 +}
- 
--	while ((err = glGetError()) != GL_NO_ERROR) {
--		printf("*** OPENGL ERROR: %d ***\n", err);
++
 +static void darlingMetalTrace(const char* what, long a, long b)
 +{
 +	if (!darlingMetalDebug()) {
 +		return;
- 	}
--#endif
++	}
 +	static int count = 0;
 +	int n = __sync_add_and_fetch(&count, 1);
 +	if (n > 80 && n % 100 != 0) {
@@ -11251,7 +11451,7 @@ index b81e2e14..b2b05eeb 100644
  + (instancetype)allocWithZone: (NSZone*)zone
  {
  	if (self == [CAMetalLayer class]) {
-@@ -205,63 +323,81 @@ static void reportGLErrors(void) {
+@@ -205,63 +424,82 @@ static void reportGLErrors(void) {
  
  @end
  
@@ -11288,6 +11488,7 @@ index b81e2e14..b2b05eeb 100644
 +		_vkSurface = VK_NULL_HANDLE;
 +		_vkSwapchain = VK_NULL_HANDLE;
 +		_vkNativeWindow = nullptr;
++		_vkSubWindow = nullptr;
 +		_vkAcquireSemaphore = VK_NULL_HANDLE;
 +		_vkRenderCompleteSemaphore = VK_NULL_HANDLE;
 +		_vkPresentFence = VK_NULL_HANDLE;
@@ -11365,7 +11566,7 @@ index b81e2e14..b2b05eeb 100644
  }
  
  - (void)setDevice: (id<MTLDevice>)device
-@@ -290,7 +426,6 @@ static void reportGLErrors(void) {
+@@ -290,7 +528,6 @@ static void reportGLErrors(void) {
  
  - (CGColorSpaceRef)colorspace
  {
@@ -11373,7 +11574,7 @@ index b81e2e14..b2b05eeb 100644
  	return _colorspace;
  }
  
-@@ -321,6 +456,7 @@ static void reportGLErrors(void) {
+@@ -321,6 +558,7 @@ static void reportGLErrors(void) {
  
  - (void)setDrawableSize: (CGSize)drawableSize
  {
@@ -11381,7 +11582,7 @@ index b81e2e14..b2b05eeb 100644
  	_drawableSize = drawableSize;
  	[self recreateDrawables];
  }
-@@ -339,36 +475,45 @@ static void reportGLErrors(void) {
+@@ -339,36 +577,45 @@ static void reportGLErrors(void) {
  	[self recreateDrawables];
  }
  
@@ -11442,7 +11643,7 @@ index b81e2e14..b2b05eeb 100644
  		if (_allowsNextDrawableTimeout) {
  			if (![_drawableCondition waitUntilDate: endTime]) {
  				break;
-@@ -378,8 +523,15 @@ static void reportGLErrors(void) {
+@@ -378,8 +625,15 @@ static void reportGLErrors(void) {
  		}
  	}
  
@@ -11459,7 +11660,7 @@ index b81e2e14..b2b05eeb 100644
  		[_drawableCondition unlock];
  		return nil;
  	}
-@@ -394,12 +546,13 @@ static void reportGLErrors(void) {
+@@ -394,12 +648,13 @@ static void reportGLErrors(void) {
  	}
  
  	if (drawableID == UINT8_MAX) {
@@ -11474,7 +11675,7 @@ index b81e2e14..b2b05eeb 100644
  
  	drawable = _drawables[drawableID];
  
-@@ -410,20 +563,28 @@ static void reportGLErrors(void) {
+@@ -410,20 +665,28 @@ static void reportGLErrors(void) {
  
  - (void)queuePresent: (NSUInteger)drawableID
  {
@@ -11511,7 +11712,7 @@ index b81e2e14..b2b05eeb 100644
  	[_drawableCondition lock];
  	_usableDrawablesBitmap |= 1u << drawableID;
  	[_drawableCondition signal];
-@@ -437,16 +598,14 @@ static void reportGLErrors(void) {
+@@ -437,16 +700,14 @@ static void reportGLErrors(void) {
  	// drop all queued presentations
  	for (NSUInteger i = 0; i < _queuedDrawableCount; ++i) {
  		auto& drawable = _drawables[_queuedDrawables[i]];
@@ -11533,7 +11734,7 @@ index b81e2e14..b2b05eeb 100644
  	for (auto& drawable: _drawables) {
  		if (drawable) {
  			drawable->disown();
-@@ -455,14 +614,236 @@ static void reportGLErrors(void) {
+@@ -455,14 +716,251 @@ static void reportGLErrors(void) {
  	}
  	_usableDrawablesBitmap = 0;
  
@@ -11578,21 +11779,35 @@ index b81e2e14..b2b05eeb 100644
 +	}
 +
 +	void* nativeWin = nil;
++	id subwinObj = nil;
 +	if (_context && [_context subwindow]) {
-+		nativeWin = [[_context subwindow] nativeWindow];
++		subwinObj = [_context subwindow];
++		nativeWin = [subwinObj nativeWindow];
 +	} else if (self.superlayer && [self.superlayer _context] && [[self.superlayer _context] subwindow]) {
-+		nativeWin = [[[self.superlayer _context] subwindow] nativeWindow];
++		subwinObj = [[self.superlayer _context] subwindow];
++		nativeWin = [subwinObj nativeWindow];
 +	}
 +	void* nativeDpy = _CGSNativeDisplay(CGSMainConnectionID());
 +
-+	if (nativeWin && nativeDpy) {
-+		ensureX11WindowVisible(nativeDpy, nativeWin);
++	void* subWin = nativeWin;
++	void* topLevelWin = getTopLevelWindow(nativeDpy, subwinObj, subWin);
++	void* presentationWin = topLevelWin ? topLevelWin : subWin;
++
++	if (presentationWin && nativeDpy) {
++		ensureX11WindowVisible(nativeDpy, presentationWin);
++		if (subWin && subWin != presentationWin) {
++			ensureX11WindowVisible(nativeDpy, subWin);
++		}
 +	}
++
++	char winLog[256];
++	snprintf(winLog, sizeof(winLog), "recreateDrawables subWin=%p topLevelWin=%p (presenting on %p)", subWin, topLevelWin, presentationWin);
++	appendDeviceLog(winLog);
 +
 +	resolveVulkanSurfaceExtensions();
 +
-+	if (pfn_vkCreateXlibSurfaceKHR && nativeWin && nativeDpy) {
-+		if (_vkSurface == VK_NULL_HANDLE || _vkNativeWindow != nativeWin) {
++	if (pfn_vkCreateXlibSurfaceKHR && presentationWin && nativeDpy) {
++		if (_vkSurface == VK_NULL_HANDLE || _vkNativeWindow != presentationWin) {
 +			if (_vkSwapchain != VK_NULL_HANDLE) {
 +				DynamicVK::vkDestroySwapchainKHR(dev->device(), _vkSwapchain, nullptr);
 +				_vkSwapchain = VK_NULL_HANDLE;
@@ -11604,9 +11819,10 @@ index b81e2e14..b2b05eeb 100644
 +			VkXlibSurfaceCreateInfoKHR sci {};
 +			sci.sType = static_cast<VkStructureType>(1000004000);
 +			sci.dpy = nativeDpy;
-+			sci.window = (unsigned long)(uintptr_t)nativeWin;
++			sci.window = (unsigned long)(uintptr_t)presentationWin;
 +			if (pfn_vkCreateXlibSurfaceKHR(Indium::globalInstance, &sci, nullptr, &_vkSurface) == VK_SUCCESS) {
-+				_vkNativeWindow = nativeWin;
++				_vkNativeWindow = presentationWin;
++				_vkSubWindow = subWin;
 +			}
 +		}
 +
@@ -11681,7 +11897,7 @@ index b81e2e14..b2b05eeb 100644
 +					}
 +				}
 +			}
-+
+ 
 +			uint32_t imageCount = caps.minImageCount + 1;
 +			if (caps.maxImageCount > 0 && imageCount > caps.maxImageCount) {
 +				imageCount = caps.maxImageCount;
@@ -11705,7 +11921,7 @@ index b81e2e14..b2b05eeb 100644
 +					compositeAlpha = VK_COMPOSITE_ALPHA_POST_MULTIPLIED_BIT_KHR;
 +				}
 +			}
- 
++
 +			VkSwapchainCreateInfoKHR swapInfo {};
 +			swapInfo.sType = VK_STRUCTURE_TYPE_SWAPCHAIN_CREATE_INFO_KHR;
 +			swapInfo.surface = _vkSurface;
@@ -11773,7 +11989,7 @@ index b81e2e14..b2b05eeb 100644
  	switch (_pixelFormat) {
  		case MTLPixelFormatBGRA8Unorm:      pixelFormat = Indium::PixelFormat::BGRA8Unorm;      break;
  		case MTLPixelFormatBGRA8Unorm_sRGB: pixelFormat = Indium::PixelFormat::BGRA8Unorm_sRGB; break;
-@@ -476,123 +857,212 @@ static void reportGLErrors(void) {
+@@ -476,123 +974,215 @@ static void reportGLErrors(void) {
  		default:                            pixelFormat = Indium::PixelFormat::Invalid;         break;
  	}
  
@@ -11848,6 +12064,9 @@ index b81e2e14..b2b05eeb 100644
 +	if (frameNum <= 5 && _vkNativeWindow) {
 +		void* nativeDpy = _CGSNativeDisplay(CGSMainConnectionID());
 +		ensureX11WindowVisible(nativeDpy, _vkNativeWindow);
++		if (_vkSubWindow && _vkSubWindow != _vkNativeWindow) {
++			ensureX11WindowVisible(nativeDpy, _vkSubWindow);
++		}
  	}
  
 -	@synchronized(self) {
@@ -11957,7 +12176,7 @@ index b81e2e14..b2b05eeb 100644
 +	if (drawable->semaphore() && drawable->semaphore()->semaphore != VK_NULL_HANDLE) {
 +		waitSemaphores.push_back(drawable->semaphore()->semaphore);
 +		waitStages.push_back(VK_PIPELINE_STAGE_TRANSFER_BIT);
-+	}
+ 	}
 +	waitSemaphores.push_back(_vkAcquireSemaphore);
 +	waitStages.push_back(VK_PIPELINE_STAGE_TRANSFER_BIT);
 +
@@ -11992,7 +12211,7 @@ index b81e2e14..b2b05eeb 100644
 +		presentInfo.pImageIndices = &imageIndex;
 +
 +		presRes = DynamicVK::vkQueuePresentKHR(dev->graphicsQueue(), &presentInfo);
- 	}
++	}
 +
 +	if (frameNum <= 120 || (frameNum % 60) == 0) {
 +		char logBuf[256];
@@ -12070,7 +12289,7 @@ index b81e2e14..b2b05eeb 100644
  
  #else
 diff --git a/QuartzCore/CAMetalLayerInternal.h b/QuartzCore/CAMetalLayerInternal.h
-index 48693da0..f080db92 100644
+index 48693da0..a30a2e4b 100644
 --- a/QuartzCore/CAMetalLayerInternal.h
 +++ b/QuartzCore/CAMetalLayerInternal.h
 @@ -19,12 +19,14 @@
@@ -12106,7 +12325,7 @@ index 48693da0..f080db92 100644
  	std::array<std::shared_ptr<CAMetalDrawableActual>, 3> _drawables;
  	std::array<NSUInteger, 3> _queuedDrawables;
  	NSUInteger _queuedDrawableCount;
-@@ -47,12 +51,27 @@ class CAMetalDrawableActual;
+@@ -47,12 +51,28 @@ class CAMetalDrawableActual;
  	NSCondition* _drawableCondition;
  	std::shared_ptr<CAMetalDrawableActual> _lastPresentedDrawable;
  
@@ -12115,6 +12334,7 @@ index 48693da0..f080db92 100644
 +	VkSwapchainKHR _vkSwapchain;
 +	CGSize _vkSwapchainSize;
 +	void* _vkNativeWindow;
++	void* _vkSubWindow;
 +	std::vector<VkImage> _vkSwapchainImages;
 +	VkSemaphore _vkAcquireSemaphore;
 +	VkSemaphore _vkRenderCompleteSemaphore;
