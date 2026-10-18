@@ -25,4 +25,17 @@ for source in sources:
     link[link.index(f'CMakeFiles/QuartzCore.dir/{source}.o')] = str(obj)
 link[link.index('-o') + 1] = str(project / 'build/m336-QuartzCore')
 subprocess.run(link, cwd=framework, check=True)
+built_binary = project / 'build/m336-QuartzCore'
+destinations = [
+    Path.home() / '.darling/System/Library/Frameworks/QuartzCore.framework/Versions/A/QuartzCore',
+    Path.home() / '.darling/Users/fgeroldi/RuntimeFrameworks/QuartzCore.framework/Versions/A/QuartzCore',
+]
+for dst in destinations:
+    try:
+        dst.parent.mkdir(parents=True, exist_ok=True)
+        import shutil
+        shutil.copy2(built_binary, dst)
+        print(f'Installed QuartzCore to {dst}')
+    except Exception as e:
+        print(f'Could not install to {dst}: {e}')
 print('Built isolated QuartzCore compositor and Metal presentation')
