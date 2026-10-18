@@ -105,6 +105,64 @@ export __GL_YIELD="${__GL_YIELD:-NOTHING}"
 if [ -w /proc/self/timerslack_ns ]; then
   echo 1 > /proc/self/timerslack_ns 2>/dev/null || true
 fi
+# --- darling-lol GPU alignment (hybrid NVIDIA / integrated graphics) ---
+# Ensure OpenGL (GLX/EGL) and Vulkan (Indium/Metal) run on the exact same GPU,
+# preventing opaque-FD / DMABUF cross-GPU import failures.
+gpu_selector=""
+if [ -f /tmp/metal-gpu ]; then
+  gpu_selector=$(head -n 1 /tmp/metal-gpu 2>/dev/null | tr -d ' \t\r\n' | tr '[:upper:]' '[:lower:]')
+elif [ -n "${METAL_INDIUM_GPU:-}" ]; then
+  gpu_selector=$(echo "$METAL_INDIUM_GPU" | tr -d ' \t\r\n' | tr '[:upper:]' '[:lower:]')
+elif [ -n "${RCLOL_GPU:-}" ]; then
+  gpu_selector=$(echo "$RCLOL_GPU" | tr -d ' \t\r\n' | tr '[:upper:]' '[:lower:]')
+fi
+
+has_nvidia=0
+if [ -c /dev/nvidia0 ] || [ -d /proc/driver/nvidia ]; then
+  has_nvidia=1
+fi
+
+case "$gpu_selector" in
+  intel*|integrated*|mesa*|llvmpipe*|cpu*|0)
+    unset __NV_PRIME_RENDER_OFFLOAD __GLX_VENDOR_LIBRARY_NAME __VK_LAYER_NV_optimus __EGL_VENDOR_LIBRARY_FILENAMES VK_DRIVER_FILES VK_ICD_FILENAMES
+    if [ -f /usr/share/vulkan/icd.d/intel_icd.x86_64.json ]; then
+      export VK_DRIVER_FILES=/usr/share/vulkan/icd.d/intel_icd.x86_64.json
+      export VK_ICD_FILENAMES=/usr/share/vulkan/icd.d/intel_icd.x86_64.json
+    fi
+    ;;
+  amd*|radeon*|radv*)
+    export DRI_PRIME=1
+    ;;
+  *)
+    if [ "$has_nvidia" = 1 ]; then
+      export __NV_PRIME_RENDER_OFFLOAD=1
+      export __GLX_VENDOR_LIBRARY_NAME=nvidia
+      export __VK_LAYER_NV_optimus=NVIDIA_only
+      if [ -f /usr/share/glvnd/egl_vendor.d/10_nvidia.json ]; then
+        export __EGL_VENDOR_LIBRARY_FILENAMES=/usr/share/glvnd/egl_vendor.d/10_nvidia.json
+      fi
+      if [ -f /usr/share/vulkan/icd.d/nvidia_icd.x86_64.json ]; then
+        export VK_DRIVER_FILES=/usr/share/vulkan/icd.d/nvidia_icd.x86_64.json
+        export VK_ICD_FILENAMES=/usr/share/vulkan/icd.d/nvidia_icd.x86_64.json
+      elif [ -f /usr/share/vulkan/icd.d/nvidia_icd.json ]; then
+        export VK_DRIVER_FILES=/usr/share/vulkan/icd.d/nvidia_icd.json
+        export VK_ICD_FILENAMES=/usr/share/vulkan/icd.d/nvidia_icd.json
+      fi
+    fi
+    ;;
+esac
+
+# Auto-detect active DISPLAY if not set or empty
+if [ -z "${DISPLAY:-}" ]; then
+  for s in /tmp/.X11-unix/X*; do
+    if [ -S "$s" ]; then
+      DISPLAY=":${s##*/X}"
+      break
+    fi
+  done
+  DISPLAY="${DISPLAY:-:0}"
+fi
+
 # Saneamento de variáveis de ambiente: eliminar qualquer variável que exponha a
 # substring "DARLING" na tabela environ dos processos e em /proc/self/environ.
 for var in $(env | awk -F= '$1 ~ /[Dd][Aa][Rr][Ll][Ii][Nn][Gg]/ {print $1}'); do
@@ -115,7 +173,7 @@ exec env -u ELECTRON_RUN_AS_NODE -u DYLD_INSERT_LIBRARIES \
   EGL_PLATFORM=x11 \
   LANG="${RCLOL_GUEST_LOCALE:-en_US.UTF-8}" LC_ALL="${RCLOL_GUEST_LOCALE:-en_US.UTF-8}" \
   mesa_glthread="${RCLOL_MESA_GLTHREAD-${mesa_glthread-false}}" \
-  XMODIFIERS="${RCLOL_XMODIFIERS:-@im=none}" DISPLAY="${DISPLAY:-:1}" \
+  XMODIFIERS="${RCLOL_XMODIFIERS:-@im=none}" DISPLAY="${DISPLAY}" \
   DYLD_LIBRARY_PATH="${DYLD_LIBRARY_PATH:-$guest_path/RuntimeLibraries}" \
   DYLD_FRAMEWORK_PATH="${DYLD_FRAMEWORK_PATH:-$guest_path/RuntimeFrameworks}" \
   RCLOL_XSHM_LIBRARY="${RCLOL_XSHM_LIBRARY:-$guest_path/libDarlingXShm.dylib}" \
