@@ -134,7 +134,7 @@ index d543e329..e320a3af 100644
  {
      return [NSMethodSignature signatureWithObjCTypes: "v@:"];
 diff --git a/AppKit/NSApplication.m b/AppKit/NSApplication.m
-index 8e7508e2..2a011d7d 100644
+index 8e7508e2..5910da81 100644
 --- a/AppKit/NSApplication.m
 +++ b/AppKit/NSApplication.m
 @@ -17,6 +17,9 @@ COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER
@@ -283,10 +283,14 @@ index 8e7508e2..2a011d7d 100644
  
      do {
          pool = [NSAutoreleasePool new];
-@@ -716,6 +763,12 @@ NSApplication *NSApp = nil;
+@@ -716,6 +763,16 @@ NSApplication *NSApp = nil;
  }
  
  - (void) sendEvent: (NSEvent *) event {
++    extern NSEvent *_NSApplyLocalEventMonitors(NSEvent *);
++    event = _NSApplyLocalEventMonitors(event);
++    if (event == nil)
++        return;
 +    static int inputTrace = -1;
 +    if (inputTrace < 0) inputTrace = getenv("RCLOL_INPUT_TRACE") != NULL;
 +    if (inputTrace && ([event type] == NSKeyDown || [event type] == NSLeftMouseDown))
@@ -296,7 +300,7 @@ index 8e7508e2..2a011d7d 100644
      if ([event type] == NSKeyDown) {
          unsigned modifierFlags = [event modifierFlags];
  
-@@ -742,6 +795,61 @@ NSApplication *NSApp = nil;
+@@ -742,6 +799,61 @@ NSApplication *NSApp = nil;
      do {
          NSAutoreleasePool *pool = [NSAutoreleasePool new];
  
@@ -692,10 +696,49 @@ index cacd8999..9422d869 100644
      NSInvalidAbstractInvocation();
      return nil;
 diff --git a/AppKit/NSEvent.subproj/NSEvent.m b/AppKit/NSEvent.subproj/NSEvent.m
-index d0bad986..d0b1b4aa 100644
+index d0bad986..fecfa9f8 100644
 --- a/AppKit/NSEvent.subproj/NSEvent.m
 +++ b/AppKit/NSEvent.subproj/NSEvent.m
-@@ -40,6 +40,10 @@ CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE. */
+@@ -29,6 +29,38 @@ CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE. */
+ #import <Foundation/NSDate.h>
+ #import <Foundation/NSException.h>
+ #import <Foundation/NSRaise.h>
++#import <Foundation/NSArray.h>
++
++@interface _NSLocalEventMonitor : NSObject {
++@public
++    NSEventMask _mask;
++    NSEvent * (^_handler)(NSEvent *);
++}
++@end
++
++@implementation _NSLocalEventMonitor
++- (void) dealloc {
++    [_handler release];
++    [super dealloc];
++}
++@end
++
++static NSMutableArray *_NSLocalEventMonitors;
++
++/* Snapshot the registrations: changes made by a handler affect subsequent
++ * dispatches, not the event already in flight. Handlers may also enter a nested
++ * event loop, which takes its own snapshot. */
++NSEvent *_NSApplyLocalEventMonitors(NSEvent *event) {
++    NSArray *monitors = [[_NSLocalEventMonitors copy] autorelease];
++    for (_NSLocalEventMonitor *monitor in [monitors reverseObjectEnumerator]) {
++        if (event == nil)
++            break;
++        NSUInteger type = [event type];
++        if (type < sizeof(NSEventMask) * 8 && (monitor->_mask & ((NSEventMask)1 << type)))
++            event = monitor->_handler(event);
++    }
++    return event;
++}
+ 
+ @implementation NSEvent
+ 
+@@ -40,6 +72,10 @@ CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE. */
      return [[NSDisplay currentDisplay] currentModifierFlags];
  }
  
@@ -706,6 +749,34 @@ index d0bad986..d0b1b4aa 100644
  - (instancetype) initWithType: (NSEventType) type
                       location: (NSPoint) location
                  modifierFlags: (NSEventModifierFlags) modifierFlags
+@@ -350,14 +386,23 @@ static NSTimer *_periodicTimer = nil;
+ }
+ 
+ + (id) addLocalMonitorForEventsMatchingMask: (NSEventMask) mask
+-                                    handler: (NSEvent * (^)(NSEvent *event)) block
++                                     handler: (NSEvent * (^)(NSEvent *event)) block
+ {
+-    NSUnimplementedMethod();
+-    return nil;
++    if (block == nil)
++        return nil;
++    if (_NSLocalEventMonitors == nil)
++        _NSLocalEventMonitors = [NSMutableArray new];
++    _NSLocalEventMonitor *monitor = [[_NSLocalEventMonitor alloc] init];
++    monitor->_mask = mask;
++    monitor->_handler = [block copy];
++    [_NSLocalEventMonitors addObject: monitor];
++    return [monitor autorelease];
+ }
+ 
+ + (void) removeMonitor: (id) eventMonitor {
+-    NSUnimplementedMethod();
++    if ([_NSLocalEventMonitors indexOfObjectIdenticalTo: eventMonitor] != NSNotFound) {
++        [_NSLocalEventMonitors removeObjectIdenticalTo: eventMonitor];
++    }
+ }
+ 
+ @end
 diff --git a/AppKit/NSEvent.subproj/NSEvent_mouse.m b/AppKit/NSEvent.subproj/NSEvent_mouse.m
 index 31c65aac..f7d55ec0 100644
 --- a/AppKit/NSEvent.subproj/NSEvent_mouse.m
@@ -877,6 +948,37 @@ index 2251b642..8b29725d 100644
  - (NSRect) boundingRectForFont {
      return CTFontGetBoundingBox(_ctFont);
  }
+diff --git a/AppKit/NSGeometryTrace.h b/AppKit/NSGeometryTrace.h
+new file mode 100644
+index 00000000..a51a9241
+--- /dev/null
++++ b/AppKit/NSGeometryTrace.h
+@@ -0,0 +1,25 @@
++/* Opt-in runtime geometry diagnostics; never log view text or client data. */
++#ifndef DARLING_NS_GEOMETRY_TRACE_H
++#define DARLING_NS_GEOMETRY_TRACE_H
++#include <stdarg.h>
++#include <stdio.h>
++#include <stdlib.h>
++
++static inline void DarlingGeometryTrace(const char *format, ...) {
++    if (!getenv("DARLING_UI_GEOMETRY_TRACE"))
++        return;
++    va_list args, copy;
++    va_start(args, format);
++    va_copy(copy, args);
++    vfprintf(stderr, format, args);
++    va_end(args);
++    /* Clients may redirect stderr to a non-log descriptor. Keep a copy in
++     * the guest's temporary directory so their resize events remain visible. */
++    FILE *file = fopen("/tmp/darling-ui-geometry.log", "a");
++    if (file) {
++        vfprintf(file, format, copy);
++        fclose(file);
++    }
++    va_end(copy);
++}
++#endif
 diff --git a/AppKit/NSImage.m b/AppKit/NSImage.m
 index d2ac8e05..a4164f0a 100644
 --- a/AppKit/NSImage.m
@@ -1094,12 +1196,128 @@ index 6c3d2688..2a7d078a 100644
  + (NSArray<NSRunningApplication *> *) runningApplicationsWithBundleIdentifier: (NSString *) bundleIdentifier {
      printf("STUB %s\n", __PRETTY_FUNCTION__);
      return [NSArray array];
+diff --git a/AppKit/NSSavePanel.subproj/NSOpenPanel.m b/AppKit/NSSavePanel.subproj/NSOpenPanel.m
+index dfd33637..9388b186 100644
+--- a/AppKit/NSSavePanel.subproj/NSOpenPanel.m
++++ b/AppKit/NSSavePanel.subproj/NSOpenPanel.m
+@@ -23,6 +23,8 @@ CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE. */
+ 
+ @interface NSSavePanel (Private)
+ - (void) _setFilename: (NSString *) filename;
++- (NSArray *) _selectedPaths;
++- (void) _setAcceptedPaths: (NSArray *) paths;
+ @end
+ 
+ @implementation NSOpenPanel
+@@ -92,7 +94,36 @@ static NSOpenPanel *_newPanel = nil;
+ 
+ - (void) _setFilename: (NSString *) filename {
+     [super _setFilename: filename];
+-    _filenames = [@[ filename ] retain];
++    [self _setAcceptedPaths: [filename length] > 0 ? @[ filename ] : @[]];
++}
++
++- (void) _setAcceptedPaths: (NSArray *) paths {
++    if (!_allowsMultipleSelection && [paths count] > 1)
++        paths = @[ [paths firstObject] ];
++    @synchronized(self) {
++        NSArray *copy = [paths copy];
++        [_filenames release];
++        _filenames = copy;
++    }
++    [super _setFilename: [paths firstObject]];
++}
++
++/* Open only accepts what the panel was configured to choose. With nothing
++ * selected, a directory chooser accepts the directory being shown. */
++- (NSArray *) _acceptablePaths {
++    NSFileManager *manager = [NSFileManager defaultManager];
++    NSMutableArray *result = [NSMutableArray array];
++    for (NSString *path in [self _selectedPaths]) {
++        BOOL isDirectory = NO;
++        if (![manager fileExistsAtPath: path isDirectory: &isDirectory])
++            continue;
++        if (isDirectory ? _canChooseDirectories : _canChooseFiles)
++            [result addObject: path];
++    }
++    if ([result count] == 0 && [[self _selectedPaths] count] == 0 &&
++        _canChooseDirectories && [[self directory] length] > 0)
++        [result addObject: [self directory]];
++    return result;
+ }
+ 
+ - (NSInteger) runModalForDirectory: (NSString *) directory
 diff --git a/AppKit/NSSavePanel.subproj/NSSavePanel.m b/AppKit/NSSavePanel.subproj/NSSavePanel.m
-index 50c3d59e..5872e594 100644
+index 50c3d59e..be5a8463 100644
 --- a/AppKit/NSSavePanel.subproj/NSSavePanel.m
 +++ b/AppKit/NSSavePanel.subproj/NSSavePanel.m
-@@ -124,8 +124,48 @@ static NSSavePanel *_newPanel = nil;
-     [NSApp stopModalWithCode: NSCancelButton];
+@@ -113,19 +113,108 @@ static NSSavePanel *_newPanel = nil;
+     }
+ }
+ 
+-- (IBAction) _selectFile: (id) sender {
+-    NSURL *url = [_outlineView itemAtRow: [_outlineView selectedRow]];
+-    [self _setFilename: [url path]];
++/* Paths of the rows selected in the file list. Safe with no selection. */
++- (NSArray *) _selectedPaths {
++    NSMutableArray *paths = [NSMutableArray array];
++    NSIndexSet *rows = [_outlineView selectedRowIndexes];
++    for (NSUInteger row = [rows firstIndex]; row != NSNotFound;
++         row = [rows indexGreaterThanIndex: row]) {
++        id item = [_outlineView itemAtRow: row];
++        if ([item isKindOfClass: [NSURL class]] && [[item path] length] > 0)
++            [paths addObject: [item path]];
++    }
++    return paths;
++}
++
++/* What the Open/Save button accepts: the selected rows, or with nothing
++ * selected the directory being shown. An empty result keeps the panel up. */
++- (NSArray *) _acceptablePaths {
++    NSArray *selected = [self _selectedPaths];
++    if ([selected count] > 0)
++        return selected;
++    if ([_directory length] > 0)
++        return @[ _directory ];
++    return @[];
++}
+ 
+-    [NSApp stopModalWithCode: NSOKButton];
++- (void) _setAcceptedPaths: (NSArray *) paths {
++    [self _setFilename: [paths firstObject]];
++}
++
++/* End the modal session this panel is running and take the panel off screen.
++ * The session is stopped only when this panel is the modal window, never
++ * another session that happens to be on top. The panel is hidden here as well
++ * so a dialog whose session cannot be stopped still goes away. */
++- (void) _dismissWithCode: (NSModalResponse) code {
++    if ([NSApp modalWindow] == self)
++        [NSApp stopModalWithCode: code];
++    [self orderOut: nil];
++}
++
++- (IBAction) _selectFile: (id) sender {
++    NSArray *paths = [self _acceptablePaths];
++    if ([paths count] == 0)
++        return;
++    @try {
++        [self _setAcceptedPaths: paths];
++    } @catch (NSException *exception) {
++        NSLog(@"NSSavePanel: could not record the chosen file: %@", exception);
++        [self _dismissWithCode: NSCancelButton];
++        return;
++    }
++    [self _dismissWithCode: NSOKButton];
+ }
+ 
+ - (IBAction) _cancel: (id) sender {
+-    [NSApp stopModalWithCode: NSCancelButton];
++    [self _dismissWithCode: NSCancelButton];
++}
++
++- (void) cancelOperation: (id) sender {
++    [self _cancel: sender];
  }
  
 +// Electron (Riot Client UI) opens its file dialogs through these and waits
@@ -2365,7 +2583,7 @@ index 8ac2bbdc..595b9f43 100644
  
  - (BOOL) performDragOperation: (id<NSDraggingInfo>) sender {
 diff --git a/AppKit/NSWindow.m b/AppKit/NSWindow.m
-index d545120a..b1d73df2 100644
+index d545120a..cfe7ce02 100644
 --- a/AppKit/NSWindow.m
 +++ b/AppKit/NSWindow.m
 @@ -19,6 +19,7 @@ IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN
@@ -3189,15 +3407,28 @@ index d545120a..b1d73df2 100644
      [[NSDraggingManager draggingManager] dragImage: image
                                                  at: location
                                              offset: offset
-@@ -2536,6 +3154,7 @@ static BOOL _allowsAutomaticWindowTabbing;
+@@ -2527,15 +3145,19 @@ static BOOL _allowsAutomaticWindowTabbing;
+ }
+ 
+ - (void) setIsVisible: (BOOL) visible {
+-    if (_isVisible == visible) {
++    /* darling-lol: hiding always reaches the platform window, which may be mapped while _isVisible is NO. */
++    if (_isVisible == visible && visible) {
+         return;
+     }
++    BOOL changed = _isVisible != visible;
+     _isVisible = visible;
+     if (visible) {
+         [[self platformWindow] showWindowWithoutActivation];
      } else {
          [[self platformWindow] hideWindow];
      }
-+    [self postNotificationName: NSWindowDidChangeOcclusionStateNotification];
++    if (changed)
++        [self postNotificationName: NSWindowDidChangeOcclusionStateNotification];
  }
  
  - (void) orderFront: (id) sender {
-@@ -2577,6 +3196,10 @@ static BOOL _allowsAutomaticWindowTabbing;
+@@ -2577,6 +3199,10 @@ static BOOL _allowsAutomaticWindowTabbing;
              [NSApp abortModal];
          } else {
              [self close];
@@ -3208,7 +3439,7 @@ index d545120a..b1d73df2 100644
          }
      }
  }
-@@ -2655,10 +3278,12 @@ static BOOL _allowsAutomaticWindowTabbing;
+@@ -2655,10 +3281,12 @@ static BOOL _allowsAutomaticWindowTabbing;
  
  - (void) miniaturize: (id) sender {
      [[self platformWindow] miniaturize];
@@ -3221,7 +3452,7 @@ index d545120a..b1d73df2 100644
  }
  
  - (void) print: (id) sender {
-@@ -2990,6 +3615,7 @@ static BOOL _allowsAutomaticWindowTabbing;
+@@ -2990,6 +3618,7 @@ static BOOL _allowsAutomaticWindowTabbing;
                                  relativeTo: [self windowNumber]];
      }
      [self postNotificationName: NSWindowDidDeminiaturizeNotification];
@@ -3229,7 +3460,7 @@ index d545120a..b1d73df2 100644
      [NSApp updateWindows];
  }
  
-@@ -3002,6 +3628,7 @@ static BOOL _allowsAutomaticWindowTabbing;
+@@ -3002,6 +3631,7 @@ static BOOL _allowsAutomaticWindowTabbing;
      }
  
      [self postNotificationName: NSWindowDidMiniaturizeNotification];
@@ -3237,7 +3468,7 @@ index d545120a..b1d73df2 100644
  
      if ([self isKeyWindow]) {
          [self resignKeyWindow];
-@@ -3064,6 +3691,13 @@ static BOOL _allowsAutomaticWindowTabbing;
+@@ -3064,6 +3694,13 @@ static BOOL _allowsAutomaticWindowTabbing;
      if (didSize) {
          // Don't redraw everything unless we really have to.
          [_backgroundView setFrameSize: _frame.size];
@@ -3251,7 +3482,7 @@ index d545120a..b1d73df2 100644
          [_backgroundView setNeedsDisplay: YES];
          [self resetCursorRects];
          [self saveFrameUsingName: _autosaveFrameName];
-@@ -3260,8 +3894,7 @@ static BOOL _allowsAutomaticWindowTabbing;
+@@ -3260,8 +3897,7 @@ static BOOL _allowsAutomaticWindowTabbing;
                  mouseWasInside && !mouseIsInside) {
                  [exited addObject: area];
              }
@@ -3261,7 +3492,7 @@ index d545120a..b1d73df2 100644
                  [moved addObject: area];
              }
              if (options & NSTrackingCursorUpdate && !mouseWasInside &&
-@@ -3459,7 +4092,7 @@ static BOOL _allowsAutomaticWindowTabbing;
+@@ -3459,7 +4095,7 @@ static BOOL _allowsAutomaticWindowTabbing;
  }
  
  - (CGSubWindow *) _createSubWindowWithFrame: (CGRect) frame {
@@ -3531,7 +3762,7 @@ index 18189404..12cde429 100644
 +- (NSRect) frameForRootRect: (NSRect) rect;
  @end
 diff --git a/AppKit/X11.backend/X11Display.m b/AppKit/X11.backend/X11Display.m
-index 5ae29bf4..77856962 100644
+index 5ae29bf4..d6d6da36 100644
 --- a/AppKit/X11.backend/X11Display.m
 +++ b/AppKit/X11.backend/X11Display.m
 @@ -39,6 +39,7 @@
@@ -4509,7 +4740,7 @@ index 5ae29bf4..77856962 100644
  }
  
  - (NSEventModifierFlags) modifierFlagsForState: (unsigned int) state {
-@@ -1010,17 +1673,101 @@ static NSDictionary *modeInfoToDictionary(const XRRModeInfo *mi, int depth) {
+@@ -1010,17 +1673,162 @@ static NSDictionary *modeInfoToDictionary(const XRRModeInfo *mi, int depth) {
      return result;
  }
  
@@ -4517,15 +4748,37 @@ index 5ae29bf4..77856962 100644
 + * carries the state AFTER it. Keep both sides separately so releasing one
 + * Shift/Command key does not clear the other, and reconcile missed releases
 + * when the compositor intercepts a shortcut or changes keyboard focus. */
++static unsigned char rclolServerModifiers[256];
++static BOOL rclolServerModifiersLoaded;
++
++/* Which modifier each keycode sets depends on the layout: Right Alt is Mod5
++ * (AltGr) on most European layouts and Mod1 (Alt) on US. Ask the server. */
++static void rclolLoadServerModifiers(Display *display) {
++    if (rclolServerModifiersLoaded) return;
++    rclolServerModifiersLoaded = YES;
++    memset(rclolServerModifiers, 0, sizeof(rclolServerModifiers));
++    XModifierKeymap *map = XGetModifierMapping(display);
++    if (!map) return;
++    for (int mod = 0; mod < 8; ++mod)
++        for (int i = 0; i < map->max_keypermod; ++i) {
++            KeyCode code = map->modifiermap[mod * map->max_keypermod + i];
++            if (code) rclolServerModifiers[code] |= 1 << mod;
++        }
++    XFreeModifiermap(map);
++}
++
 +static unsigned int rclolModifierMask(unsigned int key) {
++    unsigned int fallback;
 +    switch (key) {
-+    case 50: case 62: return ShiftMask;
-+    case 37: case 105: return ControlMask;
-+    case 64: return Mod1Mask;
-+    case 108: return Mod5Mask;
-+    case 133: case 134: return Mod4Mask;
++    case 50: case 62: fallback = ShiftMask; break;
++    case 37: case 105: fallback = ControlMask; break;
++    case 64: fallback = Mod1Mask; break;
++    case 108: fallback = Mod5Mask; break;
++    case 133: case 134: fallback = Mod4Mask; break;
 +    default: return 0;
 +    }
++    unsigned int server = rclolServerModifiers[key] & (Mod1Mask | Mod4Mask | Mod5Mask | ShiftMask | ControlMask);
++    return server ? server : fallback;
 +}
 +
 +- (void) postModifierKey:(unsigned int)key state:(unsigned int)state window:(id)delegate {
@@ -4554,6 +4807,26 @@ index 5ae29bf4..77856962 100644
 +    }
 +}
 +
++/* A compositor can eat a modifier release without moving focus: GNOME's
++ * overview delivers Super's press, swallows its release and hands the
++ * keyboard back with no FocusOut, leaving Command held in the guest. Every
++ * input event carries the server's modifier state, so release any key we
++ * think is held whose modifier is missing there. `except` is the key of a
++ * modifier event, whose state predates its own transition. */
++- (void) releaseModifierKeysMissingFromState:(unsigned int)state except:(unsigned int)except window:(id)delegate {
++    static const unsigned char keys[] = { 50, 62, 37, 105, 64, 108, 133, 134 };
++    for (unsigned int i = 0; i < sizeof(keys); ++i) {
++        unsigned int key = keys[i];
++        if (key == except || !_modifierKeysDown[key]) continue;
++        if (state & rclolModifierMask(key)) continue;
++        _modifierKeysDown[key] = 0;
++        unsigned int now = state & ~(ShiftMask | ControlMask | Mod1Mask | Mod4Mask | Mod5Mask);
++        for (unsigned int j = 0; j < sizeof(keys); ++j)
++            if (_modifierKeysDown[keys[j]]) now |= rclolModifierMask(keys[j]);
++        [self postModifierKey:key state:now window:delegate];
++    }
++}
++
  - (void) postXEvent: (XEvent *) ev {
      id event = nil;
      NSEventType type;
@@ -4564,15 +4837,16 @@ index 5ae29bf4..77856962 100644
 +        return;
 +    }
 +    X11Window* window = (X11Window*) rawWindow;
- 
--    id delegate = [window delegate];
++
 +    id delegate = [window respondsToSelector: @selector(delegate)] ? [window delegate] : nil;
++    rclolLoadServerModifiers(_display);
 +    static int inputTrace = -1;
 +    if (inputTrace < 0) inputTrace = getenv("RCLOL_INPUT_TRACE") != NULL;
 +    if (inputTrace && (ev->type == KeyPress || ev->type == KeyRelease || ev->type == ButtonPress))
 +        NSLog(@"LOLINPUT X type=%d window=%lu mapped=%@ number=%ld", ev->type,
 +            (unsigned long)ev->xany.window, [delegate class], (long)[delegate windowNumber]);
-+
+ 
+-    id delegate = [window delegate];
 +    switch (ev->type) {
 +    case MotionNotify:
 +        rclolRootX = ev->xmotion.x_root;
@@ -4590,6 +4864,24 @@ index 5ae29bf4..77856962 100644
 +    /* Expected warp echoes are among the events queued when the warp was synced; motion ages them itself. */
 +    if (_relativeMouse.active && ev->type != MotionNotify)
 +        X11RelativeMouseTick(&_relativeMouse);
++
++    /* Events sent by other clients carry whatever state they chose. */
++    switch (ev->xany.send_event ? 0 : ev->type) {
++    case KeyPress: case KeyRelease:
++        [self releaseModifierKeysMissingFromState:ev->xkey.state except:ev->xkey.keycode window:delegate];
++        break;
++    case ButtonPress: case ButtonRelease:
++        [self releaseModifierKeysMissingFromState:ev->xbutton.state except:0 window:delegate];
++        break;
++    case MotionNotify:
++        [self releaseModifierKeysMissingFromState:ev->xmotion.state except:0 window:delegate];
++        break;
++    case EnterNotify: case LeaveNotify:
++        [self releaseModifierKeysMissingFromState:ev->xcrossing.state except:0 window:delegate];
++        break;
++    default:
++        break;
++    }
  
      switch (ev->type) {
      case KeyPress:
@@ -4613,7 +4905,7 @@ index 5ae29bf4..77856962 100644
          NSEventModifierFlags modifierFlags = [self modifierFlagsForState: ev->xkey.state];
          char buf[20] = {0};
          KeySym keySym;
-@@ -1030,7 +1777,11 @@ static NSDictionary *modeInfoToDictionary(const XRRModeInfo *mi, int depth) {
+@@ -1030,7 +1838,11 @@ static NSDictionary *modeInfoToDictionary(const XRRModeInfo *mi, int depth) {
              break;
  
          if (ev->type == KeyPress) {
@@ -4626,7 +4918,7 @@ index 5ae29bf4..77856962 100644
              buf[strLen] = 0;
          } else {
              // Xutf8LookupString() may not be used with KeyRelease
-@@ -1038,6 +1789,18 @@ static NSDictionary *modeInfoToDictionary(const XRRModeInfo *mi, int depth) {
+@@ -1038,6 +1850,18 @@ static NSDictionary *modeInfoToDictionary(const XRRModeInfo *mi, int depth) {
              buf[strLen] = 0;
          }
  
@@ -4645,7 +4937,7 @@ index 5ae29bf4..77856962 100644
          id str = [[NSString alloc] initWithCString: buf
                                            encoding: NSUTF8StringEncoding];
          NSPoint pos =
-@@ -1077,6 +1840,47 @@ static NSDictionary *modeInfoToDictionary(const XRRModeInfo *mi, int depth) {
+@@ -1077,6 +1901,47 @@ static NSDictionary *modeInfoToDictionary(const XRRModeInfo *mi, int depth) {
          break;
  
      case ButtonPress:;
@@ -4693,7 +4985,7 @@ index 5ae29bf4..77856962 100644
          NSTimeInterval now = [[NSDate date] timeIntervalSinceReferenceDate];
  
          if (now - lastClickTimeStamp < [self doubleClickInterval]) {
-@@ -1086,8 +1890,8 @@ static NSDictionary *modeInfoToDictionary(const XRRModeInfo *mi, int depth) {
+@@ -1086,8 +1951,8 @@ static NSDictionary *modeInfoToDictionary(const XRRModeInfo *mi, int depth) {
          }
          lastClickTimeStamp = now;
  
@@ -4704,7 +4996,7 @@ index 5ae29bf4..77856962 100644
  
          switch (ev->xbutton.button) {
          case Button1:
-@@ -1096,10 +1900,6 @@ static NSDictionary *modeInfoToDictionary(const XRRModeInfo *mi, int depth) {
+@@ -1096,10 +1961,6 @@ static NSDictionary *modeInfoToDictionary(const XRRModeInfo *mi, int depth) {
          case Button3:
              type = NSRightMouseDown;
              break;
@@ -4715,7 +5007,7 @@ index 5ae29bf4..77856962 100644
          default:
              type = NSOtherMouseDown;
          }
-@@ -1113,14 +1913,22 @@ static NSDictionary *modeInfoToDictionary(const XRRModeInfo *mi, int depth) {
+@@ -1113,14 +1974,22 @@ static NSDictionary *modeInfoToDictionary(const XRRModeInfo *mi, int depth) {
                          clickCount: clickCount
                              deltaX: 0.0
                              deltaY: 0.0];
@@ -4742,7 +5034,7 @@ index 5ae29bf4..77856962 100644
          CGFloat deltaY = 0.0;
  
          switch (ev->xbutton.button) {
-@@ -1130,14 +1938,6 @@ static NSDictionary *modeInfoToDictionary(const XRRModeInfo *mi, int depth) {
+@@ -1130,14 +1999,6 @@ static NSDictionary *modeInfoToDictionary(const XRRModeInfo *mi, int depth) {
          case Button3:
              type = NSRightMouseUp;
              break;
@@ -4757,7 +5049,7 @@ index 5ae29bf4..77856962 100644
          default:
              type = NSOtherMouseUp;
          }
-@@ -1151,7 +1951,9 @@ static NSDictionary *modeInfoToDictionary(const XRRModeInfo *mi, int depth) {
+@@ -1151,7 +2012,9 @@ static NSDictionary *modeInfoToDictionary(const XRRModeInfo *mi, int depth) {
                          clickCount: clickCount
                              deltaX: 0.0
                              deltaY: deltaY];
@@ -4768,7 +5060,7 @@ index 5ae29bf4..77856962 100644
          [self postEvent: event atStart: NO];
          break;
  
-@@ -1160,49 +1962,95 @@ static NSDictionary *modeInfoToDictionary(const XRRModeInfo *mi, int depth) {
+@@ -1160,49 +2023,95 @@ static NSDictionary *modeInfoToDictionary(const XRRModeInfo *mi, int depth) {
              // ev->xmotion.x, ev->xmotion.y, ev->xmotion.x_root,
              // ev->xmotion.y_root);
  
@@ -4890,7 +5182,7 @@ index 5ae29bf4..77856962 100644
                      mouseEventWithType: type
                                location: pos
                           modifierFlags:
-@@ -1211,28 +2059,58 @@ static NSDictionary *modeInfoToDictionary(const XRRModeInfo *mi, int depth) {
+@@ -1211,28 +2120,58 @@ static NSDictionary *modeInfoToDictionary(const XRRModeInfo *mi, int depth) {
                              clickCount: 1
                                  deltaX: deltaX
                                  deltaY: deltaY];
@@ -4951,7 +5243,7 @@ index 5ae29bf4..77856962 100644
          NSLog(@"FocusIn");
          if ([delegate attachedSheet]) {
              [[delegate attachedSheet] makeKeyAndOrderFront: delegate];
-@@ -1243,28 +2121,62 @@ static NSDictionary *modeInfoToDictionary(const XRRModeInfo *mi, int depth) {
+@@ -1243,28 +2182,62 @@ static NSDictionary *modeInfoToDictionary(const XRRModeInfo *mi, int depth) {
                                   checkForAppDeactivation: NO];
              lastFocusedWindow = nil;
          }
@@ -5016,7 +5308,7 @@ index 5ae29bf4..77856962 100644
          O2Rect rect = NSMakeRect(ev->xexpose.x, ev->xexpose.y,
                                   ev->xexpose.width, ev->xexpose.height);
  
-@@ -1301,11 +2213,23 @@ static NSDictionary *modeInfoToDictionary(const XRRModeInfo *mi, int depth) {
+@@ -1301,11 +2274,23 @@ static NSDictionary *modeInfoToDictionary(const XRRModeInfo *mi, int depth) {
          break;
  
      case UnmapNotify:
@@ -5044,7 +5336,7 @@ index 5ae29bf4..77856962 100644
          break;
  
      case MapRequest:
-@@ -1317,10 +2241,21 @@ static NSDictionary *modeInfoToDictionary(const XRRModeInfo *mi, int depth) {
+@@ -1317,10 +2302,21 @@ static NSDictionary *modeInfoToDictionary(const XRRModeInfo *mi, int depth) {
          break;
  
      case ConfigureNotify:
@@ -5066,7 +5358,7 @@ index 5ae29bf4..77856962 100644
          break;
  
      case ConfigureRequest:
-@@ -1344,6 +2279,12 @@ static NSDictionary *modeInfoToDictionary(const XRRModeInfo *mi, int depth) {
+@@ -1344,6 +2340,12 @@ static NSDictionary *modeInfoToDictionary(const XRRModeInfo *mi, int depth) {
          break;
  
      case PropertyNotify:
@@ -5079,7 +5371,7 @@ index 5ae29bf4..77856962 100644
          if ([window respondsToSelector: @selector(propertyNotify:)]) {
              [window propertyNotify: &ev->xproperty];
          }
-@@ -1372,6 +2313,10 @@ static NSDictionary *modeInfoToDictionary(const XRRModeInfo *mi, int depth) {
+@@ -1372,6 +2374,10 @@ static NSDictionary *modeInfoToDictionary(const XRRModeInfo *mi, int depth) {
          break;
  
      case ClientMessage:
@@ -5090,7 +5382,17 @@ index 5ae29bf4..77856962 100644
          if (ev->xclient.format == 32 &&
              ev->xclient.data.l[0] ==
                      XInternAtom(_display, "WM_DELETE_WINDOW", False)) {
-@@ -1399,7 +2344,9 @@ static NSDictionary *modeInfoToDictionary(const XRRModeInfo *mi, int depth) {
+@@ -1392,6 +2398,9 @@ static NSDictionary *modeInfoToDictionary(const XRRModeInfo *mi, int depth) {
+ 
+     case MappingNotify:
+         NSLog(@"MappingNotify");
++        XRefreshKeyboardMapping(&ev->xmapping);
++        if (ev->xmapping.request == MappingModifier)
++            rclolServerModifiersLoaded = NO;
+         break;
+ 
+     case GenericEvent:
+@@ -1399,7 +2408,9 @@ static NSDictionary *modeInfoToDictionary(const XRRModeInfo *mi, int depth) {
          break;
  
      default:
@@ -5101,7 +5403,7 @@ index 5ae29bf4..77856962 100644
              [self _invalidateRRCache];
              break;
          }
-@@ -1433,6 +2380,10 @@ static NSDictionary *modeInfoToDictionary(const XRRModeInfo *mi, int depth) {
+@@ -1433,6 +2444,10 @@ static NSDictionary *modeInfoToDictionary(const XRRModeInfo *mi, int depth) {
      NSLog(@"Request code: %d:%d", errorEvent->request_code,
            errorEvent->minor_code);
      NSLog(@"Error code: %d", errorEvent->error_code);
@@ -5112,7 +5414,7 @@ index 5ae29bf4..77856962 100644
      return 0;
  }
  
-@@ -1476,54 +2427,279 @@ void CGNativeBorderFrameWidthsForStyle(NSUInteger styleMask, CGFloat *top,
+@@ -1476,54 +2491,279 @@ void CGNativeBorderFrameWidthsForStyle(NSUInteger styleMask, CGFloat *top,
      return frame;
  }
  
@@ -5165,8 +5467,8 @@ index 5ae29bf4..77856962 100644
 -                 position.x, position.y);
 -    XSync(_display, False);
 +    [self warpPointerToRootX: x y: y];
- }
- 
++}
++
 +/* Confinement preserves absolute motion and edge panning. Relative mode holds
 + * its own grab and is left alone while requested. */
 +- (void) updateMouseConfinementForWindow:(X11Window *)window {
@@ -5353,8 +5655,8 @@ index 5ae29bf4..77856962 100644
 +    X11RelativeMouseEnd(&_relativeMouse);
 +    _relativeWindow = None;
 +    rclolPointerStamp = 0;
-+}
-+
+ }
+ 
 +/* CGAssociateMouseAndMouseCursorPosition(!doGrab). */
  - (void) grabMouse: (BOOL) doGrab {
 +    BOOL rclolRelativeBefore = _relativeMouse.active;
@@ -5645,6 +5947,201 @@ index 0e91a5d1..9feeffa1 100644
  }
  
  - (void) selectionNotify: (XSelectionEvent *) event {
+diff --git a/AppKit/X11.backend/X11RelativeMouse.h b/AppKit/X11.backend/X11RelativeMouse.h
+new file mode 100644
+index 00000000..31fa646e
+--- /dev/null
++++ b/AppKit/X11.backend/X11RelativeMouse.h
+@@ -0,0 +1,189 @@
++/* darling-lol: decision logic for macOS-style relative mouse mode in the X11 backend.
++ *
++ * While CGAssociateMouseAndMouseCursorPosition(false) is in effect, macOS freezes the cursor: physical motion
++ * only produces deltas, events report the frozen cursor position, and CGWarpMouseCursorPosition moves the cursor
++ * without producing a delta. Here the frozen cursor is the "virtual" position (X root coordinates). Core X motion
++ * still moves the real pointer, so deltas are measured against the last physical position, and where the server
++ * honours warps the pointer is warped back to the virtual position after each motion. Every warp (ours or the
++ * application's) is followed by a MotionNotify at its target; those echoes are recognised by request serial
++ * and position and dropped. Warps are synchronous (XSync), so an echo can only be among the events already queued at that moment;
++ * an expected echo expires once that many events have been handled.
++ *
++ * On Xwayland a warp only reaches the compositor while the X cursor is hidden. With a visible cursor the echo
++ * still arrives, but the next real motion reports the unmoved physical pointer, so honoured=false keeps the last
++ * physical position across echoes and never warps back.
++ *
++ * Plain C without X11 or Objective-C dependencies, so tools/test-x11-relative-mouse.c can run it on the host. */
++#ifndef X11_RELATIVE_MOUSE_H
++#define X11_RELATIVE_MOUSE_H
++
++#include <stdbool.h>
++#include <stdlib.h>
++
++#define X11_RELATIVE_MOUSE_INITIAL_ECHOES 8
++
++typedef struct {
++    int x, y;
++    unsigned long serial; /* X request that generated the echo; coordinates alone also match real motion */
++    unsigned remaining; /* X events (of any type) still to be handled before this echo is given up */
++} X11RelativeMouseEcho;
++
++typedef struct {
++    bool active;              /* relative motion handling is on (the pointer grab is held) */
++    double virtualX, virtualY; /* the frozen macOS cursor, X root coordinates */
++    int physicalX, physicalY; /* last physical pointer position, X root coordinates */
++    unsigned long firstSerial; /* ignore motion queued before the initial XQueryPointer snapshot */
++    bool bounded;
++    int minX, minY, maxX, maxY; /* inclusive root coordinates of the confine_to window */
++    unsigned echoCount;
++    unsigned echoCapacity;
++    X11RelativeMouseEcho *echoes; /* oldest first; never discard a pending warp echo on overflow */
++} X11RelativeMouse;
++
++typedef struct {
++    bool post;             /* deliver a mouse moved/dragged event */
++    bool echo;             /* the event was the echo of a warp */
++    double deltaX, deltaY; /* NSEvent convention: positive deltaY is downwards */
++    bool rewarp;           /* warp the pointer back to (warpX, warpY) */
++    int warpX, warpY;
++} X11RelativeMouseMotion;
++
++/* X11 warps take integer coordinates; conversions truncate like the original implicit double-to-int argument. */
++static inline int X11RelativeMouseWarpCoordinate(double value) {
++    return (int) value;
++}
++
++/* Initialize storage to zero before the first Begin; End releases the pending-echo allocation. */
++static inline void X11RelativeMouseBegin(X11RelativeMouse *mouse, int rootX, int rootY) {
++    free(mouse->echoes);
++    mouse->echoes = NULL;
++    mouse->echoCapacity = 0;
++    mouse->firstSerial = 0;
++    mouse->bounded = false;
++    mouse->active = true;
++    mouse->virtualX = rootX;
++    mouse->virtualY = rootY;
++    mouse->physicalX = rootX;
++    mouse->physicalY = rootY;
++    mouse->echoCount = 0;
++}
++
++static inline void X11RelativeMouseEnd(X11RelativeMouse *mouse) {
++    free(mouse->echoes);
++    mouse->echoes = NULL;
++    mouse->echoCapacity = 0;
++    mouse->active = false;
++    mouse->echoCount = 0;
++}
++
++/* Record a warp to (x, y) that was just sent and synced. queuedEvents is the number of X events queued after the
++ * sync; zero means the warp produced no event (the pointer was already there). */
++static inline bool X11RelativeMouseExpectEcho(X11RelativeMouse *mouse, int x, int y, unsigned queuedEvents,
++                                              unsigned long serial) {
++    if (!queuedEvents) return true;
++    if (mouse->echoCount) {
++        X11RelativeMouseEcho *last = &mouse->echoes[mouse->echoCount - 1];
++        if (last->x == x && last->y == y && last->serial == serial) {
++            if (last->remaining < queuedEvents) last->remaining = queuedEvents;
++            return true;
++        }
++    }
++    if (mouse->echoCount == mouse->echoCapacity) {
++        unsigned capacity = mouse->echoCapacity ? mouse->echoCapacity * 2 : X11_RELATIVE_MOUSE_INITIAL_ECHOES;
++        if (capacity <= mouse->echoCapacity) return false;
++        X11RelativeMouseEcho *echoes = realloc(mouse->echoes, (size_t)capacity * sizeof(*echoes));
++        if (!echoes) return false;
++        mouse->echoes = echoes;
++        mouse->echoCapacity = capacity;
++    }
++    mouse->echoes[mouse->echoCount++] = (X11RelativeMouseEcho) {x, y, serial, queuedEvents};
++    return true;
++}
++
++/* CGWarpMouseCursorPosition while relative: the virtual cursor moves to the target; the physical position is
++ * only updated when the echo arrives (and only if the warp was honoured). */
++static inline void X11RelativeMouseClamp(const X11RelativeMouse *mouse, double *x, double *y) {
++    if (!mouse->bounded) return;
++    if (*x < mouse->minX) *x = mouse->minX;
++    if (*x > mouse->maxX) *x = mouse->maxX;
++    if (*y < mouse->minY) *y = mouse->minY;
++    if (*y > mouse->maxY) *y = mouse->maxY;
++}
++
++static inline bool X11RelativeMouseWarp(X11RelativeMouse *mouse, double x, double y, unsigned queuedEvents,
++                                       unsigned long serial, bool warpsHonoured) {
++    if (warpsHonoured) {
++        mouse->virtualX = x;
++        mouse->virtualY = y;
++    }
++    return X11RelativeMouseExpectEcho(mouse, X11RelativeMouseWarpCoordinate(x), X11RelativeMouseWarpCoordinate(y),
++                               queuedEvents, serial);
++}
++
++/* One X event has been handled: age the expected echoes. */
++static inline void X11RelativeMouseTick(X11RelativeMouse *mouse) {
++    unsigned kept = 0;
++    for (unsigned i = 0; i < mouse->echoCount; ++i)
++        if (mouse->echoes[i].remaining > 1) {
++            mouse->echoes[kept] = mouse->echoes[i];
++            mouse->echoes[kept++].remaining--;
++        }
++    mouse->echoCount = kept;
++}
++
++/* A MotionNotify at root position (rootX, rootY) while relative. Ages the expected echoes. */
++static inline X11RelativeMouseMotion X11RelativeMouseHandleMotion(X11RelativeMouse *mouse, int rootX, int rootY,
++                                                                  bool warpsHonoured, unsigned long serial)
++{
++    X11RelativeMouseMotion result = {false, false, 0.0, 0.0, false, 0, 0};
++    if (serial < mouse->firstSerial) {
++        X11RelativeMouseTick(mouse);
++        return result;
++    }
++    for (unsigned i = 0; i < mouse->echoCount; ++i)
++        if (mouse->echoes[i].serial == serial && mouse->echoes[i].x == rootX && mouse->echoes[i].y == rootY) {
++            /* Warps are echoed in order; earlier expected echoes that did not arrive never will. */
++            for (unsigned j = i + 1; j < mouse->echoCount; ++j)
++                mouse->echoes[j - i - 1] = mouse->echoes[j];
++            mouse->echoCount -= i + 1;
++            if (warpsHonoured) {
++                mouse->physicalX = rootX;
++                mouse->physicalY = rootY;
++            }
++            result.echo = true;
++            X11RelativeMouseTick(mouse);
++            return result;
++        }
++    result.deltaX = rootX - mouse->physicalX;
++    result.deltaY = rootY - mouse->physicalY;
++    mouse->physicalX = rootX;
++    mouse->physicalY = rootY;
++    if (!warpsHonoured) {
++        mouse->virtualX = rootX;
++        mouse->virtualY = rootY;
++    }
++    result.post = result.deltaX != 0.0 || result.deltaY != 0.0;
++    int warpX = X11RelativeMouseWarpCoordinate(mouse->virtualX);
++    int warpY = X11RelativeMouseWarpCoordinate(mouse->virtualY);
++    if (warpsHonoured && (rootX != warpX || rootY != warpY)) {
++        /* More physical motion may already be queued before our latest warp. That warp will
++         * re-anchor it; issuing another one for each queued event creates an echo backlog. */
++        bool pending = mouse->echoCount && serial < mouse->echoes[mouse->echoCount - 1].serial;
++        result.rewarp = !pending;
++        result.warpX = warpX;
++        result.warpY = warpY;
++    }
++    X11RelativeMouseTick(mouse);
++    return result;
++}
++
++/* NSEvent deltas for absolute (non-relative) motion between two positions in Cocoa window coordinates, which
++ * are bottom-up while NSEvent's deltaY is positive downwards. */
++static inline void X11AbsoluteMouseDelta(double lastX, double lastY, double x, double y, double *deltaX,
++                                         double *deltaY)
++{
++    *deltaX = x - lastX;
++    *deltaY = lastY - y;
++}
++
++#endif
 diff --git a/AppKit/X11.backend/X11SubWindow.h b/AppKit/X11.backend/X11SubWindow.h
 index 65b63a3e..1fe16c56 100644
 --- a/AppKit/X11.backend/X11SubWindow.h
@@ -5765,7 +6262,7 @@ index bfe3839a..a3da37ce 100644
  @end
  
 diff --git a/AppKit/X11.backend/X11Window.m b/AppKit/X11.backend/X11Window.m
-index f4925b66..373b7fd6 100644
+index f4925b66..07bb8273 100644
 --- a/AppKit/X11.backend/X11Window.m
 +++ b/AppKit/X11.backend/X11Window.m
 @@ -18,11 +18,14 @@
@@ -6348,7 +6845,7 @@ index f4925b66..373b7fd6 100644
  }
  
  - (void) setStyleMask: (NSUInteger) mask {
-@@ -337,27 +697,40 @@ static NSData *makeWindowIcon() {
+@@ -337,30 +697,51 @@ static NSData *makeWindowIcon() {
      _styleMask = mask;
  }
  
@@ -6403,7 +6900,18 @@ index f4925b66..373b7fd6 100644
      }
  }
  
-@@ -377,15 +750,27 @@ static NSData *makeWindowIcon() {
++/* darling-lol: only map for a window AppKit considers visible. NSWindow sets _isVisible before
++ * ordering, so ordered windows still map; a hidden one (like the client's splash) must not be
++ * revived by a later restack or makeKey. */
++- (void) ensureMappedIfVisible {
++    if (_delegate == nil || [_delegate isVisible])
++        [self ensureMapped];
++}
++
+ - (void) showWindowWithoutActivation {
+     [self ensureMapped];
+ }
+@@ -377,15 +758,27 @@ static NSData *makeWindowIcon() {
  - (void) syncDelegateProperties {
      long mask = KeyPressMask | KeyReleaseMask | ExposureMask |
                  StructureNotifyMask | EnterWindowMask | LeaveWindowMask |
@@ -6436,7 +6944,7 @@ index f4925b66..373b7fd6 100644
      // TODO: background color
  }
  
-@@ -393,6 +778,28 @@ static NSData *makeWindowIcon() {
+@@ -393,6 +786,28 @@ static NSData *makeWindowIcon() {
      // This is essentially dealloc; we release our contexts
      // and windows, but unlike dealloc, this method can be called
      // several times, so set everything to nil/NULL/0.
@@ -6465,7 +6973,7 @@ index f4925b66..373b7fd6 100644
      [_context release];
      _context = nil;
  
-@@ -421,6 +828,404 @@ static NSData *makeWindowIcon() {
+@@ -421,6 +836,404 @@ static NSData *makeWindowIcon() {
      }
  }
  
@@ -6870,7 +7378,7 @@ index f4925b66..373b7fd6 100644
  - (Window) windowHandle {
      return _window;
  }
-@@ -470,14 +1275,32 @@ static NSData *makeWindowIcon() {
+@@ -470,14 +1283,32 @@ static NSData *makeWindowIcon() {
      const char *text = [title cString];
      XStringListToTextProperty((char **) &text, 1, &prop);
      XSetWMName(_display, _window, &prop);
@@ -6904,7 +7412,7 @@ index f4925b66..373b7fd6 100644
  }
  
  - (void) setHasShadow: (BOOL) value {
-@@ -488,6 +1311,25 @@ static NSData *makeWindowIcon() {
+@@ -488,6 +1319,25 @@ static NSData *makeWindowIcon() {
      _level = value;
  }
  
@@ -6930,9 +7438,30 @@ index f4925b66..373b7fd6 100644
  - (void) setOpaque: (BOOL) value {
      _isOpaque = value;
  }
-@@ -543,6 +1385,21 @@ static NSData *makeWindowIcon() {
+@@ -518,7 +1368,7 @@ static NSData *makeWindowIcon() {
+ 
+ - (void) placeAboveWindow: (NSInteger) otherNumber {
+     X11Window *other = [X11Window windowWithWindowNumber: otherNumber];
+-    [self ensureMapped];
++    [self ensureMappedIfVisible];
+ 
+     if (!other) {
+         XRaiseWindow(_display, _window);
+@@ -530,7 +1380,7 @@ static NSData *makeWindowIcon() {
+ 
+ - (void) placeBelowWindow: (NSInteger) otherNumber {
+     X11Window *other = [X11Window windowWithWindowNumber: otherNumber];
+-    [self ensureMapped];
++    [self ensureMappedIfVisible];
+ 
+     if (!other) {
+         XLowerWindow(_display, _window);
+@@ -541,8 +1391,23 @@ static NSData *makeWindowIcon() {
+ }
+ 
  - (void) makeKey {
-     [self ensureMapped];
+-    [self ensureMapped];
++    [self ensureMappedIfVisible];
      XRaiseWindow(_display, _window);
 +    /* darling-lol: League's game window is managed (not override-redirect), so keyboard focus is
 +     * the WM's to give. Ask for activation once when the game makes it key; the WM's focus-stealing
@@ -6952,7 +7481,7 @@ index f4925b66..373b7fd6 100644
  }
  
  - (void) makeMain {
-@@ -551,15 +1408,72 @@ static NSData *makeWindowIcon() {
+@@ -551,15 +1416,72 @@ static NSData *makeWindowIcon() {
  - (void) captureEvents {
  }
  
@@ -7026,7 +7555,7 @@ index f4925b66..373b7fd6 100644
      Atom wmState = XInternAtom(_display, "_NET_WM_STATE", FALSE);
      Atom hiddenState = XInternAtom(_display, "_NET_WM_STATE_HIDDEN", FALSE);
  
-@@ -593,14 +1507,13 @@ static NSData *makeWindowIcon() {
+@@ -593,14 +1515,13 @@ static NSData *makeWindowIcon() {
      if (_cglContext == NULL) {
          CGLError error;
  
@@ -7047,7 +7576,7 @@ index f4925b66..373b7fd6 100644
          }
          if ((error = CGLContextMakeCurrentAndAttachToWindow(
                       _cglContext, _cglWindow)) != kCGLNoError)
-@@ -615,6 +1528,12 @@ static NSData *makeWindowIcon() {
+@@ -615,6 +1536,12 @@ static NSData *makeWindowIcon() {
  }
  
  - (void) openGLFlushBuffer {
@@ -7060,7 +7589,7 @@ index f4925b66..373b7fd6 100644
      CGLError error;
  
      CGLContextObj prevContext = CGLGetCurrentContext();
-@@ -652,7 +1571,7 @@ static NSData *makeWindowIcon() {
+@@ -652,7 +1579,7 @@ static NSData *makeWindowIcon() {
  }
  
  - (O2Rect) frame {
@@ -7069,7 +7598,7 @@ index f4925b66..373b7fd6 100644
  }
  
  static int ignoreBadWindow(Display *display, XErrorEvent *errorEvent) {
-@@ -666,6 +1585,7 @@ static int ignoreBadWindow(Display *display, XErrorEvent *errorEvent) {
+@@ -666,6 +1593,7 @@ static int ignoreBadWindow(Display *display, XErrorEvent *errorEvent) {
  }
  
  - (void) frameChanged {
@@ -7077,7 +7606,7 @@ index f4925b66..373b7fd6 100644
      XErrorHandler previousHandler = XSetErrorHandler(ignoreBadWindow);
      @try {
          Window root, parent;
-@@ -710,19 +1630,13 @@ static int ignoreBadWindow(Display *display, XErrorEvent *errorEvent) {
+@@ -710,19 +1638,13 @@ static int ignoreBadWindow(Display *display, XErrorEvent *errorEvent) {
      [_deviceDictionary addEntriesFromDictionary: entries];
  }
  
@@ -7207,7 +7736,7 @@ index 8860a087..a897e2ce 100644
  - (NSArray *) orderedWindowNumbers;
  
 diff --git a/AppKit/include/AppKit/NSEvent.h b/AppKit/include/AppKit/NSEvent.h
-index 0677f2e7..d16080f4 100644
+index 0677f2e7..b6daef18 100644
 --- a/AppKit/include/AppKit/NSEvent.h
 +++ b/AppKit/include/AppKit/NSEvent.h
 @@ -83,6 +83,8 @@ typedef NS_ENUM(NSUInteger, NSEventType) {
@@ -7219,11 +7748,14 @@ index 0677f2e7..d16080f4 100644
  
      NSAppKitSystem = 100,
  
-@@ -212,6 +214,7 @@ enum { NSApplicationActivated = 0, NSApplicationDeactivated = 1 };
+@@ -212,6 +214,10 @@ enum { NSApplicationActivated = 0, NSApplicationDeactivated = 1 };
  
  + (NSPoint) mouseLocation;
  + (NSEventModifierFlags) modifierFlags;
 ++ (NSUInteger) pressedMouseButtons;
+++ (id) addLocalMonitorForEventsMatchingMask: (NSEventMask) mask
++                                  handler: (NSEvent * (^)(NSEvent *event)) block;
+++ (void) removeMonitor: (id) eventMonitor;
  
  - (instancetype) initWithType: (NSEventType) type
                       location: (NSPoint) location
@@ -14199,3 +14731,37 @@ index 985f77f3..db64f55d 100644
  + (BOOL) disableActions;
  + (CFTimeInterval) animationDuration;
  + (CAMediaTimingFunction *) animationTimingFunction;
+diff --git a/QuartzCore/include/QuartzCore/CATransformLayer.h b/QuartzCore/include/QuartzCore/CATransformLayer.h
+new file mode 100644
+index 00000000..19cd9ea9
+--- /dev/null
++++ b/QuartzCore/include/QuartzCore/CATransformLayer.h
+@@ -0,0 +1,28 @@
++/*
++ * This file is part of Darling.
++ *
++ * Copyright (C) 2022 Darling developers
++ *
++ * Darling is free software: you can redistribute it and/or modify
++ * it under the terms of the GNU General Public License as published by
++ * the Free Software Foundation, either version 3 of the License, or
++ * (at your option) any later version.
++ *
++ * Darling is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++ * GNU General Public License for more details.
++ *
++ * You should have received a copy of the GNU General Public License
++ * along with Darling.  If not, see <http://www.gnu.org/licenses/>.
++ */
++
++#import <QuartzCore/CALayer.h>
++
++/* darling-lol M58F35: CATransformLayer is a CALayer that renders its sublayers
++ * in 3D (it adds no surface API of its own). */
++@interface CATransformLayer : CALayer
++
++- (instancetype) init;
++
++@end
