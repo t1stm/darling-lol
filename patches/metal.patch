@@ -3880,3 +3880,21 @@ new file mode 100644
 +MTL_UNSUPPORTED_CLASS
 +#endif
 +@end
+diff --git a/src/Metal/Metal.mm b/src/Metal/Metal.mm
+index dfe5174..28d8b03 100644
+--- a/src/Metal/Metal.mm
++++ b/src/Metal/Metal.mm
+@@ -16,10 +16,9 @@
+ // so, we have to hardcode it here and always require those extensions, even if we don't actually
+ // use MetalKit. TODO: find some way to avoid hardcoding these extensions.
+ static const char* additionalExtensions[] = {
+-	// we don't render to these directly; see CAMetalDrawable.mm (in Cocotron's QuartzCore) for more details
+-	//"VK_KHR_xlib_surface",
+-	//"VK_KHR_surface",
+-	//"VK_KHR_swapchain",
++	// CAMetalLayer (in Cocotron's QuartzCore) presents through a VkSwapchainKHR on an Xlib surface.
++	// VK_KHR_surface is always enabled by indium, and VK_KHR_swapchain is a device extension.
++	"VK_KHR_xlib_surface",
+ };
+ 
+ __attribute__((constructor))
