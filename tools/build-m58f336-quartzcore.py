@@ -26,6 +26,11 @@ for source in sources:
 link[link.index('-o') + 1] = str(project / 'build/m336-QuartzCore')
 subprocess.run(link, cwd=framework, check=True)
 built_binary = project / 'build/m336-QuartzCore'
+import shutil
+try:
+    shutil.copy2(built_binary, framework / 'QuartzCore')
+except Exception:
+    pass
 destinations = [
     Path.home() / '.darling/System/Library/Frameworks/QuartzCore.framework/Versions/A/QuartzCore',
     Path.home() / '.darling/Users/fgeroldi/RuntimeFrameworks/QuartzCore.framework/Versions/A/QuartzCore',

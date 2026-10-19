@@ -43,7 +43,7 @@ for option in RCLOL_GPU_DIRECT_PRESENT RCLOL_GPU_DIRECT_ASYNC DARLING_CA_PRESENT
 done
 # VSync defaults to 0 (uncapped) unless explicitly requested
 eval 'vsync_val=${RCLOL_GPU_DIRECT_VSYNC-0}'
-export RCLOL_GPU_DIRECT_VSYNC="$vsync_val"
+case "$vsync_val" in 0|'') unset RCLOL_GPU_DIRECT_VSYNC;; *) export RCLOL_GPU_DIRECT_VSYNC="$vsync_val";; esac
 prefix=$prefix_dir
 # RIOT_GUEST_HOME is host-side; DYLD paths must be relative to the guest root.
 case "$guest_home" in
@@ -173,7 +173,6 @@ mkdir -p "$MESA_SHADER_CACHE_DIR" 2>/dev/null || true
 export __GL_SYNC_TO_VBLANK="${__GL_SYNC_TO_VBLANK:-0}"
 export vblank_mode="${vblank_mode:-0}"
 export MESA_VK_WSI_PRESENT_MODE="${MESA_VK_WSI_PRESENT_MODE:-immediate}"
-export DARLING_VULKAN_PRESENT_MODE="${DARLING_VULKAN_PRESENT_MODE:-immediate}"
 # NVIDIA proprietary driver: limit pre-rendered frames (default 0 lets driver buffer dynamically)
 export __GL_MaxFramesAllowed="${__GL_MaxFramesAllowed:-0}"
 export __GL_THREADED_OPTIMIZATIONS="${__GL_THREADED_OPTIMIZATIONS:-0}"
@@ -250,8 +249,6 @@ exec python3 "$runner_dir/exec-guest.py" env -u ELECTRON_RUN_AS_NODE -u DYLD_INS
   DYLD_LIBRARY_PATH="${DYLD_LIBRARY_PATH:-$guest_path/RuntimeLibraries}" \
   DYLD_FRAMEWORK_PATH="${DYLD_FRAMEWORK_PATH:-$guest_path/RuntimeFrameworks}" \
   DARLING_XSHM_LIBRARY="${DARLING_XSHM_LIBRARY:-$guest_path/libDarlingXShm.dylib}" \
-  DARLING_VULKAN_PRESENT_MODE="${DARLING_VULKAN_PRESENT_MODE:-immediate}" \
-  RCLOL_GPU_DIRECT_VSYNC="${RCLOL_GPU_DIRECT_VSYNC:-0}" \
   RCLOL_REFRESH_HZ="${RCLOL_REFRESH_HZ:-165}" \
   python3 "$runner_dir/riot-lifecycle-supervisor.py" darling "$A" --region="${RCLOL_REGION:-EUW}" --locale="${RCLOL_LOCALE:-en_GB}" \
     "$@" \
