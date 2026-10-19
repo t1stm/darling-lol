@@ -1,6 +1,5 @@
 #!/bin/sh
-# Launch Riot Client using the Darling runtime, without library injection.
-# Darling supplies Xlib Display pointers to EGL, so select X11 explicitly.
+# Native presentation via direct X11 and Vulkan swapchain.
 set -eu
 # Native guest crashes created large system core files and exhausted this disk.
 # Address-only diagnostics suffice; bound this runner and its new namespace.
@@ -38,10 +37,13 @@ unset RCLOL_UX_ARG2 RCLOL_UX_ARG2_SLOT
 # Explicit 0 or an empty value selects the CPU fallback for diagnostics.
 # DARLING_METAL_MAC_GPU_NAME reports the MacBookPro16,1 GPU of the host vendor (AMD or Intel) as
 # MTLDevice.name, matching the model IOKit reports; memory figures stay the host's.
-for option in RCLOL_GPU_DIRECT_PRESENT RCLOL_GPU_DIRECT_ASYNC RCLOL_GPU_DIRECT_VSYNC DARLING_CA_PRESENT_AT_COMMIT DARLING_CA_SKIP_LOCAL_IOSURFACE_RENDER RCLOL_FORWARD_MOUSE_MOVED RCLOL_MOUSE_CONFINEMENT DARLING_METAL_MAC_GPU_NAME; do
+for option in RCLOL_GPU_DIRECT_PRESENT RCLOL_GPU_DIRECT_ASYNC DARLING_CA_PRESENT_AT_COMMIT DARLING_CA_SKIP_LOCAL_IOSURFACE_RENDER RCLOL_FORWARD_MOUSE_MOVED RCLOL_MOUSE_CONFINEMENT DARLING_METAL_MAC_GPU_NAME; do
  eval 'value=${'"$option"'-1}'
  case "$value" in 0|'') unset "$option";; *) export "$option=$value";; esac
 done
+# VSync defaults to 0 (uncapped) unless explicitly requested
+eval 'vsync_val=${RCLOL_GPU_DIRECT_VSYNC-0}'
+case "$vsync_val" in 0|'') unset RCLOL_GPU_DIRECT_VSYNC;; *) export RCLOL_GPU_DIRECT_VSYNC="$vsync_val";; esac
 prefix=$prefix_dir
 # RIOT_GUEST_HOME is host-side; DYLD paths must be relative to the guest root.
 case "$guest_home" in
@@ -87,14 +89,72 @@ else
  fi
 fi
 # --- darling-lol perf: scheduling & driver latency hints ---
-# Refresh rate for display link, async presenter, and frame pacing: the primary monitor's
-# current mode (the first monitor without a primary); unset falls back to 60 Hz.
-if [ -z "${RCLOL_REFRESH_HZ-}" ] && command -v xrandr >/dev/null 2>&1; then
-  RCLOL_REFRESH_HZ=$(xrandr --current 2>/dev/null | awk '
-    / connected/ { primary = / primary / }
-    /\*/ { for (i = 2; i <= NF; i++) if ($i ~ /\*/) { rate = $i; sub(/[*+]+/, "", rate)
-            if (primary) { print int(rate + 0.5); found = 1; exit } else if (first == "") first = int(rate + 0.5) } }
-    END { if (!found && first != "") print first }')
+# Refresh rate for display link, async presenter, and frame pacing.
+# NOTE: Current implementation and testing specifically target KDE Plasma + Wayland
+# (KWin + Xwayland via kscreen-doctor / X11 WSI). GNOME + Wayland (Mutter) and other
+# compositors are not actively covered at this time and are left to upstream maintainers.
+# If RCLOL_REFRESH_HZ is already set in the environment, honor the override directly.
+if [ -z "${RCLOL_REFRESH_HZ-}" ]; then
+  if command -v kscreen-doctor >/dev/null 2>&1; then
+    RCLOL_REFRESH_HZ=$(python3 -c '
+import subprocess, re, sys, json
+# 1. Try kscreen-doctor -j (JSON mode)
+try:
+    res = subprocess.run(["kscreen-doctor", "-j"], capture_output=True, text=True, timeout=2)
+    if res.returncode == 0 and res.stdout.strip():
+        data = json.loads(res.stdout)
+        outputs = data.get("outputs", [])
+        outputs.sort(key=lambda o: (not o.get("enabled", False), not o.get("connected", False), o.get("priority", 999)))
+        for out in outputs:
+            if out.get("enabled") and out.get("connected"):
+                cur_id = str(out.get("currentModeId") or out.get("currentMode") or "")
+                for m in out.get("modes", []):
+                    if str(m.get("id")) == cur_id:
+                        rate = float(m.get("refreshRate", 0))
+                        if rate > 0:
+                            print(int(round(rate)))
+                            sys.exit(0)
+except Exception:
+    pass
+
+# 2. Try kscreen-doctor -o (human-readable mode)
+try:
+    res = subprocess.run(["kscreen-doctor", "-o"], capture_output=True, text=True, timeout=2)
+    if res.returncode == 0 and res.stdout.strip():
+        best = None
+        for chunk in res.stdout.split("Output:"):
+            if not chunk.strip():
+                continue
+            if "enabled" in chunk and "connected" in chunk:
+                m = re.search(r"@([0-9]+(?:\.[0-9]+)?)\*", chunk)
+                if m:
+                    rate = int(round(float(m.group(1))))
+                    if "priority 1" in chunk or "primary" in chunk:
+                        best = rate
+                        break
+                    elif best is None:
+                        best = rate
+        if best:
+            print(best)
+            sys.exit(0)
+except Exception:
+    pass
+sys.exit(1)
+' 2>/dev/null || true)
+  fi
+
+  if [ -z "${RCLOL_REFRESH_HZ-}" ] && command -v xrandr >/dev/null 2>&1; then
+    RCLOL_REFRESH_HZ=$(xrandr --current 2>/dev/null | awk '
+      / connected/ { primary = / primary / }
+      /\*/ { for (i = 2; i <= NF; i++) if ($i ~ /\*/) { rate = $i; sub(/[*+]+/, "", rate)
+              if (primary) { print int(rate + 0.5); found = 1; exit } else if (first == "") first = int(rate + 0.5) } }
+      END { if (!found && first != "") print first }')
+  fi
+
+  # Fallback to high-refresh default (165 Hz) if autodetection did not resolve a rate
+  if [ -z "${RCLOL_REFRESH_HZ-}" ]; then
+    RCLOL_REFRESH_HZ=165
+  fi
 fi
 if [ -n "${RCLOL_REFRESH_HZ-}" ]; then export RCLOL_REFRESH_HZ; fi
 # Vulkan WSI & Mesa optimizations
@@ -109,30 +169,84 @@ cache_root=${XDG_CACHE_HOME:-${HOME:-$prefix_dir}/.cache}/darling-lol
 MESA_SHADER_CACHE_DIR="${MESA_SHADER_CACHE_DIR:=$cache_root}"
 export MESA_SHADER_CACHE_DIR
 mkdir -p "$MESA_SHADER_CACHE_DIR" 2>/dev/null || true
-# NVIDIA proprietary driver: limit pre-rendered frames.
-export __GL_MaxFramesAllowed="${__GL_MaxFramesAllowed:-1}"
-# Threaded optimizations stay off: with them, NVIDIA 580 (the last branch for
-# Pascal GPUs) with egl-x11 1.0.6 rejects the X11 EGLDisplay with EGL_BAD_DISPLAY
-# on every thread that has a context current, and the game window stays black.
-export __GL_THREADED_OPTIMIZATIONS="${__GL_THREADED_OPTIMIZATIONS:-0}"
-export __GL_YIELD="${__GL_YIELD:-NOTHING}"
+# NVIDIA proprietary driver: smooth 2-frame buffering, threaded optimizations and scheduler yielding
+export __GL_MaxFramesAllowed="${__GL_MaxFramesAllowed:-2}"
+export __GL_THREADED_OPTIMIZATIONS="${__GL_THREADED_OPTIMIZATIONS:-1}"
+export __GL_YIELD="${__GL_YIELD:-USLEEP}"
+export DARLING_VULKAN_PRESENT_TARGET="${DARLING_VULKAN_PRESENT_TARGET:-toplevel}"
 # Reduce timer slack for tighter scheduling in the game process tree.
 if [ -w /proc/self/timerslack_ns ]; then
   echo 1 > /proc/self/timerslack_ns 2>/dev/null || true
 fi
+# --- darling-lol GPU alignment (hybrid NVIDIA / integrated graphics) ---
+# Ensure OpenGL (GLX/EGL) and Vulkan (Indium/Metal) run on the exact same GPU,
+# preventing opaque-FD / DMABUF cross-GPU import failures.
+gpu_selector=""
+if [ -f /tmp/metal-gpu ]; then
+  gpu_selector=$(head -n 1 /tmp/metal-gpu 2>/dev/null | tr -d ' \t\r\n' | tr '[:upper:]' '[:lower:]')
+elif [ -n "${METAL_INDIUM_GPU:-}" ]; then
+  gpu_selector=$(echo "$METAL_INDIUM_GPU" | tr -d ' \t\r\n' | tr '[:upper:]' '[:lower:]')
+elif [ -n "${RCLOL_GPU:-}" ]; then
+  gpu_selector=$(echo "$RCLOL_GPU" | tr -d ' \t\r\n' | tr '[:upper:]' '[:lower:]')
+fi
+
+has_nvidia=0
+if [ -c /dev/nvidia0 ] || [ -d /proc/driver/nvidia ]; then
+  has_nvidia=1
+fi
+
+case "$gpu_selector" in
+  intel*|integrated*|mesa*|llvmpipe*|cpu*|0)
+    unset __NV_PRIME_RENDER_OFFLOAD __GLX_VENDOR_LIBRARY_NAME __VK_LAYER_NV_optimus __EGL_VENDOR_LIBRARY_FILENAMES VK_DRIVER_FILES VK_ICD_FILENAMES
+    if [ -f /usr/share/vulkan/icd.d/intel_icd.x86_64.json ]; then
+      export VK_DRIVER_FILES=/usr/share/vulkan/icd.d/intel_icd.x86_64.json
+      export VK_ICD_FILENAMES=/usr/share/vulkan/icd.d/intel_icd.x86_64.json
+    fi
+    ;;
+  amd*|radeon*|radv*)
+    export DRI_PRIME=1
+    ;;
+  *)
+    if [ "$has_nvidia" = 1 ]; then
+      export __NV_PRIME_RENDER_OFFLOAD=1
+      export __GLX_VENDOR_LIBRARY_NAME=nvidia
+      export __VK_LAYER_NV_optimus=NVIDIA_only
+      if [ -f /usr/share/vulkan/icd.d/nvidia_icd.x86_64.json ]; then
+        export VK_DRIVER_FILES=/usr/share/vulkan/icd.d/nvidia_icd.x86_64.json
+        export VK_ICD_FILENAMES=/usr/share/vulkan/icd.d/nvidia_icd.x86_64.json
+      elif [ -f /usr/share/vulkan/icd.d/nvidia_icd.json ]; then
+        export VK_DRIVER_FILES=/usr/share/vulkan/icd.d/nvidia_icd.json
+        export VK_ICD_FILENAMES=/usr/share/vulkan/icd.d/nvidia_icd.json
+      fi
+    fi
+    ;;
+esac
+
+# Auto-detect active DISPLAY if not set or empty
+if [ -z "${DISPLAY:-}" ]; then
+  for s in /tmp/.X11-unix/X*; do
+    if [ -S "$s" ]; then
+      DISPLAY=":${s##*/X}"
+      break
+    fi
+  done
+  DISPLAY="${DISPLAY:-:0}"
+fi
+
 # On affected setups Chromium's default temp directory is unusable. Electron
 # can copy app.asar entries to temporary files for async reads and report a
 # failed copy as "not found". Use a writable guest directory by default.
 # exec-guest.py closes host file descriptors above stderr before starting the guest. A shell
 # loop cannot: dash only accepts single-digit descriptors in redirections.
-exec python3 "$runner_dir/exec-guest.py" env -u ELECTRON_RUN_AS_NODE -u DYLD_INSERT_LIBRARIES EGL_PLATFORM=x11 \
+exec python3 "$runner_dir/exec-guest.py" env -u ELECTRON_RUN_AS_NODE -u DYLD_INSERT_LIBRARIES -u LD_PRELOAD EGL_PLATFORM=x11 \
   MAC_CHROMIUM_TMPDIR="${MAC_CHROMIUM_TMPDIR:-/private/tmp}" \
   LANG="${RCLOL_GUEST_LOCALE:-en_US.UTF-8}" LC_ALL="${RCLOL_GUEST_LOCALE:-en_US.UTF-8}" \
   mesa_glthread="${RCLOL_MESA_GLTHREAD-${mesa_glthread-false}}" \
-  XMODIFIERS="${RCLOL_XMODIFIERS:-@im=none}" DISPLAY="${DISPLAY:-:1}" \
+  XMODIFIERS="${RCLOL_XMODIFIERS:-@im=none}" DISPLAY="${DISPLAY}" \
   DYLD_LIBRARY_PATH="${DYLD_LIBRARY_PATH:-$guest_path/RuntimeLibraries}" \
   DYLD_FRAMEWORK_PATH="${DYLD_FRAMEWORK_PATH:-$guest_path/RuntimeFrameworks}" \
   DARLING_XSHM_LIBRARY="${DARLING_XSHM_LIBRARY:-$guest_path/libDarlingXShm.dylib}" \
-  darling "$A" --region="${RCLOL_REGION:-EUW}" --locale="${RCLOL_LOCALE:-en_GB}" \
+  RCLOL_REFRESH_HZ="${RCLOL_REFRESH_HZ:-165}" \
+  python3 "$runner_dir/riot-lifecycle-supervisor.py" darling "$A" --region="${RCLOL_REGION:-EUW}" --locale="${RCLOL_LOCALE:-en_GB}" \
     "$@" \
     --log-dir="$guest_path/Library/Logs/Riot Games/Riot Client"

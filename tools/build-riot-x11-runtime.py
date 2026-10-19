@@ -14,12 +14,25 @@ for line in (framework / 'CMakeFiles/X11_backend.dir/flags.make').read_text().sp
         key, value = line.split(' = ', 1)
         flags[key] = shlex.split(value)
 link = shlex.split((framework / 'CMakeFiles/X11_backend.dir/link.txt').read_text())
-for name in ('X11Display', 'X11Window'):
+for name in ('X11Display', 'X11Window', 'X11SubWindow'):
     obj = project / f'build/riot-{name}.o'
     subprocess.run(['clang', *flags['C_DEFINES'], *flags['C_INCLUDES'], *flags['C_FLAGS'], '-O3', '-march=native', '-mtune=generic', '-Wno-macro-redefined', '-c', str(project / f'build/darling-src/src/external/cocotron/AppKit/X11.backend/{name}.m'), '-o', str(obj)], check=True)
     link[link.index(f'CMakeFiles/X11_backend.dir/X11.backend/{name}.m.o')] = str(obj)
 link[link.index('-o') + 1] = str(project / 'build/riot-X11')
 subprocess.run(link, cwd=framework, check=True)
+built_binary = project / 'build/riot-X11'
+destinations = [
+    Path.home() / '.darling/System/Library/Frameworks/AppKit.framework/Versions/C/Resources/Backends/X11.backend/Contents/MacOS/X11',
+    Path.home() / '.darling/Users/fgeroldi/RuntimeFrameworks/AppKit.framework/Versions/C/Resources/Backends/X11.backend/Contents/MacOS/X11',
+]
+for dst in destinations:
+    try:
+        dst.parent.mkdir(parents=True, exist_ok=True)
+        import shutil
+        shutil.copy2(built_binary, dst)
+        print(f'Installed X11 backend to {dst}')
+    except Exception as e:
+        print(f'Could not install to {dst}: {e}')
 print('Built isolated X11 backend')
 
 # Exercise actual backend modifier transitions without compositor shortcuts.

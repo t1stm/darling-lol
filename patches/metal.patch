@@ -3506,7 +3506,7 @@ new file mode 100644
 +namespace MTLDeviceInfo {
 +
 +// Used when neither the cleaned nor the raw Vulkan name has any characters.
-+static constexpr const char* kFallbackName = "Darling Indium Device";
++static constexpr const char* kFallbackName = "Generic Display Adapter";
 +// A real Mac never reports registry ID 0, and apps use it as a key for the device.
 +static constexpr uint64_t kDefaultRegistryID = 0x100000439ULL;
 +

@@ -129,6 +129,12 @@ exec REAL_INSTALL "$@"'''.replace('REAL_INSTALL', shutil.which('install')))
             self.assertEqual(result.returncode, 0, result.stderr)
         self.assertTrue((self.guest / 'libDarlingXShm.dylib').is_file())
         self.assertTrue((self.guest / 'RuntimeLibraries/libsystem_kernel.dylib').is_file())
+        for fw, ver in (('AppKit', 'C'), ('QuartzCore', 'A'), ('CoreFoundation', 'A'),
+                        ('SystemConfiguration', 'A'), ('CFNetwork', 'A'), ('CoreVideo', 'A')):
+            self.assertTrue((self.guest / f'RuntimeFrameworks/{fw}.framework/Versions/{ver}/{fw}').is_file())
+            self.assertTrue((self.prefix / f'System/Library/Frameworks/{fw}.framework/Versions/{ver}/{fw}').is_file())
+        self.assertTrue((self.guest / 'RuntimeFrameworks/AppKit.framework/Versions/C/Resources/Backends/X11.backend/Contents/MacOS/X11').is_file())
+        self.assertTrue((self.prefix / 'System/Library/Frameworks/AppKit.framework/Versions/C/Resources/Backends/X11.backend/Contents/MacOS/X11').is_file())
         self.assertIn('stopped', self.log.read_text())
 
 
@@ -138,6 +144,7 @@ exec REAL_INSTALL "$@"'''.replace('REAL_INSTALL', shutil.which('install')))
                      'external/corefoundation/CoreFoundation',
                      'external/configd/SystemConfiguration.fproj/SystemConfiguration',
                      'external/cfnetwork/src/CFNetwork',
+                     'frameworks/CoreVideo/CoreVideo',
                      'external/libplatform/libsystem_platform.dylib',
                      'external/xnu/darling/src/libsystem_kernel/libsystem_kernel.dylib'):
             path = self.root / 'build/darling-src/build/src' / name
@@ -145,7 +152,7 @@ exec REAL_INSTALL "$@"'''.replace('REAL_INSTALL', shutil.which('install')))
             path.write_text('library')
         for framework, version in (('AppKit', 'C'), ('QuartzCore', 'A'),
                                    ('CoreFoundation', 'A'), ('SystemConfiguration', 'A'),
-                                   ('CFNetwork', 'A')):
+                                   ('CFNetwork', 'A'), ('CoreVideo', 'A')):
             path = self.root / 'sdk/System/Library/Frameworks' / (framework + '.framework')
             binary = path / 'Versions' / version / framework
             binary.parent.mkdir(parents=True)

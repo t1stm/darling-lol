@@ -9,7 +9,12 @@ root = Path(__file__).resolve().parent.parent
 folder = root / 'build/darling-src/build/src/external/metal/deps/indium'
 # Keep the validated LLVM major locally when a system update replaces it.
 pinned_llvm = root / 'build/llvm22/usr'
-resource_include = subprocess.check_output(['clang++', '-print-resource-dir'], text=True).strip() + '/include'
+extra_clang_args = []
+try:
+    subprocess.check_output(['clang++', '-print-resource-dir'], text=True)
+except subprocess.CalledProcessError:
+    extra_clang_args = ['--no-default-config']
+resource_include = subprocess.check_output(['clang++', *extra_clang_args, '-print-resource-dir'], text=True).strip() + '/include' 
 def current_includes(values):
     return [resource_include if value.startswith('/usr/lib/clang/') and value.endswith('/include') else value for value in values]
 iridium_flags = {}
@@ -37,11 +42,13 @@ print(f'Iridium LLVM headers: {llvm_include}; library: {llvm_library}', flush=Tr
 iridium_link = shlex.split((folder / 'CMakeFiles/iridium.dir/link.txt').read_text())
 for name in ('air', 'dynamic-llvm', 'iridium', 'spirv'):
     obj = root / f'build/riot-iridium-{name}.o'
-    subprocess.run(['clang++', *iridium_flags['CXX_DEFINES'], *iridium_flags['CXX_INCLUDES'],
+    subprocess.run(['clang++', *extra_clang_args, *iridium_flags['CXX_DEFINES'], *iridium_flags['CXX_INCLUDES'],
                     *iridium_flags['CXX_FLAGS'], '-O2', '-c', str(root / ('build/darling-src/src/external/metal/deps/indium/src/iridium/' + name + '.cpp')),
                     '-o', str(obj)], check=True)
     iridium_link[iridium_link.index('CMakeFiles/iridium.dir/src/iridium/' + name + '.cpp.o')] = str(obj)
 iridium_link[iridium_link.index('-o') + 1] = str(root / 'build/riot-libiridium.dylib')
+if extra_clang_args:
+    iridium_link.insert(1, extra_clang_args[0])
 subprocess.run(iridium_link, cwd=folder, check=True)
 if '--iridium-only' in sys.argv:
     sys.exit(0)
@@ -57,9 +64,11 @@ indium_names = [Path(arg).name.removesuffix('.cpp.o') for arg in link
                 if arg.startswith('CMakeFiles/indium.dir/src/indium/') and arg.endswith('.cpp.o')]
 for name in indium_names:
     obj = root / f'build/riot-indium-{name}.o'
-    subprocess.run(['clang++', *flags['CXX_DEFINES'], *flags['CXX_INCLUDES'],
+    subprocess.run(['clang++', *extra_clang_args, *flags['CXX_DEFINES'], *flags['CXX_INCLUDES'],
                     *flags['CXX_FLAGS'], '-O2', '-c', str(root / ('build/darling-src/src/external/metal/deps/indium/src/indium/' + name + '.cpp')),
                     '-o', str(obj)], check=True)
     link[link.index('CMakeFiles/indium.dir/src/indium/' + name + '.cpp.o')] = str(obj)
 link[link.index('-o') + 1] = str(root / 'build/riot-libindium.dylib')
+if extra_clang_args:
+    link.insert(1, extra_clang_args[0])
 subprocess.run(link, cwd=folder, check=True)

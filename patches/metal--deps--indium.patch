@@ -3098,7 +3098,7 @@ index 322e186..f712c7a 100644
  			continue;
  		}
  
-@@ -67,12 +240,105 @@ void Indium::initGlobalDeviceList() {
+@@ -67,12 +240,132 @@ void Indium::initGlobalDeviceList() {
  		DynamicVK::vkGetPhysicalDeviceFeatures2(device, &features);
  
  		if (!features12.timelineSemaphore) {
@@ -3150,13 +3150,40 @@ index 322e186..f712c7a 100644
 +	});
 +
 +	if (selectedIndex < 0) {
++		auto scoreDevice = [](VkPhysicalDeviceType type) -> int {
++			switch (type) {
++				case VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU:
++					return 40;
++				case VK_PHYSICAL_DEVICE_TYPE_INTEGRATED_GPU:
++					return 30;
++				case VK_PHYSICAL_DEVICE_TYPE_VIRTUAL_GPU:
++					return 20;
++				case VK_PHYSICAL_DEVICE_TYPE_CPU:
++					return 10;
++				default:
++					return 1;
++			}
++		};
++
++		int bestScore = -1;
 +		for (size_t i = 0; i < candidates.size(); ++i) {
 +			if (skipCPUDevices && haveHardwareDevice && candidates[i].properties.deviceType == VK_PHYSICAL_DEVICE_TYPE_CPU) {
 +				continue;
 +			}
-+			selectedIndex = (long) i;
-+			selectedReason = skipCPUDevices ? "loader-first-hardware" : "loader-first";
-+			break;
++			int score = scoreDevice(candidates[i].properties.deviceType);
++			if (score > bestScore) {
++				bestScore = score;
++				selectedIndex = (long) i;
++			}
++		}
++		if (selectedIndex >= 0) {
++			if (candidates[selectedIndex].properties.deviceType == VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU) {
++				selectedReason = (selectedIndex == 0) ? "loader-first" : "heuristic-discrete";
++			} else if (skipCPUDevices && haveHardwareDevice) {
++				selectedReason = "loader-first-hardware";
++			} else {
++				selectedReason = "loader-first";
++			}
 +		}
 +	}
 +

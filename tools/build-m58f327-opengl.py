@@ -21,6 +21,20 @@ link = shlex.split((framework/'CMakeFiles/OpenGL.dir/link.txt').read_text())
 link[link.index('CMakeFiles/OpenGL.dir/OpenGL.c.o')] = str(object_file)
 link[link.index('-o')+1] = str(project/'build/m327-OpenGL')
 run(link, framework)
+import shutil, os
+built_binary = project/'build/m327-OpenGL'
+for root in [Path.home()/'.darling/System/Library/Frameworks/OpenGL.framework',
+             Path.home()/'.darling/Users/fgeroldi/RuntimeFrameworks/OpenGL.framework']:
+    dst = root/'Versions/A/OpenGL'
+    try:
+        dst.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(built_binary, dst)
+        for link, target in [(root/'Versions/Current', 'A'), (root/'OpenGL', 'Versions/A/OpenGL')]:
+            if not link.is_symlink() and not link.exists():
+                os.symlink(target, link)
+        print(f'Installed OpenGL to {dst}')
+    except Exception as e:
+        print(f'Could not install to {dst}: {e}')
 for name in ['context', 'render', 'planes', 'direct', 'resolver']:
     obj = project/f'build/m327-{name}-check.o'
     source = project/'tools/riot-gl-resolver-check.c' if name == 'resolver' else project/'tools/m58f352-cgl-direct-check.c' if name == 'direct' else project/'tools/m58f340-cgl-planes-check.c' if name == 'planes' else project/f'tools/m58f327-cgl-{name}-check.c'

@@ -122,4 +122,5 @@ while any(process_identity(pid) == identity and live(pid)
     time.sleep(.1)
 if any(process_identity(pid) == identity and live(pid) for pid, identity in remaining.items()):
     raise SystemExit('Old Riot helpers remain alive; runtime remains untouched')
-subprocess.run([sys.executable, str(Path(__file__).with_name('ensure-darling-runtime.py'))], check=True)
+if '--shutdown-only' not in sys.argv:
+    subprocess.run([sys.executable, str(Path(__file__).with_name('ensure-darling-runtime.py'))], check=True)

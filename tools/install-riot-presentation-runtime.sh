@@ -13,6 +13,7 @@ make -C "$build_dir/src/external/cfnetwork/src" CFNetwork -j8
 make -C "$build_dir/src/external/configd/SystemConfiguration.fproj" SystemConfiguration -j8
 make -C "$build_dir/src/external/cocotron/QuartzCore" QuartzCore -j8
 make -C "$build_dir/src/external/cocotron/AppKit" AppKit X11_backend -j8
+make -C "$build_dir/src/frameworks/CoreVideo" CoreVideo -j8
 cc -shared -fPIC -O3 -march=native -mtune=generic -Wall -Wextra \
   "-Wl,-soname,$project_dir/build/libdarling-xshm.so" \
   "$project_dir/tools/m58f299-xshm.c" -o "$project_dir/build/libdarling-xshm.next.so" \
@@ -26,28 +27,43 @@ clang -target x86_64-apple-macosx11.0 -fuse-ld=lld -dynamiclib -nostdlib -O3 -ma
 # Stop before changing the overlay's upper directory, even with atomic writes.
 python3 "$project_dir/tools/stop-darling-runtime.py"
 mkdir -p "$guest_home"
-mv "$project_dir/build/libdarling-xshm.next.so" "$project_dir/build/libdarling-xshm.so"
+mv -f "$project_dir/build/libdarling-xshm.next.so" "$project_dir/build/libdarling-xshm.so"
 install -m755 "$project_dir/build/libDarlingXShm.next.dylib" "$guest_home/libDarlingXShm.next.dylib"
-mv "$guest_home/libDarlingXShm.next.dylib" "$guest_home/libDarlingXShm.dylib"
+mv -f "$guest_home/libDarlingXShm.next.dylib" "$guest_home/libDarlingXShm.dylib"
 mkdir -p "$guest_home/RuntimeFrameworks"
-for framework in AppKit QuartzCore CoreFoundation SystemConfiguration CFNetwork; do
+for framework in AppKit QuartzCore CoreFoundation SystemConfiguration CFNetwork CoreVideo; do
   if [ ! -d "$guest_home/RuntimeFrameworks/$framework.framework" ]; then
     cp -a "@DARLING_SDK@/System/Library/Frameworks/$framework.framework" "$guest_home/RuntimeFrameworks/"
   fi
 done
 atomic_install() {
   install -m755 "$1" "$2.next"
-  mv "$2.next" "$2"
+  mv -f "$2.next" "$2"
 }
-atomic_install "$build_dir/src/external/cocotron/AppKit/AppKit" "$guest_home/RuntimeFrameworks/AppKit.framework/Versions/C/AppKit"
+install_framework_pair() {
+  src="$1"
+  version="$2"
+  name="$3"
+  atomic_install "$src" "$guest_home/RuntimeFrameworks/$name.framework/Versions/$version/$name"
+  mkdir -p "$prefix_dir/System/Library/Frameworks/$name.framework/Versions/$version"
+  [ -e "$prefix_dir/System/Library/Frameworks/$name.framework/Versions/Current" ] || ln -sf "$version" "$prefix_dir/System/Library/Frameworks/$name.framework/Versions/Current"
+  [ -e "$prefix_dir/System/Library/Frameworks/$name.framework/$name" ] || ln -sf "Versions/Current/$name" "$prefix_dir/System/Library/Frameworks/$name.framework/$name"
+  atomic_install "$src" "$prefix_dir/System/Library/Frameworks/$name.framework/Versions/$version/$name"
+}
+install_framework_pair "$build_dir/src/external/cocotron/AppKit/AppKit" "C" "AppKit"
 atomic_install "$build_dir/src/external/cocotron/AppKit/X11" "$guest_home/RuntimeFrameworks/AppKit.framework/Versions/C/Resources/Backends/X11.backend/Contents/MacOS/X11"
-atomic_install "$build_dir/src/external/cocotron/QuartzCore/QuartzCore" "$guest_home/RuntimeFrameworks/QuartzCore.framework/Versions/A/QuartzCore"
+mkdir -p "$prefix_dir/System/Library/Frameworks/AppKit.framework/Versions/C/Resources/Backends/X11.backend/Contents/MacOS"
+atomic_install "$build_dir/src/external/cocotron/AppKit/X11" "$prefix_dir/System/Library/Frameworks/AppKit.framework/Versions/C/Resources/Backends/X11.backend/Contents/MacOS/X11"
 
-atomic_install "$build_dir/src/external/corefoundation/CoreFoundation" "$guest_home/RuntimeFrameworks/CoreFoundation.framework/Versions/A/CoreFoundation"
+install_framework_pair "$build_dir/src/external/cocotron/QuartzCore/QuartzCore" "A" "QuartzCore"
 
-atomic_install "$build_dir/src/external/configd/SystemConfiguration.fproj/SystemConfiguration" "$guest_home/RuntimeFrameworks/SystemConfiguration.framework/Versions/A/SystemConfiguration"
+install_framework_pair "$build_dir/src/external/corefoundation/CoreFoundation" "A" "CoreFoundation"
 
-atomic_install "$build_dir/src/external/cfnetwork/src/CFNetwork" "$guest_home/RuntimeFrameworks/CFNetwork.framework/Versions/A/CFNetwork"
+install_framework_pair "$build_dir/src/external/configd/SystemConfiguration.fproj/SystemConfiguration" "A" "SystemConfiguration"
+
+install_framework_pair "$build_dir/src/external/cfnetwork/src/CFNetwork" "A" "CFNetwork"
+
+install_framework_pair "$build_dir/src/frameworks/CoreVideo/CoreVideo" "A" "CoreVideo"
 
 mkdir -p "$guest_home/RuntimeLibraries"
 atomic_install "$build_dir/src/external/libplatform/libsystem_platform.dylib" "$guest_home/RuntimeLibraries/libsystem_platform.dylib"
