@@ -4,7 +4,11 @@ import json, shlex, subprocess
 from pathlib import Path
 project=Path(__file__).resolve().parent.parent
 config_path = project / 'build/config.json'
-sdk = json.loads(config_path.read_text())['sdk'] if config_path.exists() else '/usr/local/libexec/darling'
+cfg = json.loads(config_path.read_text()) if config_path.exists() else {}
+sdk = cfg.get('sdk', '/usr/local/libexec/darling')
+prefix = Path(cfg.get('prefix', Path.home() / '.darling'))
+guest_home = Path(cfg.get('guest_home', '/Users/fgeroldi'))
+guest_home_host = prefix / guest_home.relative_to('/')
 framework=project/'build/darling-src/build/src/frameworks/CoreVideo'
 flags={}
 for line in (framework/'CMakeFiles/CoreVideo.dir/flags.make').read_text().splitlines():
@@ -17,14 +21,18 @@ link[link.index('CMakeFiles/CoreVideo.dir/src/CVDisplayLink.mm.o')]=str(obj)
 link[link.index('-o')+1]=str(project/'build/m341-CoreVideo')
 subprocess.run(link,cwd=framework,check=True)
 built_binary = project / 'build/m341-CoreVideo'
+import shutil
+try:
+    shutil.copy2(built_binary, framework / 'CoreVideo')
+except Exception:
+    pass
 destinations = [
-    Path.home() / '.darling/System/Library/Frameworks/CoreVideo.framework/Versions/A/CoreVideo',
-    Path.home() / '.darling/Users/fgeroldi/RuntimeFrameworks/CoreVideo.framework/Versions/A/CoreVideo',
+    prefix / 'System/Library/Frameworks/CoreVideo.framework/Versions/A/CoreVideo',
+    guest_home_host / 'RuntimeFrameworks/CoreVideo.framework/Versions/A/CoreVideo',
 ]
 for dst in destinations:
     try:
         dst.parent.mkdir(parents=True, exist_ok=True)
-        import shutil
         shutil.copy2(built_binary, dst)
         print(f'Installed CoreVideo to {dst}')
     except Exception as e:

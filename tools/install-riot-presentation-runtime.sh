@@ -13,6 +13,7 @@ make -C "$build_dir/src/external/cfnetwork/src" CFNetwork -j8
 make -C "$build_dir/src/external/configd/SystemConfiguration.fproj" SystemConfiguration -j8
 make -C "$build_dir/src/external/cocotron/QuartzCore" QuartzCore -j8
 make -C "$build_dir/src/external/cocotron/AppKit" AppKit X11_backend -j8
+make -C "$build_dir/src/frameworks/CoreVideo" CoreVideo -j8
 cc -shared -fPIC -O3 -march=native -mtune=generic -Wall -Wextra \
   "-Wl,-soname,$project_dir/build/libdarling-xshm.so" \
   "$project_dir/tools/m58f299-xshm.c" -o "$project_dir/build/libdarling-xshm.next.so" \
@@ -30,7 +31,7 @@ mv -f "$project_dir/build/libdarling-xshm.next.so" "$project_dir/build/libdarlin
 install -m755 "$project_dir/build/libDarlingXShm.next.dylib" "$guest_home/libDarlingXShm.next.dylib"
 mv -f "$guest_home/libDarlingXShm.next.dylib" "$guest_home/libDarlingXShm.dylib"
 mkdir -p "$guest_home/RuntimeFrameworks"
-for framework in AppKit QuartzCore CoreFoundation SystemConfiguration CFNetwork; do
+for framework in AppKit QuartzCore CoreFoundation SystemConfiguration CFNetwork CoreVideo; do
   if [ ! -d "$guest_home/RuntimeFrameworks/$framework.framework" ]; then
     cp -a "@DARLING_SDK@/System/Library/Frameworks/$framework.framework" "$guest_home/RuntimeFrameworks/"
   fi
@@ -48,6 +49,12 @@ atomic_install "$build_dir/src/external/corefoundation/CoreFoundation" "$guest_h
 atomic_install "$build_dir/src/external/configd/SystemConfiguration.fproj/SystemConfiguration" "$guest_home/RuntimeFrameworks/SystemConfiguration.framework/Versions/A/SystemConfiguration"
 
 atomic_install "$build_dir/src/external/cfnetwork/src/CFNetwork" "$guest_home/RuntimeFrameworks/CFNetwork.framework/Versions/A/CFNetwork"
+
+atomic_install "$build_dir/src/frameworks/CoreVideo/CoreVideo" "$guest_home/RuntimeFrameworks/CoreVideo.framework/Versions/A/CoreVideo"
+mkdir -p "$prefix_dir/System/Library/Frameworks/CoreVideo.framework/Versions/A"
+[ -e "$prefix_dir/System/Library/Frameworks/CoreVideo.framework/Versions/Current" ] || ln -sf A "$prefix_dir/System/Library/Frameworks/CoreVideo.framework/Versions/Current"
+[ -e "$prefix_dir/System/Library/Frameworks/CoreVideo.framework/CoreVideo" ] || ln -sf Versions/Current/CoreVideo "$prefix_dir/System/Library/Frameworks/CoreVideo.framework/CoreVideo"
+atomic_install "$build_dir/src/frameworks/CoreVideo/CoreVideo" "$prefix_dir/System/Library/Frameworks/CoreVideo.framework/Versions/A/CoreVideo"
 
 mkdir -p "$guest_home/RuntimeLibraries"
 atomic_install "$build_dir/src/external/libplatform/libsystem_platform.dylib" "$guest_home/RuntimeLibraries/libsystem_platform.dylib"

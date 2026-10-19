@@ -6102,10 +6102,10 @@ index 299caa5b1..bdff6028c 100644
  
  __END_DECLS
 diff --git a/src/frameworks/CoreVideo/src/CVDisplayLink.mm b/src/frameworks/CoreVideo/src/CVDisplayLink.mm
-index 3e9cba226..6682716a9 100644
+index 3e9cba226..6a4e81aef 100644
 --- a/src/frameworks/CoreVideo/src/CVDisplayLink.mm
 +++ b/src/frameworks/CoreVideo/src/CVDisplayLink.mm
-@@ -1,38 +1,896 @@
+@@ -1,38 +1,908 @@
  #include <CoreVideo/CVDisplayLink.h>
 +#include <stdint.h>
 +#include <string.h>
@@ -6598,9 +6598,26 @@ index 3e9cba226..6682716a9 100644
 +}
 +
 +static uint32_t getTargetRefreshRate(void) {
-+	/* Chromium 108 / CEF FrameSink and Mojo IPC pump MUST run at 60 Hz to avoid
-+	 * frame_impl.cc connection timeouts and IPC message queue saturation. */
-+	return 60;
++	static uint32_t sTargetRate = 0;
++	if (!sTargetRate) {
++		const char *hz = getenv("RCLOL_REFRESH_HZ");
++		int rate = hz ? atoi(hz) : 0;
++		if (rate > 0 && rate <= 1000) {
++			sTargetRate = (uint32_t)rate;
++		} else {
++			CGDisplayModeRef mode = CGDisplayCopyDisplayMode(CGMainDisplayID());
++			if (mode) {
++				double dRate = CGDisplayModeGetRefreshRate(mode);
++				CGDisplayModeRelease(mode);
++				if (dRate > 0.0 && dRate <= 1000.0) {
++					sTargetRate = (uint32_t)(dRate + 0.5);
++				}
++			}
++		}
++		if (sTargetRate < 1)
++			sTargetRate = 60;
++	}
++	return sTargetRate;
 +}
 +
 +static void rendererBeginTimerF(CFRunLoopTimerRef timer, void *info) {
@@ -6863,11 +6880,7 @@ index 3e9cba226..6682716a9 100644
 +
 +static void displayLinkTickFromRec(CVLinkStateRec* rec) {
 +	CVDisplayLinkOutputCallback callback = (CVDisplayLinkOutputCallback) rec->callback;
-+	if (traceLog != NULL) {
-+		/* darling-lol M58d: full continuity logging while the begin-frame
-+		 * stall is under diagnosis (previously capped at 32 records). */
-+		traceLog("PUMP cb=%p ticks=%llu\n", (uint64_t) callback, rec->ticks);
-+	}
++	traceLog("PUMP cb=%p ticks=%llu\n", (uint64_t) callback, rec->ticks);
 +	if (callback != NULL && rec->running && rec->refs) {
 +		rec->ticks++;
 +		struct mach_timebase_info timebase;
@@ -6936,9 +6949,8 @@ index 3e9cba226..6682716a9 100644
 +    if (__lolsys_syscall(1,(long)&deadline,0,0,0,0,228)<0) return NULL;
 +    static uint64_t cvIntervalNS = 0;
 +    if (!cvIntervalNS) {
-+        const char *hz = getenv("RCLOL_REFRESH_HZ");
-+        int rate = hz ? atoi(hz) : 0;
-+        cvIntervalNS = (rate > 0 && rate <= 1000) ? 1000000000ull / (uint64_t)rate : (1000000000ull / 60ull);
++        uint32_t rate = getTargetRefreshRate();
++        cvIntervalNS = 1000000000ull / (uint64_t)rate;
 +    }
 +    for (;;) {
 +        deadline.nsec += cvIntervalNS;
@@ -7010,7 +7022,7 @@ index 3e9cba226..6682716a9 100644
  	*displayLinkOut = (CVDisplayLinkRef) self;
  	return kCVReturnSuccess;
  }
-@@ -41,35 +899,128 @@ CVReturn CVDisplayLinkStart(CVDisplayLinkRef displayLink)
+@@ -41,35 +911,128 @@ CVReturn CVDisplayLinkStart(CVDisplayLinkRef displayLink)
  {
  	if (!displayLink)
  		return kCVReturnInvalidArgument;
@@ -7150,7 +7162,7 @@ index 3e9cba226..6682716a9 100644
  	return kCVReturnSuccess;
  }
  
-@@ -91,7 +1042,7 @@ CVReturn CVDisplayLinkSetCurrentCGDisplayFromOpenGLContext(CVDisplayLinkRef disp
+@@ -91,7 +1054,7 @@ CVReturn CVDisplayLinkSetCurrentCGDisplayFromOpenGLContext(CVDisplayLinkRef disp
  			CGDirectDisplayID displayID = [window.screen cgDirectDisplayID];
  			NSMutableDictionary* self = (NSMutableDictionary*) displayLink;
  
@@ -7159,7 +7171,7 @@ index 3e9cba226..6682716a9 100644
  					forKey: kDirectDisplayArray];
  			return kCVReturnSuccess;
  		}
-@@ -117,36 +1068,65 @@ CVReturn CVDisplayLinkCreateWithCGDisplay(
+@@ -117,36 +1080,65 @@ CVReturn CVDisplayLinkCreateWithCGDisplay(
      CGDirectDisplayID displayID,
      CV_RETURNS_RETAINED_PARAMETER CVDisplayLinkRef CV_NULLABLE * CV_NONNULL displayLinkOut )
  {
