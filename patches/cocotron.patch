@@ -12005,7 +12005,7 @@ index 757dd8c9..cbc313d5 100644
  	CFTimeInterval presentedTime() const;
  
 diff --git a/QuartzCore/CAMetalLayer.mm b/QuartzCore/CAMetalLayer.mm
-index b81e2e14..9df56174 100644
+index b81e2e14..470decb2 100644
 --- a/QuartzCore/CAMetalLayer.mm
 +++ b/QuartzCore/CAMetalLayer.mm
 @@ -17,38 +17,354 @@
@@ -12594,7 +12594,7 @@ index b81e2e14..9df56174 100644
  		[_drawableCondition unlock];
  		return nil;
  	}
-@@ -394,12 +752,13 @@ static void reportGLErrors(void) {
+@@ -394,36 +752,78 @@ static void reportGLErrors(void) {
  	}
  
  	if (drawableID == UINT8_MAX) {
@@ -12609,7 +12609,43 @@ index b81e2e14..9df56174 100644
  
  	drawable = _drawables[drawableID];
  
-@@ -410,20 +769,28 @@ static void reportGLErrors(void) {
+ 	[_drawableCondition unlock];
+ 
++	if (_displaySyncEnabled) {
++		static uint64_t s_targetDeadlineNs = 0;
++		uint32_t rate = getMetalRefreshRate();
++		uint64_t intervalNs = 1000000000ULL / (uint64_t)rate;
++
++		struct timespec tsNow;
++		clock_gettime(CLOCK_MONOTONIC, &tsNow);
++		uint64_t nowNs = (uint64_t)tsNow.tv_sec * 1000000000ULL + tsNow.tv_nsec;
++
++		if (s_targetDeadlineNs == 0 || nowNs > s_targetDeadlineNs + intervalNs) {
++			s_targetDeadlineNs = nowNs + intervalNs;
++		} else {
++			if (nowNs < s_targetDeadlineNs) {
++				uint64_t waitNs = s_targetDeadlineNs - nowNs;
++				if (waitNs > 1500000ULL) {
++					struct timespec sleepTs;
++					uint64_t coarseWaitNs = waitNs - 1000000ULL;
++					sleepTs.tv_sec = coarseWaitNs / 1000000000ULL;
++					sleepTs.tv_nsec = coarseWaitNs % 1000000000ULL;
++					nanosleep(&sleepTs, nullptr);
++				}
++				do {
++					#if defined(__x86_64__) || defined(_M_X64)
++					__builtin_ia32_pause();
++					#endif
++					clock_gettime(CLOCK_MONOTONIC, &tsNow);
++					nowNs = (uint64_t)tsNow.tv_sec * 1000000000ULL + tsNow.tv_nsec;
++				} while (nowNs < s_targetDeadlineNs);
++			}
++			s_targetDeadlineNs += intervalNs;
++		}
++	}
++
+ 	return [[[CAMetalDrawableInternal alloc] initWithLayer: self drawable: drawable] autorelease];
+ }
  
  - (void)queuePresent: (NSUInteger)drawableID
  {
@@ -12646,7 +12682,7 @@ index b81e2e14..9df56174 100644
  	[_drawableCondition lock];
  	_usableDrawablesBitmap |= 1u << drawableID;
  	[_drawableCondition signal];
-@@ -437,16 +804,14 @@ static void reportGLErrors(void) {
+@@ -437,16 +837,14 @@ static void reportGLErrors(void) {
  	// drop all queued presentations
  	for (NSUInteger i = 0; i < _queuedDrawableCount; ++i) {
  		auto& drawable = _drawables[_queuedDrawables[i]];
@@ -12668,7 +12704,7 @@ index b81e2e14..9df56174 100644
  	for (auto& drawable: _drawables) {
  		if (drawable) {
  			drawable->disown();
-@@ -455,14 +820,451 @@ static void reportGLErrors(void) {
+@@ -455,14 +853,451 @@ static void reportGLErrors(void) {
  	}
  	_usableDrawablesBitmap = 0;
  
@@ -12902,7 +12938,7 @@ index b81e2e14..9df56174 100644
 +			if (formatCount > 0) {
 +				DynamicVK::vkGetPhysicalDeviceSurfaceFormatsKHR(dev->physicalDevice(), _vkSurface, &formatCount, formats.data());
 +			}
-+
+ 
 +			VkFormat chosenFormat = VK_FORMAT_B8G8R8A8_UNORM;
 +			VkColorSpaceKHR chosenColorSpace = VK_COLOR_SPACE_SRGB_NONLINEAR_KHR;
 +			if (!formats.empty()) {
@@ -12927,7 +12963,7 @@ index b81e2e14..9df56174 100644
 +			if (modeCount > 0) {
 +				DynamicVK::vkGetPhysicalDeviceSurfacePresentModesKHR(dev->physicalDevice(), _vkSurface, &modeCount, modes.data());
 +			}
- 
++
 +			char modesLog[256];
 +			int mOff = snprintf(modesLog, sizeof(modesLog), "Surface present modes (count=%u):", modeCount);
 +			for (auto m : modes) {
@@ -13123,7 +13159,7 @@ index b81e2e14..9df56174 100644
  	switch (_pixelFormat) {
  		case MTLPixelFormatBGRA8Unorm:      pixelFormat = Indium::PixelFormat::BGRA8Unorm;      break;
  		case MTLPixelFormatBGRA8Unorm_sRGB: pixelFormat = Indium::PixelFormat::BGRA8Unorm_sRGB; break;
-@@ -476,123 +1278,258 @@ static void reportGLErrors(void) {
+@@ -476,123 +1311,239 @@ static void reportGLErrors(void) {
  		default:                            pixelFormat = Indium::PixelFormat::Invalid;         break;
  	}
  
@@ -13160,6 +13196,7 @@ index b81e2e14..9df56174 100644
 -			glTextureParameteri(_tex, GL_TEXTURE_WRAP_S, GL_REPEAT);
 -			glTextureParameteri(_tex, GL_TEXTURE_WRAP_T, GL_REPEAT);
 -			reportGLErrors();
+-		}
 +- (void)presentDirectVulkan: (NSUInteger)drawableID
 +{
 +	static std::atomic<uint64_t> s_presentFrameCount{0};
@@ -13172,38 +13209,27 @@ index b81e2e14..9df56174 100644
 +	uint64_t dtUs = s_lastFrameNs ? (entryNs - s_lastFrameNs) / 1000ULL : 0;
 +	s_lastFrameNs = entryNs;
 +
-+	if (_displaySyncEnabled) {
-+		static uint64_t s_nextPresentDeadlineNs = 0;
-+		uint32_t rate = getMetalRefreshRate();
-+		uint64_t intervalNs = 1000000000ULL / (uint64_t)rate;
-+
-+		if (s_nextPresentDeadlineNs == 0 || entryNs > s_nextPresentDeadlineNs + intervalNs * 2) {
-+			s_nextPresentDeadlineNs = entryNs + intervalNs;
-+		} else {
-+			if (entryNs < s_nextPresentDeadlineNs) {
-+				struct timespec sleepTs;
-+				uint64_t waitNs = s_nextPresentDeadlineNs - entryNs;
-+				sleepTs.tv_sec = waitNs / 1000000000ULL;
-+				sleepTs.tv_nsec = waitNs % 1000000000ULL;
-+				nanosleep(&sleepTs, nullptr);
-+			}
-+			s_nextPresentDeadlineNs += intervalNs;
- 		}
++	auto dev = std::dynamic_pointer_cast<Indium::PrivateDevice>(((MTLDeviceInternal*)self.device).device);
++	if (!dev || _vkSwapchain == VK_NULL_HANDLE) {
++		return;
  	}
  
 -	CGLSetCurrentContext(prev);
 -}
-+	auto dev = std::dynamic_pointer_cast<Indium::PrivateDevice>(((MTLDeviceInternal*)self.device).device);
-+	if (!dev || _vkSwapchain == VK_NULL_HANDLE) {
++	std::shared_ptr<CAMetalDrawableActual> drawable = _drawables[drawableID];
++	if (!drawable) {
 +		return;
 +	}
  
 -- (void)prepareRender
 -{
 -	std::shared_ptr<CAMetalDrawableActual> drawable = nullptr;
-+	std::shared_ptr<CAMetalDrawableActual> drawable = _drawables[drawableID];
-+	if (!drawable) {
-+		return;
++	if (frameNum <= 5 && _vkNativeWindow) {
++		void* nativeDpy = _CGSNativeDisplay(CGSMainConnectionID());
++		ensureX11WindowVisible(nativeDpy, _vkNativeWindow);
++		if (_vkSubWindow && _vkSubWindow != _vkNativeWindow) {
++			ensureX11WindowVisible(nativeDpy, _vkSubWindow);
++		}
 +	}
  
 -	[_drawableCondition lock];
@@ -13211,19 +13237,6 @@ index b81e2e14..9df56174 100644
 -		drawable = _drawables[_queuedDrawables[0]];
 -		--_queuedDrawableCount;
 -		std::copy(_queuedDrawables.begin() + 1, _queuedDrawables.end(), _queuedDrawables.begin());
-+	if (frameNum <= 5 && _vkNativeWindow) {
-+		void* nativeDpy = _CGSNativeDisplay(CGSMainConnectionID());
-+		ensureX11WindowVisible(nativeDpy, _vkNativeWindow);
-+		if (_vkSubWindow && _vkSubWindow != _vkNativeWindow) {
-+			ensureX11WindowVisible(nativeDpy, _vkSubWindow);
-+		}
- 	}
--	[_drawableCondition unlock];
- 
--	if (drawable) {
--		// wait for the drawable to be fully rendered before copying it to the render texture
--		// (this is a GPU-side wait)
--		drawable->synchronizeRender();
 +	size_t flightIdx = _frameInFlightIndex;
 +
 +	// Wait for previous work in this flight slot to complete before reusing resources
@@ -13257,11 +13270,13 @@ index b81e2e14..9df56174 100644
 +		appendDeviceLog(logBuf);
 +		drawable->didPresent();
 +		return;
-+	}
+ 	}
+-	[_drawableCondition unlock];
  
--		reportGLErrors();
--		glCopyImageSubData(drawable->texture()->glTexture(), GL_TEXTURE_2D, 0, 0, 0, 0, _tex, GL_TEXTURE_2D, 0, 0, 0, 0, _drawableSize.width, _drawableSize.height, 1);
--		reportGLErrors();
+-	if (drawable) {
+-		// wait for the drawable to be fully rendered before copying it to the render texture
+-		// (this is a GPU-side wait)
+-		drawable->synchronizeRender();
 +	DynamicVK::vkResetFencesLocal(dev->device(), 1, &_vkInFlightFences[flightIdx]);
 +
 +	// 2. Record command buffer
@@ -13376,16 +13391,11 @@ index b81e2e14..9df56174 100644
 +		presRes = DynamicVK::vkQueuePresentKHR(dev->graphicsQueue(), &presentInfo);
 +		clock_gettime(CLOCK_MONOTONIC, &tsPresEnd);
 +		presUs = ((uint64_t)(tsPresEnd.tv_sec - tsSubEnd.tv_sec) * 1000000000ULL + (tsPresEnd.tv_nsec - tsSubEnd.tv_nsec)) / 1000ULL;
- 	}
++	}
  
--	@synchronized(self) {
--		// FIXME: this is wrong, but there's no good way to tell when the texture is actually fully rendered/presented.
--		//        this is at least close enough. it should balance out in the long run since we're supposed to be invoked on vsync
--		//        or at least a fixed interval.
--		if (_lastPresentedDrawable) {
--			_lastPresentedDrawable->didPresent();
--		}
--		_lastPresentedDrawable = drawable;
+-		reportGLErrors();
+-		glCopyImageSubData(drawable->texture()->glTexture(), GL_TEXTURE_2D, 0, 0, 0, 0, _tex, GL_TEXTURE_2D, 0, 0, 0, 0, _drawableSize.width, _drawableSize.height, 1);
+-		reportGLErrors();
 +	_frameInFlightIndex = (_frameInFlightIndex + 1) % NUM_FRAMES_IN_FLIGHT;
 +
 +	if (frameNum <= 120 || (frameNum % 60) == 0) {
@@ -13398,10 +13408,18 @@ index b81e2e14..9df56174 100644
 +			(unsigned int)imageIndex, (int)presRes);
 +		appendDeviceLog(logBuf);
  	}
-+
+ 
+-	@synchronized(self) {
+-		// FIXME: this is wrong, but there's no good way to tell when the texture is actually fully rendered/presented.
+-		//        this is at least close enough. it should balance out in the long run since we're supposed to be invoked on vsync
+-		//        or at least a fixed interval.
+-		if (_lastPresentedDrawable) {
+-			_lastPresentedDrawable->didPresent();
+-		}
+-		_lastPresentedDrawable = drawable;
 +	if (presRes == VK_ERROR_OUT_OF_DATE_KHR) {
 +		[self recreateDrawables];
-+	}
+ 	}
 +
 +	// 5. Notify drawable presented
 +	drawable->didPresent();
