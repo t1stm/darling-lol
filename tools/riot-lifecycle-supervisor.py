@@ -194,13 +194,13 @@ def main():
             league_transition_deadline = time.monotonic() + 35.0
 
         # Protect transition when RiotClientUx closes to launch LeagueClient
-        if riot_ux_ever_seen and not riot_ux_alive and not league_ever_seen and services_alive:
+        if riot_ux_ever_seen and not riot_ux_alive and not league_ever_seen:
             if riot_transition_deadline == 0.0:
                 riot_transition_deadline = time.monotonic() + 45.0
-            if time.monotonic() < riot_transition_deadline:
-                continue
 
-        in_transition = (league_transition_deadline > 0.0 and time.monotonic() < league_transition_deadline)
+        in_riot_transition = (riot_transition_deadline > 0.0 and time.monotonic() < riot_transition_deadline)
+        in_league_transition = (league_transition_deadline > 0.0 and time.monotonic() < league_transition_deadline)
+        in_transition = in_riot_transition or in_league_transition
 
         # Priority management: throttle background CEF processes when 3D match is active
         if league_game_alive:
