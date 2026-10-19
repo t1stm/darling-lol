@@ -12003,7 +12003,7 @@ index 757dd8c9..cbc313d5 100644
  	CFTimeInterval presentedTime() const;
  
 diff --git a/QuartzCore/CAMetalLayer.mm b/QuartzCore/CAMetalLayer.mm
-index b81e2e14..d0b95fc3 100644
+index b81e2e14..f444052f 100644
 --- a/QuartzCore/CAMetalLayer.mm
 +++ b/QuartzCore/CAMetalLayer.mm
 @@ -17,38 +17,354 @@
@@ -12514,7 +12514,13 @@ index b81e2e14..d0b95fc3 100644
  	_drawableSize = drawableSize;
  	[self recreateDrawables];
  }
-@@ -339,36 +681,45 @@ static void reportGLErrors(void) {
+@@ -335,40 +677,50 @@ static void reportGLErrors(void) {
+ 	if (maximumDrawableCount < 2 || maximumDrawableCount > 3) {
+ 		@throw [NSException exceptionWithName: NSInvalidArgumentException reason: @"Attempt to set maximumDrawableCount to an invalid value" userInfo: nil];
+ 	}
+-	_maximumDrawableCount = maximumDrawableCount;
++	// Always maintain triple buffering (3 drawables) to prevent VSync frame-halving stalls
++	_maximumDrawableCount = 3;
  	[self recreateDrawables];
  }
  
@@ -12575,7 +12581,7 @@ index b81e2e14..d0b95fc3 100644
  		if (_allowsNextDrawableTimeout) {
  			if (![_drawableCondition waitUntilDate: endTime]) {
  				break;
-@@ -378,8 +729,15 @@ static void reportGLErrors(void) {
+@@ -378,8 +730,15 @@ static void reportGLErrors(void) {
  		}
  	}
  
@@ -12592,7 +12598,7 @@ index b81e2e14..d0b95fc3 100644
  		[_drawableCondition unlock];
  		return nil;
  	}
-@@ -394,12 +752,13 @@ static void reportGLErrors(void) {
+@@ -394,12 +753,13 @@ static void reportGLErrors(void) {
  	}
  
  	if (drawableID == UINT8_MAX) {
@@ -12607,7 +12613,7 @@ index b81e2e14..d0b95fc3 100644
  
  	drawable = _drawables[drawableID];
  
-@@ -410,20 +769,28 @@ static void reportGLErrors(void) {
+@@ -410,20 +770,28 @@ static void reportGLErrors(void) {
  
  - (void)queuePresent: (NSUInteger)drawableID
  {
@@ -12644,7 +12650,7 @@ index b81e2e14..d0b95fc3 100644
  	[_drawableCondition lock];
  	_usableDrawablesBitmap |= 1u << drawableID;
  	[_drawableCondition signal];
-@@ -437,16 +804,14 @@ static void reportGLErrors(void) {
+@@ -437,16 +805,14 @@ static void reportGLErrors(void) {
  	// drop all queued presentations
  	for (NSUInteger i = 0; i < _queuedDrawableCount; ++i) {
  		auto& drawable = _drawables[_queuedDrawables[i]];
@@ -12666,7 +12672,7 @@ index b81e2e14..d0b95fc3 100644
  	for (auto& drawable: _drawables) {
  		if (drawable) {
  			drawable->disown();
-@@ -455,14 +820,475 @@ static void reportGLErrors(void) {
+@@ -455,14 +821,482 @@ static void reportGLErrors(void) {
  	}
  	_usableDrawablesBitmap = 0;
  
@@ -12956,6 +12962,13 @@ index b81e2e14..d0b95fc3 100644
 +				}
 +			} else if (pmEnv && strcmp(pmEnv, "fifo") == 0) {
 +				chosenPresentMode = VK_PRESENT_MODE_FIFO_KHR;
++			} else if (pmEnv && (strcmp(pmEnv, "relaxed") == 0 || strcmp(pmEnv, "fifo_relaxed") == 0)) {
++				for (auto m : modes) {
++					if (m == VK_PRESENT_MODE_FIFO_RELAXED_KHR) {
++						chosenPresentMode = VK_PRESENT_MODE_FIFO_RELAXED_KHR;
++						break;
++					}
++				}
 +			} else if (pmEnv && (strcmp(pmEnv, "latest") == 0 || strcmp(pmEnv, "fifo_latest") == 0)) {
 +				for (auto m : modes) {
 +					if (m == (VkPresentModeKHR)1000361000) {
@@ -12980,20 +12993,12 @@ index b81e2e14..d0b95fc3 100644
 +				}
 +			} else {
 +				for (auto m : modes) {
-+					if (m == VK_PRESENT_MODE_FIFO_KHR) {
-+						chosenPresentMode = VK_PRESENT_MODE_FIFO_KHR;
++					if (m == VK_PRESENT_MODE_FIFO_RELAXED_KHR) {
++						chosenPresentMode = VK_PRESENT_MODE_FIFO_RELAXED_KHR;
 +						break;
 +					}
 +				}
-+				if (chosenPresentMode != VK_PRESENT_MODE_FIFO_KHR) {
-+					for (auto m : modes) {
-+						if (m == VK_PRESENT_MODE_FIFO_RELAXED_KHR) {
-+							chosenPresentMode = VK_PRESENT_MODE_FIFO_RELAXED_KHR;
-+							break;
-+						}
-+					}
-+				}
-+				if (chosenPresentMode != VK_PRESENT_MODE_FIFO_KHR && chosenPresentMode != VK_PRESENT_MODE_FIFO_RELAXED_KHR) {
++				if (chosenPresentMode != VK_PRESENT_MODE_FIFO_RELAXED_KHR) {
 +					for (auto m : modes) {
 +						if (m == (VkPresentModeKHR)1000361000) {
 +							chosenPresentMode = (VkPresentModeKHR)1000361000;
@@ -13001,7 +13006,15 @@ index b81e2e14..d0b95fc3 100644
 +						}
 +					}
 +				}
-+				if (chosenPresentMode != VK_PRESENT_MODE_FIFO_KHR && chosenPresentMode != VK_PRESENT_MODE_FIFO_RELAXED_KHR && chosenPresentMode != (VkPresentModeKHR)1000361000) {
++				if (chosenPresentMode != VK_PRESENT_MODE_FIFO_RELAXED_KHR && chosenPresentMode != (VkPresentModeKHR)1000361000) {
++					for (auto m : modes) {
++						if (m == VK_PRESENT_MODE_FIFO_KHR) {
++							chosenPresentMode = VK_PRESENT_MODE_FIFO_KHR;
++							break;
++						}
++					}
++				}
++				if (chosenPresentMode != VK_PRESENT_MODE_FIFO_RELAXED_KHR && chosenPresentMode != (VkPresentModeKHR)1000361000 && chosenPresentMode != VK_PRESENT_MODE_FIFO_KHR) {
 +					for (auto m : modes) {
 +						if (m == VK_PRESENT_MODE_MAILBOX_KHR) {
 +							chosenPresentMode = VK_PRESENT_MODE_MAILBOX_KHR;
@@ -13145,7 +13158,7 @@ index b81e2e14..d0b95fc3 100644
  	switch (_pixelFormat) {
  		case MTLPixelFormatBGRA8Unorm:      pixelFormat = Indium::PixelFormat::BGRA8Unorm;      break;
  		case MTLPixelFormatBGRA8Unorm_sRGB: pixelFormat = Indium::PixelFormat::BGRA8Unorm_sRGB; break;
-@@ -476,123 +1302,239 @@ static void reportGLErrors(void) {
+@@ -476,123 +1310,239 @@ static void reportGLErrors(void) {
  		default:                            pixelFormat = Indium::PixelFormat::Invalid;         break;
  	}
  
