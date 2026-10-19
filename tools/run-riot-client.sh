@@ -151,7 +151,7 @@ export MESA_VK_WSI_PRESENT_MODE="${MESA_VK_WSI_PRESENT_MODE:-immediate}"
 # NVIDIA proprietary driver: limit pre-rendered frames (default 0 lets driver buffer dynamically)
 export __GL_MaxFramesAllowed="${__GL_MaxFramesAllowed:-1}"
 export __GL_THREADED_OPTIMIZATIONS="${__GL_THREADED_OPTIMIZATIONS:-0}"
-export __GL_YIELD="${__GL_YIELD:-NOTHING}"
+export __GL_YIELD="${__GL_YIELD:-USLEEP}"
 # Reduce timer slack for tighter scheduling in the game process tree.
 if [ -w /proc/self/timerslack_ns ]; then
   echo 1 > /proc/self/timerslack_ns 2>/dev/null || true

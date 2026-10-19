@@ -83,6 +83,30 @@ def get_darling_pids():
         "helpers": helpers,
     }
 
+def set_process_tree_priority(pids_list, nice_value=15, sched_batch=True):
+    for pid in pids_list:
+        try:
+            task_dir = Path(f"/proc/{pid}/task")
+            if task_dir.is_dir():
+                for tid_entry in task_dir.iterdir():
+                    if tid_entry.name.isdigit():
+                        tid = int(tid_entry.name)
+                        try:
+                            os.setpriority(os.PRIO_PROCESS, tid, nice_value)
+                            if sched_batch:
+                                os.sched_setscheduler(tid, os.SCHED_BATCH, os.sched_param(0))
+                            else:
+                                os.sched_setscheduler(tid, os.SCHED_OTHER, os.sched_param(0))
+                        except OSError:
+                            pass
+            else:
+                try:
+                    os.setpriority(os.PRIO_PROCESS, pid, nice_value)
+                except OSError:
+                    pass
+        except OSError:
+            pass
+
 def perform_clean_shutdown(child_proc=None):
     print("[lifecycle] Performing clean shutdown of Riot Client services and Darling runtime...", flush=True)
 
@@ -145,8 +169,10 @@ def main():
 
     startup_deadline = time.monotonic() + 45.0
     riot_ux_ever_seen = False
+    riot_transition_deadline = 0.0
     league_ever_seen = False
     league_transition_deadline = 0.0
+    was_game_alive = False
 
     while True:
         time.sleep(1.0)
@@ -159,6 +185,7 @@ def main():
 
         if riot_ux_alive:
             riot_ux_ever_seen = True
+            riot_transition_deadline = 0.0
 
         if league_client_alive or league_game_alive:
             league_ever_seen = True
@@ -166,7 +193,28 @@ def main():
         elif league_ever_seen and league_transition_deadline == 0.0:
             league_transition_deadline = time.monotonic() + 35.0
 
+        # Protect transition when RiotClientUx closes to launch LeagueClient
+        if riot_ux_ever_seen and not riot_ux_alive and not league_ever_seen and services_alive:
+            if riot_transition_deadline == 0.0:
+                riot_transition_deadline = time.monotonic() + 45.0
+            if time.monotonic() < riot_transition_deadline:
+                continue
+
         in_transition = (league_transition_deadline > 0.0 and time.monotonic() < league_transition_deadline)
+
+        # Priority management: throttle background CEF processes when 3D match is active
+        if league_game_alive:
+            if not was_game_alive:
+                print("[lifecycle] League 3D match active: throttling background CEF and launcher processes.", flush=True)
+                was_game_alive = True
+            bg_pids = pids["riot_services"] + pids["riot_ux"] + pids["league_client"] + pids["helpers"]
+            set_process_tree_priority(bg_pids, nice_value=15, sched_batch=True)
+            set_process_tree_priority(pids["league_game"], nice_value=0, sched_batch=False)
+        elif was_game_alive:
+            print("[lifecycle] League 3D match finished: restoring launcher process priorities.", flush=True)
+            bg_pids = pids["riot_services"] + pids["riot_ux"] + pids["league_client"] + pids["helpers"]
+            set_process_tree_priority(bg_pids, nice_value=0, sched_batch=False)
+            was_game_alive = False
 
         # RULE 2: Protect League match and client re-opening
         if league_client_alive or league_game_alive or in_transition:
