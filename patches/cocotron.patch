@@ -12005,7 +12005,7 @@ index 757dd8c9..cbc313d5 100644
  	CFTimeInterval presentedTime() const;
  
 diff --git a/QuartzCore/CAMetalLayer.mm b/QuartzCore/CAMetalLayer.mm
-index b81e2e14..9146c222 100644
+index b81e2e14..263a1a20 100644
 --- a/QuartzCore/CAMetalLayer.mm
 +++ b/QuartzCore/CAMetalLayer.mm
 @@ -17,38 +17,354 @@
@@ -12990,7 +12990,7 @@ index b81e2e14..9146c222 100644
 +				}
 +			}
  
-+			uint32_t imageCount = caps.minImageCount + 1;
++			uint32_t imageCount = std::max(4u, caps.minImageCount + 2);
 +			if (caps.maxImageCount > 0 && imageCount > caps.maxImageCount) {
 +				imageCount = caps.maxImageCount;
 +			}

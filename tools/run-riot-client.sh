@@ -169,8 +169,8 @@ cache_root=${XDG_CACHE_HOME:-${HOME:-$prefix_dir}/.cache}/darling-lol
 MESA_SHADER_CACHE_DIR="${MESA_SHADER_CACHE_DIR:=$cache_root}"
 export MESA_SHADER_CACHE_DIR
 mkdir -p "$MESA_SHADER_CACHE_DIR" 2>/dev/null || true
-# NVIDIA proprietary driver: smooth 1-frame buffering, threaded optimizations and scheduler yielding
-export __GL_MaxFramesAllowed="${__GL_MaxFramesAllowed:-1}"
+# NVIDIA proprietary driver: smooth 2-frame buffering, threaded optimizations and scheduler yielding
+export __GL_MaxFramesAllowed="${__GL_MaxFramesAllowed:-2}"
 export __GL_THREADED_OPTIMIZATIONS="${__GL_THREADED_OPTIMIZATIONS:-1}"
 export __GL_YIELD="${__GL_YIELD:-USLEEP}"
 export DARLING_VULKAN_PRESENT_TARGET="${DARLING_VULKAN_PRESENT_TARGET:-toplevel}"
