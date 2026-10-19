@@ -2,11 +2,7 @@ Hi, this is a very vibecoded fork of [darling-lol](https://github.com/lucannez64
 
 Implemented here:
 
-- [darling-lol](https://github.com/lucannez64/darling-lol) (upstream `main` up to [#78](https://github.com/lucannez64/darling-lol/pull/78))
-- [VibeDarling](https://github.com/VibeDarling/darling): the darling-lol patches rebased onto VibeDarling `1d451b15ffc0` ([t1stm#2](https://github.com/t1stm/darling-lol/pull/2))
-- Truthful signing, SIP and AMFI APIs and the CPUID validation from [lucannez64#48](https://github.com/lucannez64/darling-lol/pull/48) ([t1stm#1](https://github.com/t1stm/darling-lol/pull/1))
-- Fix for the x86_64 launchd crash in dyld's `mach_init` after the VibeDarling rebase ([5ffb6ac](https://github.com/t1stm/darling-lol/commit/5ffb6acd63f5547953e1fc96ace59660bbdd0d96))
-- Linking the Swift re-export of CoreGraphics with lld ([389ece5](https://github.com/t1stm/darling-lol/commit/389ece56c4f225b5bd4f544d62f994361d856da9))
-- The unmerged work on [fgeroldi/darling-lol](https://github.com/fgeroldi/darling-lol/commits/main/) `main` up to `d7e3b46`: discrete GPU selection, direct Vulkan swapchain presentation for CAMetalLayer, Linux tray support, borderless/CSD windows, VideoToolbox and video-decode workarounds, `PROC_PIDLISTFDS`, and the lifecycle supervisor. The `DARLING_*` to `RCLOL_*` environment rename (`ba58935`, `7128ace`) and its revert (`847d489`) are left out.
-- Enabling `VK_KHR_xlib_surface`, without which fgeroldi's swapchain presentation cannot create a surface ([73bf266](https://github.com/t1stm/darling-lol/commit/73bf2669ecf4cf8493dabe90435ded878aa57e2f))
-- Linking AppKit against X11, which fgeroldi's system tray needs to build ([b57c64e](https://github.com/t1stm/darling-lol/commit/b57c64ecccaaf8d16f669fcee461db205a775ac0))
+- [darling-lol](https://github.com/lucannez64/darling-lol) (upstream `main` up to [#96](https://github.com/lucannez64/darling-lol/pull/96)) on the [darlinghq/darling](https://github.com/darlinghq/darling) base
+- Truthful signing, SIP and AMFI APIs and the CPUID validation from [lucannez64#48](https://github.com/lucannez64/darling-lol/pull/48), now taken from fgeroldi's `main`
+- The unmerged work on [fgeroldi/darling-lol](https://github.com/fgeroldi/darling-lol/commits/main/) `main` up to `1581867`: discrete GPU selection, direct Vulkan swapchain presentation for CAMetalLayer and its frame pacing, the dynamic display link refresh rate, Linux tray support, borderless/CSD windows, VideoToolbox and video-decode workarounds, `PROC_PIDLISTFDS`, and the lifecycle supervisor. Its `cocotron.patch` had lost three new headers, which are restored from upstream.
+- Enabling `VK_KHR_xlib_surface`, without which fgeroldi's swapchain presentation cannot create a surface ([3473a47](https://github.com/t1stm/darling-lol/commit/3473a4767dd061fa575894bea957570e379a9a43))
