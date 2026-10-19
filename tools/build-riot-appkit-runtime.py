@@ -1,11 +1,14 @@
 #!/usr/bin/env python3
 """Rebuild NSWindow's tracking dispatch against the configured AppKit build."""
 from pathlib import Path
+import json
 import shlex
 import subprocess
 
 project = Path(__file__).resolve().parent.parent
 framework = project / 'build/darling-src/build/src/external/cocotron/AppKit'
+config_path = project / 'build/config.json'
+sdk = json.loads(config_path.read_text())['sdk'] if config_path.exists() else '/usr/local/libexec/darling'
 flags = {}
 for line in (framework / 'CMakeFiles/AppKit.dir/flags.make').read_text().splitlines():
     if line.startswith('C_') and ' = ' in line:
@@ -27,6 +30,6 @@ for name in ['riot-event-coalescing-check', 'riot-scroll-event-check', 'riot-app
                     '-O3', '-march=native', '-mtune=generic', '-fblocks', '-Wno-macro-redefined', '-c',
                     str(project / f'tools/{name}.m'), '-o', str(probe)], check=True)
     subprocess.run(['clang', '-target', 'x86_64-apple-macosx11.0', '-fuse-ld=lld', '-nostdlib',
-                    '-isysroot', '@DARLING_SDK@', str(probe), '-lSystem',
+                    '-isysroot', sdk, str(probe), '-lSystem',
                     '-framework', 'AppKit', '-framework', 'Foundation', '-framework',
                     'CoreGraphics', '-lobjc', '-o', str(project / f'build/{name}')], check=True)

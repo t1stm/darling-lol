@@ -2361,7 +2361,7 @@ index 8ac2bbdc..03b32e54 100644
  
          [_subviews
 diff --git a/AppKit/NSWindow.m b/AppKit/NSWindow.m
-index d545120a..ce6dbe7e 100644
+index d545120a..190db0a5 100644
 --- a/AppKit/NSWindow.m
 +++ b/AppKit/NSWindow.m
 @@ -19,6 +19,7 @@ IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN
@@ -2619,6 +2619,15 @@ index d545120a..ce6dbe7e 100644
  - (id) windowController {
      return _windowController;
  }
+@@ -1496,7 +1640,7 @@ static BOOL _allowsAutomaticWindowTabbing;
+ }
+ 
+ - (BOOL) isVisible {
+-    return _isVisible;
++    return _isVisible && ![self isMiniaturized];
+ }
+ 
+ - (BOOL) isKeyWindow {
 @@ -1511,10 +1655,7 @@ static BOOL _allowsAutomaticWindowTabbing;
      return [_platformWindow isMiniaturized];
  }
@@ -2631,7 +2640,7 @@ index d545120a..ce6dbe7e 100644
  
  - (BOOL) inLiveResize {
      return _isInLiveResize;
-@@ -1561,6 +1702,127 @@ static BOOL _allowsAutomaticWindowTabbing;
+@@ -1561,6 +1702,130 @@ static BOOL _allowsAutomaticWindowTabbing;
      return point;
  }
  
@@ -2697,7 +2706,10 @@ index d545120a..ce6dbe7e 100644
 + * while the exact == test is false and unpatched Electron resolves IsVisible()
 + * correctly without a Riot binary patch. */
 +- (NSUInteger) occlusionState {
-+    return _isVisible ? (NSUInteger)((1 << 1) | (1 << 2)) : (NSUInteger)0;
++    if (!_isVisible || [self isMiniaturized]) {
++        return (NSUInteger)0;
++    }
++    return (NSUInteger)((1 << 1) | (1 << 2));
 +}
 +
 +- (BOOL) isRestorable {
@@ -2759,7 +2771,7 @@ index d545120a..ce6dbe7e 100644
  - (NSRect) frameRectForContentRect: (NSRect) contentRect {
      // hasMainMenu is an instance method so we can't just use the class method
      //  frameRectForContentRect:styleMask:
-@@ -1580,6 +1842,10 @@ static BOOL _allowsAutomaticWindowTabbing;
+@@ -1580,6 +1845,10 @@ static BOOL _allowsAutomaticWindowTabbing;
  }
  
  - (NSRect) contentRectForFrameRect: (NSRect) frameRect {
@@ -2770,24 +2782,24 @@ index d545120a..ce6dbe7e 100644
      NSRect result = [[NSDisplay currentDisplay] insetRect: frameRect
                             forNativeWindowBorderWithStyle: [self styleMask]];
  
-@@ -2155,6 +2421,7 @@ static BOOL _allowsAutomaticWindowTabbing;
+@@ -2155,6 +2424,7 @@ static BOOL _allowsAutomaticWindowTabbing;
  - (void) orderWindow: (NSWindowOrderingMode) place
            relativeTo: (NSInteger) relativeTo
  {
-+    BOOL wasVisible = _isVisible;
++    BOOL wasVisible = [self isVisible];
      // The move notifications are sent under unknown conditions around
      // orderFront: in the Apple AppKit, we do them all the time here until it's
      // figured out. I suspect it is a side effect of off-screen windows being at
-@@ -2208,6 +2475,8 @@ static BOOL _allowsAutomaticWindowTabbing;
+@@ -2208,6 +2478,8 @@ static BOOL _allowsAutomaticWindowTabbing;
          break;
      }
  
-+    if (wasVisible != _isVisible)
++    if (wasVisible != [self isVisible])
 +        [self postNotificationName: NSWindowDidChangeOcclusionStateNotification];
      [self postNotificationName: NSWindowDidMoveNotification];
  }
  
-@@ -2257,6 +2526,12 @@ static BOOL _allowsAutomaticWindowTabbing;
+@@ -2257,6 +2529,12 @@ static BOOL _allowsAutomaticWindowTabbing;
  }
  
  - (void) sendEvent: (NSEvent *) event {
@@ -2800,7 +2812,7 @@ index d545120a..ce6dbe7e 100644
      // Some events can cause our window to be destroyed
      // So make sure self lives at least through this current run loop...
      [[self retain] autorelease];
-@@ -2300,6 +2575,10 @@ static BOOL _allowsAutomaticWindowTabbing;
+@@ -2300,6 +2578,10 @@ static BOOL _allowsAutomaticWindowTabbing;
  
      case NSLeftMouseDown: {
          NSView *view = [_backgroundView hitTest: [event locationInWindow]];
@@ -2811,7 +2823,7 @@ index d545120a..ce6dbe7e 100644
  
          if ([view acceptsFirstResponder]) {
              if ([view needsPanelToBecomeKey]) {
-@@ -2307,6 +2586,27 @@ static BOOL _allowsAutomaticWindowTabbing;
+@@ -2307,6 +2589,27 @@ static BOOL _allowsAutomaticWindowTabbing;
              }
          }
  
@@ -2839,7 +2851,7 @@ index d545120a..ce6dbe7e 100644
          // Event goes to view, not first responder.
          [view mouseDown: event];
          _mouseDownLocationInWindow = [event locationInWindow];
-@@ -2330,6 +2630,31 @@ static BOOL _allowsAutomaticWindowTabbing;
+@@ -2330,6 +2633,31 @@ static BOOL _allowsAutomaticWindowTabbing;
          _mouseDownLocationInWindow = NSMakePoint(NAN, NAN);
          break;
  
@@ -2871,7 +2883,7 @@ index d545120a..ce6dbe7e 100644
      case NSMouseMoved: {
          NSView *hit = [_backgroundView hitTest: [event locationInWindow]];
  
-@@ -2536,6 +2861,7 @@ static BOOL _allowsAutomaticWindowTabbing;
+@@ -2536,6 +2864,7 @@ static BOOL _allowsAutomaticWindowTabbing;
      } else {
          [[self platformWindow] hideWindow];
      }
@@ -2879,7 +2891,7 @@ index d545120a..ce6dbe7e 100644
  }
  
  - (void) orderFront: (id) sender {
-@@ -2577,6 +2903,10 @@ static BOOL _allowsAutomaticWindowTabbing;
+@@ -2577,6 +2906,10 @@ static BOOL _allowsAutomaticWindowTabbing;
              [NSApp abortModal];
          } else {
              [self close];
@@ -2890,7 +2902,36 @@ index d545120a..ce6dbe7e 100644
          }
      }
  }
-@@ -3064,6 +3394,13 @@ static BOOL _allowsAutomaticWindowTabbing;
+@@ -2655,10 +2988,12 @@ static BOOL _allowsAutomaticWindowTabbing;
+ 
+ - (void) miniaturize: (id) sender {
+     [[self platformWindow] miniaturize];
++    [self platformWindowMiniaturized: [self platformWindow]];
+ }
+ 
+ - (void) deminiaturize: (id) sender {
+     [[self platformWindow] deminiaturize];
++    [self platformWindowDeminiaturized: [self platformWindow]];
+ }
+ 
+ - (void) print: (id) sender {
+@@ -2990,6 +3325,7 @@ static BOOL _allowsAutomaticWindowTabbing;
+                                 relativeTo: [self windowNumber]];
+     }
+     [self postNotificationName: NSWindowDidDeminiaturizeNotification];
++    [self postNotificationName: NSWindowDidChangeOcclusionStateNotification];
+     [NSApp updateWindows];
+ }
+ 
+@@ -3002,6 +3338,7 @@ static BOOL _allowsAutomaticWindowTabbing;
+     }
+ 
+     [self postNotificationName: NSWindowDidMiniaturizeNotification];
++    [self postNotificationName: NSWindowDidChangeOcclusionStateNotification];
+ 
+     if ([self isKeyWindow]) {
+         [self resignKeyWindow];
+@@ -3064,6 +3401,13 @@ static BOOL _allowsAutomaticWindowTabbing;
      if (didSize) {
          // Don't redraw everything unless we really have to.
          [_backgroundView setFrameSize: _frame.size];
@@ -2904,7 +2945,7 @@ index d545120a..ce6dbe7e 100644
          [_backgroundView setNeedsDisplay: YES];
          [self resetCursorRects];
          [self saveFrameUsingName: _autosaveFrameName];
-@@ -3260,8 +3597,7 @@ static BOOL _allowsAutomaticWindowTabbing;
+@@ -3260,8 +3604,7 @@ static BOOL _allowsAutomaticWindowTabbing;
                  mouseWasInside && !mouseIsInside) {
                  [exited addObject: area];
              }
@@ -2914,7 +2955,7 @@ index d545120a..ce6dbe7e 100644
                  [moved addObject: area];
              }
              if (options & NSTrackingCursorUpdate && !mouseWasInside &&
-@@ -3459,7 +3795,7 @@ static BOOL _allowsAutomaticWindowTabbing;
+@@ -3459,7 +3802,7 @@ static BOOL _allowsAutomaticWindowTabbing;
  }
  
  - (CGSubWindow *) _createSubWindowWithFrame: (CGRect) frame {
@@ -3184,7 +3225,7 @@ index 18189404..12cde429 100644
 +- (NSRect) frameForRootRect: (NSRect) rect;
  @end
 diff --git a/AppKit/X11.backend/X11Display.m b/AppKit/X11.backend/X11Display.m
-index 5ae29bf4..f64d2802 100644
+index 5ae29bf4..77856962 100644
 --- a/AppKit/X11.backend/X11Display.m
 +++ b/AppKit/X11.backend/X11Display.m
 @@ -39,6 +39,7 @@
@@ -4217,15 +4258,15 @@ index 5ae29bf4..f64d2802 100644
 +        return;
 +    }
 +    X11Window* window = (X11Window*) rawWindow;
-+
+ 
+-    id delegate = [window delegate];
 +    id delegate = [window respondsToSelector: @selector(delegate)] ? [window delegate] : nil;
 +    static int inputTrace = -1;
 +    if (inputTrace < 0) inputTrace = getenv("RCLOL_INPUT_TRACE") != NULL;
 +    if (inputTrace && (ev->type == KeyPress || ev->type == KeyRelease || ev->type == ButtonPress))
 +        NSLog(@"LOLINPUT X type=%d window=%lu mapped=%@ number=%ld", ev->type,
 +            (unsigned long)ev->xany.window, [delegate class], (long)[delegate windowNumber]);
- 
--    id delegate = [window delegate];
++
 +    switch (ev->type) {
 +    case MotionNotify:
 +        rclolRootX = ev->xmotion.x_root;
@@ -4719,16 +4760,20 @@ index 5ae29bf4..f64d2802 100644
          break;
  
      case ConfigureRequest:
-@@ -1344,6 +2279,8 @@ static NSDictionary *modeInfoToDictionary(const XRRModeInfo *mi, int depth) {
+@@ -1344,6 +2279,12 @@ static NSDictionary *modeInfoToDictionary(const XRRModeInfo *mi, int depth) {
          break;
  
      case PropertyNotify:
-+        if (ev->xproperty.atom == XInternAtom(_display, "_NET_WM_STATE", False))
++        if (ev->xproperty.atom == XInternAtom(_display, "_NET_WM_STATE", False)) {
 +            [self updateMouseConfinementForWindow:window];
++            if (window && [window respondsToSelector: @selector(propertyNotifyNetWmState)]) {
++                [window propertyNotifyNetWmState];
++            }
++        }
          if ([window respondsToSelector: @selector(propertyNotify:)]) {
              [window propertyNotify: &ev->xproperty];
          }
-@@ -1372,6 +2309,10 @@ static NSDictionary *modeInfoToDictionary(const XRRModeInfo *mi, int depth) {
+@@ -1372,6 +2313,10 @@ static NSDictionary *modeInfoToDictionary(const XRRModeInfo *mi, int depth) {
          break;
  
      case ClientMessage:
@@ -4739,7 +4784,7 @@ index 5ae29bf4..f64d2802 100644
          if (ev->xclient.format == 32 &&
              ev->xclient.data.l[0] ==
                      XInternAtom(_display, "WM_DELETE_WINDOW", False)) {
-@@ -1399,7 +2340,9 @@ static NSDictionary *modeInfoToDictionary(const XRRModeInfo *mi, int depth) {
+@@ -1399,7 +2344,9 @@ static NSDictionary *modeInfoToDictionary(const XRRModeInfo *mi, int depth) {
          break;
  
      default:
@@ -4750,7 +4795,7 @@ index 5ae29bf4..f64d2802 100644
              [self _invalidateRRCache];
              break;
          }
-@@ -1433,6 +2376,10 @@ static NSDictionary *modeInfoToDictionary(const XRRModeInfo *mi, int depth) {
+@@ -1433,6 +2380,10 @@ static NSDictionary *modeInfoToDictionary(const XRRModeInfo *mi, int depth) {
      NSLog(@"Request code: %d:%d", errorEvent->request_code,
            errorEvent->minor_code);
      NSLog(@"Error code: %d", errorEvent->error_code);
@@ -4761,7 +4806,7 @@ index 5ae29bf4..f64d2802 100644
      return 0;
  }
  
-@@ -1476,54 +2423,279 @@ void CGNativeBorderFrameWidthsForStyle(NSUInteger styleMask, CGFloat *top,
+@@ -1476,54 +2427,279 @@ void CGNativeBorderFrameWidthsForStyle(NSUInteger styleMask, CGFloat *top,
      return frame;
  }
  
@@ -4814,8 +4859,8 @@ index 5ae29bf4..f64d2802 100644
 -                 position.x, position.y);
 -    XSync(_display, False);
 +    [self warpPointerToRootX: x y: y];
-+}
-+
+ }
+ 
 +/* Confinement preserves absolute motion and edge panning. Relative mode holds
 + * its own grab and is left alone while requested. */
 +- (void) updateMouseConfinementForWindow:(X11Window *)window {
@@ -5002,8 +5047,8 @@ index 5ae29bf4..f64d2802 100644
 +    X11RelativeMouseEnd(&_relativeMouse);
 +    _relativeWindow = None;
 +    rclolPointerStamp = 0;
- }
- 
++}
++
 +/* CGAssociateMouseAndMouseCursorPosition(!doGrab). */
  - (void) grabMouse: (BOOL) doGrab {
 +    BOOL rclolRelativeBefore = _relativeMouse.active;
@@ -5319,7 +5364,7 @@ index 738ab457..ed6991bf 100644
      XMapWindow(_display, _window);
  }
 diff --git a/AppKit/X11.backend/X11Window.h b/AppKit/X11.backend/X11Window.h
-index bfe3839a..c91f8ceb 100644
+index bfe3839a..467bb0b3 100644
 --- a/AppKit/X11.backend/X11Window.h
 +++ b/AppKit/X11.backend/X11Window.h
 @@ -26,7 +26,7 @@
@@ -5331,7 +5376,7 @@ index bfe3839a..c91f8ceb 100644
  
  @interface X11Window : CGWindow {
      int _level; // TODO: care about this value
-@@ -47,27 +47,55 @@
+@@ -47,27 +47,56 @@
      BOOL _mapped;
      CGPoint _lastMotionPos;
      BOOL _isModal;
@@ -5385,11 +5430,12 @@ index bfe3839a..c91f8ceb 100644
 +- (BOOL) shouldRemoveDecorationForStyleMask: (NSUInteger) mask;
 +- (BOOL) beginWindowDragWithEvent: (NSEvent *) event;
 +- (BOOL) beginWindowDragAtRootX: (int) root_x rootY: (int) root_y button: (int) button;
++- (void) propertyNotifyNetWmState;
  
  @end
  
 diff --git a/AppKit/X11.backend/X11Window.m b/AppKit/X11.backend/X11Window.m
-index f4925b66..051182d3 100644
+index f4925b66..ca78bb73 100644
 --- a/AppKit/X11.backend/X11Window.m
 +++ b/AppKit/X11.backend/X11Window.m
 @@ -23,6 +23,7 @@
@@ -6331,7 +6377,7 @@ index f4925b66..051182d3 100644
  }
  
  - (void) makeMain {
-@@ -551,15 +1232,60 @@ static NSData *makeWindowIcon() {
+@@ -551,15 +1232,72 @@ static NSData *makeWindowIcon() {
  - (void) captureEvents {
  }
  
@@ -6345,10 +6391,9 @@ index f4925b66..051182d3 100644
  - (void) miniaturize {
      XIconifyWindow(_display, _window, DefaultScreen(_display));
 +    unsigned slot = (unsigned) (_window % RCLOL_MINI_SLOTS);
-+    if (rclolMini[slot].window == _window) {
-+        rclolMini[slot].stamp = 0;
-+        rclolMini[slot].value = YES;
-+    }
++    rclolMini[slot].window = _window;
++    rclolMini[slot].stamp = mach_absolute_time();
++    rclolMini[slot].value = YES;
  }
  
  - (void) deminiaturize {
@@ -6368,9 +6413,22 @@ index f4925b66..051182d3 100644
 +    XFlush(_display);
 +
 +    unsigned slot = (unsigned) (_window % RCLOL_MINI_SLOTS);
-+    if (rclolMini[slot].window == _window) {
-+        rclolMini[slot].stamp = 0;
-+        rclolMini[slot].value = NO;
++    rclolMini[slot].window = _window;
++    rclolMini[slot].stamp = mach_absolute_time();
++    rclolMini[slot].value = NO;
++}
++
++- (void) propertyNotifyNetWmState {
++    unsigned slot = (unsigned) (_window % RCLOL_MINI_SLOTS);
++    BOOL wasMini = (rclolMini[slot].window == _window && rclolMini[slot].stamp != 0) ? rclolMini[slot].value : NO;
++    rclolMini[slot].stamp = 0;
++    BOOL isMini = [self isMiniaturized];
++    if (wasMini != isMini) {
++        if (isMini && [_delegate respondsToSelector: @selector(platformWindowMiniaturized:)]) {
++            [_delegate platformWindowMiniaturized: self];
++        } else if (!isMini && [_delegate respondsToSelector: @selector(platformWindowDeminiaturized:)]) {
++            [_delegate platformWindowDeminiaturized: self];
++        }
 +    }
  }
  
@@ -6393,7 +6451,7 @@ index f4925b66..051182d3 100644
      Atom wmState = XInternAtom(_display, "_NET_WM_STATE", FALSE);
      Atom hiddenState = XInternAtom(_display, "_NET_WM_STATE_HIDDEN", FALSE);
  
-@@ -595,12 +1321,9 @@ static NSData *makeWindowIcon() {
+@@ -595,12 +1333,9 @@ static NSData *makeWindowIcon() {
  
          if ((error = CGLCreateContext(NULL, NULL, &_cglContext)) !=
              kCGLNoError) {
@@ -6408,7 +6466,7 @@ index f4925b66..051182d3 100644
          }
          if ((error = CGLContextMakeCurrentAndAttachToWindow(
                       _cglContext, _cglWindow)) != kCGLNoError)
-@@ -615,6 +1338,12 @@ static NSData *makeWindowIcon() {
+@@ -615,6 +1350,12 @@ static NSData *makeWindowIcon() {
  }
  
  - (void) openGLFlushBuffer {
@@ -6421,7 +6479,7 @@ index f4925b66..051182d3 100644
      CGLError error;
  
      CGLContextObj prevContext = CGLGetCurrentContext();
-@@ -652,7 +1381,7 @@ static NSData *makeWindowIcon() {
+@@ -652,7 +1393,7 @@ static NSData *makeWindowIcon() {
  }
  
  - (O2Rect) frame {
@@ -6430,7 +6488,7 @@ index f4925b66..051182d3 100644
  }
  
  static int ignoreBadWindow(Display *display, XErrorEvent *errorEvent) {
-@@ -666,6 +1395,7 @@ static int ignoreBadWindow(Display *display, XErrorEvent *errorEvent) {
+@@ -666,6 +1407,7 @@ static int ignoreBadWindow(Display *display, XErrorEvent *errorEvent) {
  }
  
  - (void) frameChanged {
@@ -6438,7 +6496,7 @@ index f4925b66..051182d3 100644
      XErrorHandler previousHandler = XSetErrorHandler(ignoreBadWindow);
      @try {
          Window root, parent;
-@@ -710,14 +1440,6 @@ static int ignoreBadWindow(Display *display, XErrorEvent *errorEvent) {
+@@ -710,14 +1452,6 @@ static int ignoreBadWindow(Display *display, XErrorEvent *errorEvent) {
      [_deviceDictionary addEntriesFromDictionary: entries];
  }
  
