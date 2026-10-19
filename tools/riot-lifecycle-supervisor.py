@@ -44,13 +44,13 @@ def get_darling_pids():
 
             if b"RiotClientServices" in cmdline:
                 riot_services.append(pid)
-            elif b"RiotClientUx" in cmdline:
-                if b"Helper" in cmdline or b"CrashHandler" in cmdline:
+            elif b"Riot Client" in cmdline or b"RiotClientUx" in cmdline:
+                if b"Helper" in cmdline or b"CrashHandler" in cmdline or b"crashpad" in cmdline:
                     helpers.append(pid)
                 else:
                     riot_ux.append(pid)
             elif b"LeagueClient" in cmdline or b"LeagueClientUx" in cmdline:
-                if b"Helper" in cmdline or b"CrashHandler" in cmdline:
+                if b"Helper" in cmdline or b"CrashHandler" in cmdline or b"crashpad" in cmdline:
                     helpers.append(pid)
                 else:
                     league_client.append(pid)

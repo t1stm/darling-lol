@@ -2361,7 +2361,7 @@ index 8ac2bbdc..03b32e54 100644
  
          [_subviews
 diff --git a/AppKit/NSWindow.m b/AppKit/NSWindow.m
-index d545120a..190db0a5 100644
+index d545120a..02d6b69a 100644
 --- a/AppKit/NSWindow.m
 +++ b/AppKit/NSWindow.m
 @@ -19,6 +19,7 @@ IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN
@@ -2619,15 +2619,6 @@ index d545120a..190db0a5 100644
  - (id) windowController {
      return _windowController;
  }
-@@ -1496,7 +1640,7 @@ static BOOL _allowsAutomaticWindowTabbing;
- }
- 
- - (BOOL) isVisible {
--    return _isVisible;
-+    return _isVisible && ![self isMiniaturized];
- }
- 
- - (BOOL) isKeyWindow {
 @@ -1511,10 +1655,7 @@ static BOOL _allowsAutomaticWindowTabbing;
      return [_platformWindow isMiniaturized];
  }
@@ -2640,7 +2631,7 @@ index d545120a..190db0a5 100644
  
  - (BOOL) inLiveResize {
      return _isInLiveResize;
-@@ -1561,6 +1702,130 @@ static BOOL _allowsAutomaticWindowTabbing;
+@@ -1561,6 +1702,127 @@ static BOOL _allowsAutomaticWindowTabbing;
      return point;
  }
  
@@ -2706,10 +2697,7 @@ index d545120a..190db0a5 100644
 + * while the exact == test is false and unpatched Electron resolves IsVisible()
 + * correctly without a Riot binary patch. */
 +- (NSUInteger) occlusionState {
-+    if (!_isVisible || [self isMiniaturized]) {
-+        return (NSUInteger)0;
-+    }
-+    return (NSUInteger)((1 << 1) | (1 << 2));
++    return _isVisible ? (NSUInteger)((1 << 1) | (1 << 2)) : (NSUInteger)0;
 +}
 +
 +- (BOOL) isRestorable {
@@ -2771,7 +2759,7 @@ index d545120a..190db0a5 100644
  - (NSRect) frameRectForContentRect: (NSRect) contentRect {
      // hasMainMenu is an instance method so we can't just use the class method
      //  frameRectForContentRect:styleMask:
-@@ -1580,6 +1845,10 @@ static BOOL _allowsAutomaticWindowTabbing;
+@@ -1580,6 +1842,10 @@ static BOOL _allowsAutomaticWindowTabbing;
  }
  
  - (NSRect) contentRectForFrameRect: (NSRect) frameRect {
@@ -2782,7 +2770,7 @@ index d545120a..190db0a5 100644
      NSRect result = [[NSDisplay currentDisplay] insetRect: frameRect
                             forNativeWindowBorderWithStyle: [self styleMask]];
  
-@@ -2155,6 +2424,7 @@ static BOOL _allowsAutomaticWindowTabbing;
+@@ -2155,6 +2421,7 @@ static BOOL _allowsAutomaticWindowTabbing;
  - (void) orderWindow: (NSWindowOrderingMode) place
            relativeTo: (NSInteger) relativeTo
  {
@@ -2790,7 +2778,7 @@ index d545120a..190db0a5 100644
      // The move notifications are sent under unknown conditions around
      // orderFront: in the Apple AppKit, we do them all the time here until it's
      // figured out. I suspect it is a side effect of off-screen windows being at
-@@ -2208,6 +2478,8 @@ static BOOL _allowsAutomaticWindowTabbing;
+@@ -2208,6 +2475,8 @@ static BOOL _allowsAutomaticWindowTabbing;
          break;
      }
  
@@ -2799,7 +2787,7 @@ index d545120a..190db0a5 100644
      [self postNotificationName: NSWindowDidMoveNotification];
  }
  
-@@ -2257,6 +2529,12 @@ static BOOL _allowsAutomaticWindowTabbing;
+@@ -2257,6 +2526,12 @@ static BOOL _allowsAutomaticWindowTabbing;
  }
  
  - (void) sendEvent: (NSEvent *) event {
@@ -2812,7 +2800,7 @@ index d545120a..190db0a5 100644
      // Some events can cause our window to be destroyed
      // So make sure self lives at least through this current run loop...
      [[self retain] autorelease];
-@@ -2300,6 +2578,10 @@ static BOOL _allowsAutomaticWindowTabbing;
+@@ -2300,6 +2575,10 @@ static BOOL _allowsAutomaticWindowTabbing;
  
      case NSLeftMouseDown: {
          NSView *view = [_backgroundView hitTest: [event locationInWindow]];
@@ -2823,7 +2811,7 @@ index d545120a..190db0a5 100644
  
          if ([view acceptsFirstResponder]) {
              if ([view needsPanelToBecomeKey]) {
-@@ -2307,6 +2589,27 @@ static BOOL _allowsAutomaticWindowTabbing;
+@@ -2307,6 +2586,27 @@ static BOOL _allowsAutomaticWindowTabbing;
              }
          }
  
@@ -2851,7 +2839,7 @@ index d545120a..190db0a5 100644
          // Event goes to view, not first responder.
          [view mouseDown: event];
          _mouseDownLocationInWindow = [event locationInWindow];
-@@ -2330,6 +2633,31 @@ static BOOL _allowsAutomaticWindowTabbing;
+@@ -2330,6 +2630,31 @@ static BOOL _allowsAutomaticWindowTabbing;
          _mouseDownLocationInWindow = NSMakePoint(NAN, NAN);
          break;
  
@@ -2883,7 +2871,7 @@ index d545120a..190db0a5 100644
      case NSMouseMoved: {
          NSView *hit = [_backgroundView hitTest: [event locationInWindow]];
  
-@@ -2536,6 +2864,7 @@ static BOOL _allowsAutomaticWindowTabbing;
+@@ -2536,6 +2861,7 @@ static BOOL _allowsAutomaticWindowTabbing;
      } else {
          [[self platformWindow] hideWindow];
      }
@@ -2891,7 +2879,7 @@ index d545120a..190db0a5 100644
  }
  
  - (void) orderFront: (id) sender {
-@@ -2577,6 +2906,10 @@ static BOOL _allowsAutomaticWindowTabbing;
+@@ -2577,6 +2903,10 @@ static BOOL _allowsAutomaticWindowTabbing;
              [NSApp abortModal];
          } else {
              [self close];
@@ -2902,7 +2890,7 @@ index d545120a..190db0a5 100644
          }
      }
  }
-@@ -2655,10 +2988,12 @@ static BOOL _allowsAutomaticWindowTabbing;
+@@ -2655,10 +2985,12 @@ static BOOL _allowsAutomaticWindowTabbing;
  
  - (void) miniaturize: (id) sender {
      [[self platformWindow] miniaturize];
@@ -2915,7 +2903,7 @@ index d545120a..190db0a5 100644
  }
  
  - (void) print: (id) sender {
-@@ -2990,6 +3325,7 @@ static BOOL _allowsAutomaticWindowTabbing;
+@@ -2990,6 +3322,7 @@ static BOOL _allowsAutomaticWindowTabbing;
                                  relativeTo: [self windowNumber]];
      }
      [self postNotificationName: NSWindowDidDeminiaturizeNotification];
@@ -2923,7 +2911,7 @@ index d545120a..190db0a5 100644
      [NSApp updateWindows];
  }
  
-@@ -3002,6 +3338,7 @@ static BOOL _allowsAutomaticWindowTabbing;
+@@ -3002,6 +3335,7 @@ static BOOL _allowsAutomaticWindowTabbing;
      }
  
      [self postNotificationName: NSWindowDidMiniaturizeNotification];
@@ -2931,7 +2919,7 @@ index d545120a..190db0a5 100644
  
      if ([self isKeyWindow]) {
          [self resignKeyWindow];
-@@ -3064,6 +3401,13 @@ static BOOL _allowsAutomaticWindowTabbing;
+@@ -3064,6 +3398,13 @@ static BOOL _allowsAutomaticWindowTabbing;
      if (didSize) {
          // Don't redraw everything unless we really have to.
          [_backgroundView setFrameSize: _frame.size];
@@ -2945,7 +2933,7 @@ index d545120a..190db0a5 100644
          [_backgroundView setNeedsDisplay: YES];
          [self resetCursorRects];
          [self saveFrameUsingName: _autosaveFrameName];
-@@ -3260,8 +3604,7 @@ static BOOL _allowsAutomaticWindowTabbing;
+@@ -3260,8 +3601,7 @@ static BOOL _allowsAutomaticWindowTabbing;
                  mouseWasInside && !mouseIsInside) {
                  [exited addObject: area];
              }
@@ -2955,7 +2943,7 @@ index d545120a..190db0a5 100644
                  [moved addObject: area];
              }
              if (options & NSTrackingCursorUpdate && !mouseWasInside &&
-@@ -3459,7 +3802,7 @@ static BOOL _allowsAutomaticWindowTabbing;
+@@ -3459,7 +3799,7 @@ static BOOL _allowsAutomaticWindowTabbing;
  }
  
  - (CGSubWindow *) _createSubWindowWithFrame: (CGRect) frame {
