@@ -12003,7 +12003,7 @@ index 757dd8c9..cbc313d5 100644
  	CFTimeInterval presentedTime() const;
  
 diff --git a/QuartzCore/CAMetalLayer.mm b/QuartzCore/CAMetalLayer.mm
-index b81e2e14..f444052f 100644
+index b81e2e14..29804c47 100644
 --- a/QuartzCore/CAMetalLayer.mm
 +++ b/QuartzCore/CAMetalLayer.mm
 @@ -17,38 +17,354 @@
@@ -12376,7 +12376,7 @@ index b81e2e14..f444052f 100644
  + (instancetype)allocWithZone: (NSZone*)zone
  {
  	if (self == [CAMetalLayer class]) {
-@@ -205,63 +521,89 @@ static void reportGLErrors(void) {
+@@ -205,63 +521,90 @@ static void reportGLErrors(void) {
  
  @end
  
@@ -12413,6 +12413,7 @@ index b81e2e14..f444052f 100644
 +		_frameInFlightIndex = 0;
 +		_vkSurface = VK_NULL_HANDLE;
 +		_vkSwapchain = VK_NULL_HANDLE;
++		_vkChosenPresentMode = VK_PRESENT_MODE_FIFO_KHR;
 +		_vkNativeWindow = nullptr;
 +		_vkSubWindow = nullptr;
 +		for (size_t i = 0; i < NUM_FRAMES_IN_FLIGHT; ++i) {
@@ -12498,7 +12499,7 @@ index b81e2e14..f444052f 100644
  }
  
  - (void)setDevice: (id<MTLDevice>)device
-@@ -290,7 +632,6 @@ static void reportGLErrors(void) {
+@@ -290,7 +633,6 @@ static void reportGLErrors(void) {
  
  - (CGColorSpaceRef)colorspace
  {
@@ -12506,7 +12507,7 @@ index b81e2e14..f444052f 100644
  	return _colorspace;
  }
  
-@@ -321,6 +662,7 @@ static void reportGLErrors(void) {
+@@ -321,6 +663,7 @@ static void reportGLErrors(void) {
  
  - (void)setDrawableSize: (CGSize)drawableSize
  {
@@ -12514,7 +12515,7 @@ index b81e2e14..f444052f 100644
  	_drawableSize = drawableSize;
  	[self recreateDrawables];
  }
-@@ -335,40 +677,50 @@ static void reportGLErrors(void) {
+@@ -335,40 +678,50 @@ static void reportGLErrors(void) {
  	if (maximumDrawableCount < 2 || maximumDrawableCount > 3) {
  		@throw [NSException exceptionWithName: NSInvalidArgumentException reason: @"Attempt to set maximumDrawableCount to an invalid value" userInfo: nil];
  	}
@@ -12581,7 +12582,7 @@ index b81e2e14..f444052f 100644
  		if (_allowsNextDrawableTimeout) {
  			if (![_drawableCondition waitUntilDate: endTime]) {
  				break;
-@@ -378,8 +730,15 @@ static void reportGLErrors(void) {
+@@ -378,8 +731,15 @@ static void reportGLErrors(void) {
  		}
  	}
  
@@ -12598,7 +12599,7 @@ index b81e2e14..f444052f 100644
  		[_drawableCondition unlock];
  		return nil;
  	}
-@@ -394,12 +753,13 @@ static void reportGLErrors(void) {
+@@ -394,12 +754,13 @@ static void reportGLErrors(void) {
  	}
  
  	if (drawableID == UINT8_MAX) {
@@ -12613,7 +12614,7 @@ index b81e2e14..f444052f 100644
  
  	drawable = _drawables[drawableID];
  
-@@ -410,20 +770,28 @@ static void reportGLErrors(void) {
+@@ -410,20 +771,28 @@ static void reportGLErrors(void) {
  
  - (void)queuePresent: (NSUInteger)drawableID
  {
@@ -12650,7 +12651,7 @@ index b81e2e14..f444052f 100644
  	[_drawableCondition lock];
  	_usableDrawablesBitmap |= 1u << drawableID;
  	[_drawableCondition signal];
-@@ -437,16 +805,14 @@ static void reportGLErrors(void) {
+@@ -437,16 +806,14 @@ static void reportGLErrors(void) {
  	// drop all queued presentations
  	for (NSUInteger i = 0; i < _queuedDrawableCount; ++i) {
  		auto& drawable = _drawables[_queuedDrawables[i]];
@@ -12672,7 +12673,7 @@ index b81e2e14..f444052f 100644
  	for (auto& drawable: _drawables) {
  		if (drawable) {
  			drawable->disown();
-@@ -455,14 +821,482 @@ static void reportGLErrors(void) {
+@@ -455,14 +822,483 @@ static void reportGLErrors(void) {
  	}
  	_usableDrawablesBitmap = 0;
  
@@ -12877,7 +12878,7 @@ index b81e2e14..f444052f 100644
 +				_vkSurface = VK_NULL_HANDLE;
 +				continue;
 +			}
- 
++
 +			// 2. vkGetPhysicalDeviceSurfaceSupportKHR
 +			uint32_t qFam = dev->graphicsQueueFamilyIndex() ? *dev->graphicsQueueFamilyIndex() : 0;
 +			VkBool32 supported = VK_FALSE;
@@ -12928,7 +12929,7 @@ index b81e2e14..f444052f 100644
 +			if (modeCount > 0) {
 +				DynamicVK::vkGetPhysicalDeviceSurfacePresentModesKHR(dev->physicalDevice(), _vkSurface, &modeCount, modes.data());
 +			}
-+
+ 
 +			char modesLog[256];
 +			int mOff = snprintf(modesLog, sizeof(modesLog), "Surface present modes (count=%u):", modeCount);
 +			for (auto m : modes) {
@@ -13086,6 +13087,7 @@ index b81e2e14..f444052f 100644
 +
 +			if (swRes == VK_SUCCESS) {
 +				_vkSwapchain = newSwapchain;
++				_vkChosenPresentMode = swapInfo.presentMode;
 +				_vkNativeWindow = targetWin;
 +				_vkSubWindow = subWin;
 +				_vkSwapchainSize = CGSizeMake(extent.width, extent.height);
@@ -13158,7 +13160,7 @@ index b81e2e14..f444052f 100644
  	switch (_pixelFormat) {
  		case MTLPixelFormatBGRA8Unorm:      pixelFormat = Indium::PixelFormat::BGRA8Unorm;      break;
  		case MTLPixelFormatBGRA8Unorm_sRGB: pixelFormat = Indium::PixelFormat::BGRA8Unorm_sRGB; break;
-@@ -476,123 +1310,239 @@ static void reportGLErrors(void) {
+@@ -476,123 +1312,271 @@ static void reportGLErrors(void) {
  		default:                            pixelFormat = Indium::PixelFormat::Invalid;         break;
  	}
  
@@ -13391,10 +13393,7 @@ index b81e2e14..f444052f 100644
 +		clock_gettime(CLOCK_MONOTONIC, &tsPresEnd);
 +		presUs = ((uint64_t)(tsPresEnd.tv_sec - tsSubEnd.tv_sec) * 1000000000ULL + (tsPresEnd.tv_nsec - tsSubEnd.tv_nsec)) / 1000ULL;
 +	}
- 
--		reportGLErrors();
--		glCopyImageSubData(drawable->texture()->glTexture(), GL_TEXTURE_2D, 0, 0, 0, 0, _tex, GL_TEXTURE_2D, 0, 0, 0, 0, _drawableSize.width, _drawableSize.height, 1);
--		reportGLErrors();
++
 +	_frameInFlightIndex = (_frameInFlightIndex + 1) % NUM_FRAMES_IN_FLIGHT;
 +
 +	if (frameNum <= 120 || (frameNum % 60) == 0) {
@@ -13406,6 +13405,13 @@ index b81e2e14..f444052f 100644
 +			(unsigned long long)subUs, (unsigned long long)presUs,
 +			(unsigned int)imageIndex, (int)presRes);
 +		appendDeviceLog(logBuf);
++	}
+ 
+-		reportGLErrors();
+-		glCopyImageSubData(drawable->texture()->glTexture(), GL_TEXTURE_2D, 0, 0, 0, 0, _tex, GL_TEXTURE_2D, 0, 0, 0, 0, _drawableSize.width, _drawableSize.height, 1);
+-		reportGLErrors();
++	if (presRes == VK_ERROR_OUT_OF_DATE_KHR) {
++		[self recreateDrawables];
  	}
  
 -	@synchronized(self) {
@@ -13414,14 +13420,41 @@ index b81e2e14..f444052f 100644
 -		//        or at least a fixed interval.
 -		if (_lastPresentedDrawable) {
 -			_lastPresentedDrawable->didPresent();
--		}
--		_lastPresentedDrawable = drawable;
-+	if (presRes == VK_ERROR_OUT_OF_DATE_KHR) {
-+		[self recreateDrawables];
- 	}
-+
 +	// 5. Notify drawable presented
 +	drawable->didPresent();
++
++	// High-precision frame pacing for non-blocking VSync modes (e.g. VK_PRESENT_MODE_FIFO_LATEST_READY_EXT)
++	// Keeps render loop locked 1:1 to the display's refresh rate (165 Hz = 165 FPS) without dropping frames.
++	if (_displaySyncEnabled && _vkChosenPresentMode == (VkPresentModeKHR)1000361000) {
++		uint32_t rate = getMetalRefreshRate();
++		if (rate >= 30 && rate <= 1000) {
++			uint64_t targetIntervalNs = 1000000000ULL / rate;
++			static struct timespec s_nextPresentTarget = {0, 0};
++			struct timespec now;
++			clock_gettime(CLOCK_MONOTONIC, &now);
++			uint64_t nowNs = (uint64_t)now.tv_sec * 1000000000ULL + now.tv_nsec;
++
++			if (s_nextPresentTarget.tv_sec == 0) {
++				s_nextPresentTarget = now;
++			}
++			uint64_t targetNs = (uint64_t)s_nextPresentTarget.tv_sec * 1000000000ULL + s_nextPresentTarget.tv_nsec;
++			targetNs += targetIntervalNs;
++
++			if (nowNs > targetNs + targetIntervalNs) {
++				// Fell behind by more than 1 frame; reset anchor to prevent catch-up bursts
++				targetNs = nowNs + targetIntervalNs;
++			} else if (targetNs > nowNs) {
++				uint64_t diffNs = targetNs - nowNs;
++				struct timespec req;
++				req.tv_sec = (time_t)(diffNs / 1000000000ULL);
++				req.tv_nsec = (long)(diffNs % 1000000000ULL);
++				nanosleep(&req, NULL);
++			}
++			s_nextPresentTarget.tv_sec = (time_t)(targetNs / 1000000000ULL);
++			s_nextPresentTarget.tv_nsec = (long)(targetNs % 1000000000ULL);
+ 		}
+-		_lastPresentedDrawable = drawable;
+ 	}
  }
  
 -- (NSNumber*)_textureId
@@ -13482,7 +13515,7 @@ index b81e2e14..f444052f 100644
  
  #else
 diff --git a/QuartzCore/CAMetalLayerInternal.h b/QuartzCore/CAMetalLayerInternal.h
-index 48693da0..808e4bdd 100644
+index 48693da0..4ae34fd1 100644
 --- a/QuartzCore/CAMetalLayerInternal.h
 +++ b/QuartzCore/CAMetalLayerInternal.h
 @@ -19,12 +19,16 @@
@@ -13520,7 +13553,7 @@ index 48693da0..808e4bdd 100644
  	std::array<std::shared_ptr<CAMetalDrawableActual>, 3> _drawables;
  	std::array<NSUInteger, 3> _queuedDrawables;
  	NSUInteger _queuedDrawableCount;
-@@ -47,12 +53,30 @@ class CAMetalDrawableActual;
+@@ -47,12 +53,31 @@ class CAMetalDrawableActual;
  	NSCondition* _drawableCondition;
  	std::shared_ptr<CAMetalDrawableActual> _lastPresentedDrawable;
  
@@ -13529,6 +13562,7 @@ index 48693da0..808e4bdd 100644
 +
 +	VkSurfaceKHR _vkSurface;
 +	VkSwapchainKHR _vkSwapchain;
++	VkPresentModeKHR _vkChosenPresentMode;
 +	CGSize _vkSwapchainSize;
 +	void* _vkNativeWindow;
 +	void* _vkSubWindow;
