@@ -856,6 +856,145 @@ index ee6a9b171..8505c3553 100644
          else
              return badComponentSelector;
      }
+diff --git a/src/CoreAudio/AudioTrace.h b/src/CoreAudio/AudioTrace.h
+new file mode 100644
+index 000000000..dd9e54221
+--- /dev/null
++++ b/src/CoreAudio/AudioTrace.h
+@@ -0,0 +1,37 @@
++#ifndef RCLOL_AUDIO_TRACE_H
++#define RCLOL_AUDIO_TRACE_H
++#include <cstdio>
++#include <cstdlib>
++#include <cstdarg>
++#include <ctime>
++#include <atomic>
++#include <unistd.h>
++// Opt-in API/status diagnostics only; never records audio samples or names.
++// Enabled by env RCLOL_AUDIO_TRACE or by the existence of /tmp/rclol-audio-trace
++// or /Users/Shared/rclol-audio-trace (the latter survives /tmp wipes at launch).
++// A negative result is re-checked at most once every ~2 seconds; a positive
++// result is cached for the life of the process.
++static inline bool rclolAudioTraceEnabled() {
++    static std::atomic<bool> enabled{false};
++    static std::atomic<long long> nextCheckMs{0};
++    if (enabled.load(std::memory_order_relaxed)) return true;
++    struct timespec ts;
++    clock_gettime(CLOCK_MONOTONIC, &ts);
++    long long nowMs = (long long) ts.tv_sec * 1000 + ts.tv_nsec / 1000000 + 1;
++    if (nowMs < nextCheckMs.load(std::memory_order_relaxed)) return false;
++    nextCheckMs.store(nowMs + 2000, std::memory_order_relaxed);
++    if (getenv("RCLOL_AUDIO_TRACE") != nullptr ||
++        access("/tmp/rclol-audio-trace", F_OK) == 0 ||
++        access("/Users/Shared/rclol-audio-trace", F_OK) == 0) {
++        enabled.store(true, std::memory_order_relaxed);
++        return true;
++    }
++    return false;
++}
++static inline void rclolAudioTrace(const char* format, ...) {
++    if (!rclolAudioTraceEnabled()) return;
++    static FILE* file=[] { FILE* f=fopen("/tmp/rclol-audio-api.log","a"); if(f) setvbuf(f,nullptr,_IOLBF,0); return f; }();
++    if(!file) return;
++    va_list args;va_start(args,format);fprintf(file,"pid=%d ",getpid());vfprintf(file,format,args);va_end(args);
++}
++#endif
+diff --git a/src/CoreAudio/CoreAudio/AudioConverterShim.c b/src/CoreAudio/CoreAudio/AudioConverterShim.c
+new file mode 100644
+index 000000000..6e85e8230
+--- /dev/null
++++ b/src/CoreAudio/CoreAudio/AudioConverterShim.c
+@@ -0,0 +1,90 @@
++/* Minimal AudioConverter for Darling's CoreAudio framework.
++ *
++ * Apple's CoreAudio re-exports these AudioToolbox entry points, and
++ * third-party code (e.g. Discord voice) binds them against CoreAudio.
++ * AudioToolbox cannot be re-exported here (it depends on CoreAudio),
++ * so this TU provides small self-contained implementations:
++ *  - format-identical conversion works (direct frame copy);
++ *  - anything else returns kAudioConverterErr_InvalidInputSize/
++ *    codec-unavailable rather than crashing the caller at bind time.
++ */
++#include <CoreAudio/CoreAudioTypes.h>
++#include <AudioToolbox/AudioConverter.h>
++#include <CarbonCore/MacErrors.h>
++#include <stdlib.h>
++#include <string.h>
++
++struct DarlingAudioConverter {
++    AudioStreamBasicDescription src;
++    AudioStreamBasicDescription dst;
++};
++
++OSStatus AudioConverterNew(const AudioStreamBasicDescription* inSourceFormat,
++                           const AudioStreamBasicDescription* inDestinationFormat,
++                           AudioConverterRef* outAudioConverter) {
++    struct DarlingAudioConverter* c;
++    if (!inSourceFormat || !inDestinationFormat || !outAudioConverter)
++        return paramErr;
++    c = (struct DarlingAudioConverter*)malloc(sizeof(*c));
++    if (!c)
++        return memFullErr;
++    c->src = *inSourceFormat;
++    c->dst = *inDestinationFormat;
++    *outAudioConverter = (AudioConverterRef)c;
++    return noErr;
++}
++
++OSStatus AudioConverterDispose(AudioConverterRef inAudioConverter) {
++    if (!inAudioConverter)
++        return paramErr;
++    free(inAudioConverter);
++    return noErr;
++}
++
++static int asbd_equal(const AudioStreamBasicDescription* a,
++                      const AudioStreamBasicDescription* b) {
++    return a->mSampleRate == b->mSampleRate &&
++           a->mFormatID == b->mFormatID &&
++           a->mFormatFlags == b->mFormatFlags &&
++           a->mBytesPerPacket == b->mBytesPerPacket &&
++           a->mFramesPerPacket == b->mFramesPerPacket &&
++           a->mBytesPerFrame == b->mBytesPerFrame &&
++           a->mChannelsPerFrame == b->mChannelsPerFrame &&
++           a->mBitsPerChannel == b->mBitsPerChannel;
++}
++
++OSStatus AudioConverterFillComplexBuffer(AudioConverterRef inAudioConverter,
++                                         AudioConverterComplexInputDataProc inInputDataProc,
++                                         void* inInputDataProcUserData,
++                                         UInt32* ioOutputDataPacketSize,
++                                         AudioBufferList* outOutputData,
++                                         AudioStreamPacketDescription* outPacketDescription) {
++    struct DarlingAudioConverter* c = (struct DarlingAudioConverter*)inAudioConverter;
++    AudioBufferList inBuf;
++    UInt32 packets, bytes;
++    OSStatus st;
++
++    (void)outPacketDescription;
++    if (!c || !inInputDataProc || !ioOutputDataPacketSize || !outOutputData)
++        return paramErr;
++    if (!asbd_equal(&c->src, &c->dst))
++        return kAudioConverterErr_UnspecifiedError;
++    if (c->src.mBytesPerPacket == 0 || outOutputData->mNumberBuffers < 1)
++        return paramErr;
++
++    packets = *ioOutputDataPacketSize;
++    bytes = packets * c->src.mBytesPerPacket;
++    if (bytes > outOutputData->mBuffers[0].mDataByteSize)
++        bytes = outOutputData->mBuffers[0].mDataByteSize;
++
++    inBuf.mNumberBuffers = 1;
++    inBuf.mBuffers[0].mNumberChannels = c->src.mChannelsPerFrame;
++    inBuf.mBuffers[0].mDataByteSize = bytes;
++    inBuf.mBuffers[0].mData = outOutputData->mBuffers[0].mData;
++    st = inInputDataProc((AudioConverterRef)c, &packets, &inBuf, NULL, inInputDataProcUserData);
++    if (st != noErr)
++        return st;
++    *ioOutputDataPacketSize = packets;
++    outOutputData->mBuffers[0].mDataByteSize = packets * c->dst.mBytesPerPacket;
++    return noErr;
++}
 diff --git a/src/CoreAudio/CoreAudio/AudioHardware.cpp b/src/CoreAudio/CoreAudio/AudioHardware.cpp
 index 7243e6a62..647c8aff7 100644
 --- a/src/CoreAudio/CoreAudio/AudioHardware.cpp
@@ -1496,6 +1635,31 @@ index 8421491cd..03a530bfd 100644
  
  #endif
 -
+diff --git a/src/CoreAudio/CoreAudio/pulse/AudioHardwareImplPAInput.cpp b/src/CoreAudio/CoreAudio/pulse/AudioHardwareImplPAInput.cpp
+index c1fd1d402..777ca7c38 100644
+--- a/src/CoreAudio/CoreAudio/pulse/AudioHardwareImplPAInput.cpp
++++ b/src/CoreAudio/CoreAudio/pulse/AudioHardwareImplPAInput.cpp
+@@ -31,15 +31,18 @@ OSStatus AudioHardwareImplPAInput::getPropertyData(const AudioObjectPropertyAddr
+ {
+ 	if (inAddress->mSelector == kAudioDevicePropertyStreamConfiguration)
+ 	{
++		// A capture device has its channels on the input scope only. Reporting them on the
++		// output scope (copied from the output device) made capture enumerators such as
++		// Vivox and Chromium see a playback-only device with no input channels.
+ 		size_t size = sizeof(AudioBufferList);
+ 
+-		if (inAddress->mScope == kAudioDevicePropertyScopeOutput)
++		if (inAddress->mScope == kAudioDevicePropertyScopeInput)
+ 			size += 1* sizeof(AudioBuffer);
+ 
+ 		// Number of returned buffers is the number of channels
+ 		if (AudioBufferList* abl = static_cast<AudioBufferList*>(outData); abl && *ioDataSize >= size)
+ 		{
+-			if (inAddress->mScope == kAudioDevicePropertyScopeOutput)
++			if (inAddress->mScope == kAudioDevicePropertyScopeInput)
+ 			{
+ 				abl->mNumberBuffers = 1;
+ 				abl->mBuffers[0].mNumberChannels = 2;
 diff --git a/src/CoreAudio/CoreAudio/pulse/AudioHardwareStreamPA.cpp b/src/CoreAudio/CoreAudio/pulse/AudioHardwareStreamPA.cpp
 index 0db6ebda7..3f3bd6542 100644
 --- a/src/CoreAudio/CoreAudio/pulse/AudioHardwareStreamPA.cpp
@@ -1582,10 +1746,40 @@ index 0425ae97f..fdf08d2dc 100644
  #endif /* AUDIOHARDWARESTREAMPA_H */
 -
 diff --git a/src/CoreAudio/CoreAudio/pulse/AudioHardwareStreamPAInput.cpp b/src/CoreAudio/CoreAudio/pulse/AudioHardwareStreamPAInput.cpp
-index d6825f1d5..739b70011 100644
+index d6825f1d5..ee733f4be 100644
 --- a/src/CoreAudio/CoreAudio/pulse/AudioHardwareStreamPAInput.cpp
 +++ b/src/CoreAudio/CoreAudio/pulse/AudioHardwareStreamPAInput.cpp
-@@ -25,6 +25,7 @@ along with Darling.  If not, see <http://www.gnu.org/licenses/>.
+@@ -21,10 +21,37 @@ along with Darling.  If not, see <http://www.gnu.org/licenses/>.
+ #include "AudioHardwareImplPA.h"
+ #include <iostream>
+ #include <vector>
++#include <algorithm>
++#include <cstring>
++#include <mach/mach_time.h>
++#include "../../AudioTrace.h"
++
++static const mach_timebase_info_data_t& timebase() {
++	static mach_timebase_info_data_t tb = [] {
++		mach_timebase_info_data_t t = {0, 0};
++		mach_timebase_info(&t);
++		if (!t.numer || !t.denom) t.numer = t.denom = 1;
++		return t;
++	}();
++	return tb;
++}
++static uint64_t hostToNs(uint64_t host) {
++	return uint64_t((unsigned __int128) host * timebase().numer / timebase().denom);
++}
++static uint64_t nsToHost(uint64_t ns) {
++	return uint64_t((unsigned __int128) ns * timebase().denom / timebase().numer);
++}
++static unsigned g_readEvents = 0;
++static bool readShouldTrace() {
++	if (!rclolAudioTraceEnabled()) return false;
++	unsigned n = g_readEvents++;
++	return n < 40 || n % 1000 == 0;
++}
+ 
  AudioHardwareStreamPAInput::AudioHardwareStreamPAInput(AudioHardwareImplPA* hw, AudioDeviceIOProc callback, void* clientData)
  : AudioHardwareStreamPA(hw, callback, clientData)
  {
@@ -1593,7 +1787,7 @@ index d6825f1d5..739b70011 100644
  	// m_dump.open("/tmp/dump.raw", std::ios_base::out | std::ios_base::binary);
  }
  
-@@ -32,7 +33,6 @@ void AudioHardwareStreamPAInput::paStreamReadCB(pa_stream* s, size_t length, voi
+@@ -32,25 +59,26 @@ void AudioHardwareStreamPAInput::paStreamReadCB(pa_stream* s, size_t length, voi
  {
  	AudioHardwareStreamPAInput* This = static_cast<AudioHardwareStreamPAInput*>(self);
  
@@ -1601,14 +1795,193 @@ index d6825f1d5..739b70011 100644
  
  	if (!This->m_running)
  		return;
-@@ -74,6 +74,7 @@ void AudioHardwareStreamPAInput::paStreamReadCB(pa_stream* s, size_t length, voi
- 		// std::cout << "AudioHardwareStreamPAInput::paStreamReadCB(): bytes=" << nbytes << std::endl;
- 		OSStatus status = This->m_callback(This->m_hw->id(), &fake, abl, &fake, nullptr, nullptr, This->m_clientData);
  
+-	AudioTimeStamp fake = {0};
++	const pa_sample_spec* spec = pa_stream_get_sample_spec(This->m_stream);
++	const size_t frameBytes = spec ? pa_frame_size(spec) : 0;
++	const double rate = spec ? double(spec->rate) : 0;
++	if (!frameBytes || rate <= 0)
++		return;
++
+ 	AudioBufferList* abl = static_cast<AudioBufferList*>(alloca(sizeof(AudioBufferList) + sizeof(AudioBuffer)));
+-	std::vector<uint8_t> hole;
+ 
+ 	// std::cout << "AudioHardwareStreamPAInput::paStreamReadCB()\n";
+ 
+ 	while (true)
+ 	{
+-		abl->mNumberBuffers = 1;
+-		abl->mBuffers[0].mNumberChannels = 2;
+-
+-		size_t nbytes;
++		const void* data = nullptr;
++		size_t nbytes = 0;
+ 
+-		int rv = pa_stream_peek(This->m_stream, (const void**) &abl->mBuffers[0].mData, &nbytes);
++		int rv = pa_stream_peek(This->m_stream, &data, &nbytes);
+ 
+ 		if (rv < 0 || !nbytes)
+ 		{
+@@ -58,29 +86,83 @@ void AudioHardwareStreamPAInput::paStreamReadCB(pa_stream* s, size_t length, voi
+ 			break;
+ 		}
+ 
+-		if (nbytes && !abl->mBuffers[0].mData)
++		// The fragment at the read index was captured `latency` ago: source latency plus
++		// everything still unread. Without timing info yet, count only the unread data.
++		pa_usec_t usec = 0;
++		int negative = 0;
++		uint64_t latencyNs;
++		if (pa_stream_get_latency(This->m_stream, &usec, &negative) == 0)
++			latencyNs = negative ? 0 : uint64_t(usec) * 1000;
++		else
+ 		{
+-			// "If there is a hole, data will be NULL and nbytes will contain the length of the hole."
+-			hole.resize(nbytes);
+-			abl->mBuffers[0].mData = hole.data();
++			size_t readable = pa_stream_readable_size(This->m_stream);
++			latencyNs = uint64_t(pa_bytes_to_usec(std::max(readable, nbytes), spec)) * 1000;
+ 		}
+-		abl->mBuffers[0].mDataByteSize = nbytes;
+-
+-		// This->m_dump.write((char*) abl->mBuffers[0].mData, nbytes);
+-		// This->m_dump.flush();
+-		if (This->m_convertSignedUnsigned)
+-			This->transformSignedUnsigned(abl);
++		const uint64_t nowHost = mach_absolute_time();
+ 
+-		// std::cout << "AudioHardwareStreamPAInput::paStreamReadCB(): bytes=" << nbytes << std::endl;
+-		OSStatus status = This->m_callback(This->m_hw->id(), &fake, abl, &fake, nullptr, nullptr, This->m_clientData);
+-
+-		pa_stream_drop(This->m_stream);
++		const bool hole = !data;
++		if (hole || This->m_convertSignedUnsigned)
++		{
++			// "If there is a hole, data will be NULL and nbytes will contain the length of the hole."
++			// Holes are delivered as silence so the sample clock keeps counting real time.
++			// The peeked memory belongs to PulseAudio, so convert a private copy.
++			This->m_scratch.resize(nbytes);
++			if (data)
++				memcpy(This->m_scratch.data(), data, nbytes);
++			else
++				memset(This->m_scratch.data(), spec->format == PA_SAMPLE_U8 ? 0x80 : 0, nbytes);
++			data = This->m_scratch.data();
++		}
+ 
+-		if (status != noErr)
++		// Like a real HAL, hand the IOProc at most one device buffer per call.
++		const size_t block = std::max(frameBytes, This->m_blockBytes);
++		for (size_t offset = 0; offset + frameBytes <= nbytes; )
+ 		{
+-			pa_stream_cork(This->m_stream, true, [](pa_stream*, int, void*) {}, nullptr);
+-			break;
++			size_t piece = std::min(block, nbytes - offset);
++			piece -= piece % frameBytes;
++
++			abl->mNumberBuffers = 1;
++			abl->mBuffers[0].mNumberChannels = spec->channels;
++			abl->mBuffers[0].mData = const_cast<uint8_t*>(static_cast<const uint8_t*>(data) + offset);
++			abl->mBuffers[0].mDataByteSize = piece;
++
++			if (This->m_convertSignedUnsigned)
++				This->transformSignedUnsigned(abl);
++
++			const uint64_t offsetNs = uint64_t(double(offset / frameBytes) * 1e9 / rate);
++			const uint64_t agoNs = latencyNs > offsetNs ? latencyNs - offsetNs : 0;
++			uint64_t inputHost = nowHost - std::min(nowHost, nsToHost(agoNs));
++			// Keep host time monotonic even when PA's latency estimate jumps.
++			if (inputHost <= This->m_lastInputHost)
++				inputHost = This->m_lastInputHost + 1;
++			This->m_lastInputHost = inputHost;
++
++			AudioTimeStamp input = {0};
++			input.mSampleTime = double(This->m_frames);
++			input.mHostTime = inputHost;
++			input.mRateScalar = 1.0;
++			input.mFlags = kAudioTimeStampHostTimeValid | kAudioTimeStampSampleTimeValid | kAudioTimeStampRateScalarValid;
++
++			AudioTimeStamp now = input;
++			now.mHostTime = std::max(nowHost, inputHost);
++			now.mSampleTime = input.mSampleTime + double(hostToNs(now.mHostTime - inputHost)) * rate / 1e9;
++
++			// This->m_dump.write((char*) abl->mBuffers[0].mData, nbytes);
++			// This->m_dump.flush();
++			// A real HAL ignores the IOProc's result; one failed callback must not
++			// silence the microphone for the rest of the session.
++			OSStatus status = This->m_callback(This->m_hw->id(), &now, abl, &input, nullptr, nullptr, This->m_clientData);
++			if (readShouldTrace())
++				rclolAudioTrace("PA_IN iop bytes=%zu frames=%llu latencyMs=%.2f hole=%d status=%d\n", piece,
++					(unsigned long long) This->m_frames, double(latencyNs) / 1e6, hole, (int) status);
++
++			if (!This->m_running) return;
++			This->m_frames += piece / frameBytes;
++			offset += piece;
+ 		}
++
 +        if (!This->m_running) return;
- 		pa_stream_drop(This->m_stream);
++		pa_stream_drop(This->m_stream);
+ 	}
+ }
  
- 		if (status != noErr)
+@@ -88,10 +170,19 @@ void AudioHardwareStreamPAInput::start()
+ {
+ 	struct pa_buffer_attr battr;
+ 
+-	battr.fragsize = uint32_t(-1);
+-	battr.maxlength = uint32_t(m_bufferSize);
++	// Record streams only use maxlength and fragsize. Ask for fragments of one device buffer
++	// (kAudioDevicePropertyBufferFrameSize) for voice latency, and bound the server-side
++	// backlog so a stalled client can't accumulate seconds of delay.
++	const uint32_t bpf = m_hw->asbd().mBytesPerFrame;
++	uint32_t block = bpf ? (m_hw->bufferSize() / bpf) * bpf : m_bufferSize;
++	if (!block)
++		block = m_bufferSize;
++	m_blockBytes = block;
++
++	battr.fragsize = block;
++	battr.maxlength = block * 16;
+ 	battr.minreq = uint32_t(-1);
+-	battr.prebuf = battr.maxlength;
++	battr.prebuf = uint32_t(-1);
+ 	battr.tlength = uint32_t(-1);
+ 
+ 	// std::cout << "AudioHardwareStreamPAInput::start()\n";
+@@ -101,6 +192,9 @@ void AudioHardwareStreamPAInput::start()
+ 	int rv = pa_stream_connect_record(m_stream, nullptr, &battr,
+ 		pa_stream_flags_t(PA_STREAM_INTERPOLATE_TIMING | PA_STREAM_ADJUST_LATENCY | PA_STREAM_AUTO_TIMING_UPDATE)
+ 	);
++	if (rclolAudioTraceEnabled())
++		rclolAudioTrace("PA_IN start block=%u rate=%g channels=%u rv=%d\n", block, m_hw->asbd().mSampleRate,
++			m_hw->asbd().mChannelsPerFrame, rv);
+ 
+ 	// std::cout << "AudioHardwareStreamPAInput::start() rv = " << rv << std::endl;
+ 	AudioHardwareStreamPA::start();
+diff --git a/src/CoreAudio/CoreAudio/pulse/AudioHardwareStreamPAInput.h b/src/CoreAudio/CoreAudio/pulse/AudioHardwareStreamPAInput.h
+index 87db50d12..01a7b2a3e 100644
+--- a/src/CoreAudio/CoreAudio/pulse/AudioHardwareStreamPAInput.h
++++ b/src/CoreAudio/CoreAudio/pulse/AudioHardwareStreamPAInput.h
+@@ -21,6 +21,8 @@ along with Darling.  If not, see <http://www.gnu.org/licenses/>.
+ #define AUDIOHARDWARESTREAMPAINPUT_H
+ #include "AudioHardwareStreamPA.h"
+ #include <fstream>
++#include <cstdint>
++#include <vector>
+ 
+ class AudioHardwareStreamPAInput : public AudioHardwareStreamPA
+ {
+@@ -30,6 +32,12 @@ private:
+ 	void start() override;
+ 	static void paStreamReadCB(pa_stream* s, size_t length, void* self);
+ 
++	// Only touched on the PA queue.
++	uint64_t m_frames = 0;
++	uint64_t m_lastInputHost = 0;
++	size_t m_blockBytes = 0;
++	std::vector<uint8_t> m_scratch;
++
+ 	// std::ofstream m_dump;
+ };
+ 
 diff --git a/src/CoreAudio/CoreAudio/pulse/AudioHardwareStreamPAOutput.cpp b/src/CoreAudio/CoreAudio/pulse/AudioHardwareStreamPAOutput.cpp
 index 278630f02..54b463c2f 100644
 --- a/src/CoreAudio/CoreAudio/pulse/AudioHardwareStreamPAOutput.cpp
@@ -2330,7 +2703,7 @@ index ff83d1e15..1e86f9e99 100644
  	bool m_suspended = true;
  };
 diff --git a/src/CoreAudio/CoreAudioComponent/AUHAL.cpp b/src/CoreAudio/CoreAudioComponent/AUHAL.cpp
-index fe4d1eaa1..9321edcdf 100644
+index fe4d1eaa1..769b06586 100644
 --- a/src/CoreAudio/CoreAudioComponent/AUHAL.cpp
 +++ b/src/CoreAudio/CoreAudioComponent/AUHAL.cpp
 @@ -1,3 +1,4 @@
@@ -2354,7 +2727,20 @@ index fe4d1eaa1..9321edcdf 100644
  
  #pragma GCC visibility push(default)
  AUDIOCOMPONENT_ENTRY(AUOutputBaseFactory, AUHAL);
-@@ -42,6 +52,37 @@ AUHAL::~AUHAL()
+@@ -29,8 +39,11 @@ enum {
+ 	kInputBus
+ };
+ 
++// Like macOS: element 0 is the output (app -> device) side, element 1 the input
++// (device -> app) side, on both scopes. Without output element 1 the app's
++// recording format and AudioUnitRender(bus 1) had nowhere to go.
+ AUHAL::AUHAL(AudioComponentInstance inInstance, bool supportRecording)
+-: AUBase(inInstance, 1, supportRecording ? 1 : 0)
++: AUBase(inInstance, supportRecording ? 2 : 1, supportRecording ? 2 : 1)
+ {
+ 	UInt32 propSize = sizeof(AudioDeviceID);
+ 	AudioHardwareGetProperty(kAudioHardwarePropertyDefaultOutputDevice, &propSize, &m_outputDevice);
+@@ -42,6 +55,37 @@ AUHAL::~AUHAL()
  	Stop();
  }
  
@@ -2392,16 +2778,114 @@ index fe4d1eaa1..9321edcdf 100644
  bool AUHAL::CanScheduleParameters() const
  {
  	return true;
-@@ -49,7 +90,7 @@ bool AUHAL::CanScheduleParameters() const
+@@ -49,7 +93,36 @@ bool AUHAL::CanScheduleParameters() const
  
  bool AUHAL::StreamFormatWritable(AudioUnitScope scope, AudioUnitElement element)
  {
 -	return !m_running && IsInitialized();
 +	return !m_running;
++}
++
++// AUBase only accepts the canonical layout (Float32, non-interleaved). A real AUHAL
++// converts any linear PCM, and Vivox asks for interleaved Float32 on both client sides
++// (recording: output scope element 1; playback: input scope element 0, at its own rate).
++// Those accept what PulseAudio converts and our copies handle: native-endian float32 or
++// signed 16/32-bit integers, either layout. Missing frames are padded with zeros, which is
++// only silence for float and signed samples, so unsigned (and 8-bit) formats are left out;
++// so is 24-bit (PulseAudio may use 4-byte samples while we copy 3). Device sides keep the
++// canonical rule.
++bool AUHAL::ValidFormat(AudioUnitScope scope, AudioUnitElement element, const CAStreamBasicDescription& format)
++{
++	const bool clientSide = (scope == kAudioUnitScope_Output && element == kInputBus)
++		|| (scope == kAudioUnitScope_Input && element == kOutputBus);
++	if (!clientSide)
++		return AUBase::ValidFormat(scope, element, format);
++
++	const UInt32 flags = format.mFormatFlags;
++	const UInt32 bits = format.mBitsPerChannel;
++	const bool isFloat = flags & kAudioFormatFlagIsFloat;
++	if (format.mFormatID != kAudioFormatLinearPCM || format.mFramesPerPacket != 1
++		|| format.mSampleRate <= 0 || format.mChannelsPerFrame < 1 || format.mChannelsPerFrame > 32
++		|| (flags & kAudioFormatFlagIsBigEndian) != (kAudioFormatFlagsNativeEndian & kAudioFormatFlagIsBigEndian))
++		return false;
++	if (isFloat ? bits != 32 : (!(flags & kAudioFormatFlagIsSignedInteger) || (bits != 16 && bits != 32)))
++		return false;
++
++	const UInt32 frameBytes = (flags & kAudioFormatFlagIsNonInterleaved) ? bits / 8 : format.mChannelsPerFrame * bits / 8;
++	return format.mBytesPerFrame == frameBytes && format.mBytesPerPacket == frameBytes;
  }
  
  OSStatus AUHAL::Version()
-@@ -76,19 +117,26 @@ OSStatus AUHAL::Render(AudioUnitRenderActionFlags& ioActionFlags, const AudioTim
+@@ -57,45 +130,129 @@ OSStatus AUHAL::Version()
+ 	return 1;
+ }
+ 
+-// Provide data from the microphone
+-OSStatus AUHAL::Render(AudioUnitRenderActionFlags& ioActionFlags, const AudioTimeStamp& inTimeStamp, UInt32 inNumberFrames)
++// Provide data from the microphone: AudioUnitRender(bus 1), normally called from the input callback.
++// Never blocks; frames not recorded yet are silence. Bypasses NeedsToRender(), as a real AUHAL
++// renders whatever timestamp the client passes.
++OSStatus AUHAL::RenderBus(AudioUnitRenderActionFlags& ioActionFlags, const AudioTimeStamp& inTimeStamp, UInt32 inBusNumber, UInt32 inNumberFrames)
+ {
+-	std::unique_lock<std::mutex> lk(m_dataAvailableMutex);
++	if (inBusNumber != kInputBus || !m_enableInput)
++		return kAudioUnitErr_NoConnection;
+ 
+-	m_dataAvailableCV.wait(lk, [=]{ return m_dataAvailable; });
++	const CAStreamBasicDescription& desc = GetStreamFormat(kAudioUnitScope_Output, kInputBus);
++	const UInt32 sampleBytes = desc.mBitsPerChannel / 8;
++	const UInt32 frameBytes = desc.mChannelsPerFrame * sampleBytes;
++	if (!sampleBytes || !frameBytes)
++		return kAudioUnitErr_FormatNotSupported;
++	const bool planar = desc.mFormatFlags & kAudioFormatFlagIsNonInterleaved;
+ 
+ 	AudioBufferList& abl = GetOutput(kInputBus)->GetBufferList();
++	std::lock_guard<std::mutex> lk(m_dataAvailableMutex);
++	const UInt32 frames = std::min<UInt32>(inNumberFrames, m_bufferUsed / frameBytes);
++	const uint8_t* source = m_buffer.get();
++
++	if (planar)
++	{
++		for (UInt32 c = 0; c < abl.mNumberBuffers && c < desc.mChannelsPerFrame; c++)
++		{
++			uint8_t* destination = static_cast<uint8_t*>(abl.mBuffers[c].mData);
++			for (UInt32 f = 0; f < frames; f++)
++				memcpy(destination + f * sampleBytes, source + f * frameBytes + c * sampleBytes, sampleBytes);
++			memset(destination + frames * sampleBytes, 0, (inNumberFrames - frames) * sampleBytes);
++			abl.mBuffers[c].mDataByteSize = inNumberFrames * sampleBytes;
++		}
++	}
++	else
++	{
++		uint8_t* destination = static_cast<uint8_t*>(abl.mBuffers[0].mData);
++		memcpy(destination, source, frames * frameBytes);
++		memset(destination + frames * frameBytes, 0, (inNumberFrames - frames) * frameBytes);
++		abl.mBuffers[0].mDataByteSize = inNumberFrames * frameBytes;
++	}
+ 
+-	// TODO: Prepare for non-interleaved audio
+-	UInt32 howMuch = std::min<UInt32>(abl.mBuffers[0].mDataByteSize, m_bufferUsed);
+-	memcpy(abl.mBuffers[0].mData, m_buffer.get(), howMuch);
+-	abl.mBuffers[0].mDataByteSize = howMuch;
++	// Level only (no samples): shows whether the client pulls real sound or silence.
++	static std::atomic<unsigned> renders{0};
++	const unsigned n = renders++;
++	if (rclolAudioTraceEnabled() && (n < 40 || n % 1000 == 0))
++	{
++		float peak = 0;
++		const UInt32 count = frames * desc.mChannelsPerFrame;
++		if (desc.IsFloat() && sampleBytes == 4)
++			for (UInt32 i = 0; i < count; i++)
++				peak = std::max(peak, std::abs(reinterpret_cast<const float*>(source)[i]));
++		else if (sampleBytes == 2)
++			for (UInt32 i = 0; i < count; i++)
++				peak = std::max(peak, std::abs(reinterpret_cast<const int16_t*>(source)[i] / 32768.0f));
++		rclolAudioTrace("AUDIO_INPUT_RENDER n=%u frames=%u available=%u planar=%d peak=%.4f\n",
++			n, inNumberFrames, frames, (int) planar, peak);
++	}
+ 
+ 	return noErr;
+ }
  
  OSStatus AUHAL::Start()
  {
@@ -2431,7 +2915,53 @@ index fe4d1eaa1..9321edcdf 100644
  	}
  	if (m_enableInput)
  	{
-@@ -111,20 +159,42 @@ OSStatus AUHAL::Stop()
+-		AudioDeviceCreateIOProcID(m_inputDevice, recordCallback, this, &m_inputProcID);
+-		const CAStreamBasicDescription& desc = GetStreamFormat(kAudioUnitScope_Output, kInputBus);
+-		AudioDeviceSetProperty(m_inputDevice, nullptr, 0, true, kAudioDevicePropertyStreamFormat, sizeof(AudioStreamBasicDescription), &desc);
+-		AudioDeviceStart(m_inputDevice, m_inputProcID);
++		// The device records directly in the client's bus 1 format (PulseAudio converts rate,
++		// channels and sample type); only planar layouts are converted, in RenderBus().
++		OSStatus status = AudioDeviceCreateIOProcID(m_inputDevice, recordCallback, this, &m_inputProcID);
++		if (!status)
++		{
++			const CAStreamBasicDescription& desc = GetStreamFormat(kAudioUnitScope_Output, kInputBus);
++			AudioStreamBasicDescription hardware = desc;
++			hardware.mFormatFlags &= ~kAudioFormatFlagIsNonInterleaved;
++			hardware.mBytesPerFrame = hardware.mChannelsPerFrame * hardware.mBitsPerChannel / 8;
++			hardware.mBytesPerPacket = hardware.mBytesPerFrame;
++			// The device keeps its buffer size in bytes; keep the frame count across the format change.
++			AudioObjectPropertyAddress p = {kAudioDevicePropertyBufferFrameSize, kAudioObjectPropertyScopeInput, kAudioObjectPropertyElementMaster};
++			UInt32 frames = 0, size = sizeof(frames);
++			const bool haveFrames = AudioObjectGetPropertyData(m_inputDevice, &p, 0, nullptr, &size, &frames) == noErr;
++			status = AudioDeviceSetProperty(m_inputDevice, nullptr, 0, true, kAudioDevicePropertyStreamFormat, sizeof(hardware), &hardware);
++			if (!status && haveFrames)
++				AudioObjectSetPropertyData(m_inputDevice, &p, 0, nullptr, sizeof(frames), &frames);
++			{
++				std::lock_guard<std::mutex> lk(m_dataAvailableMutex);
++				m_bufferUsed = 0;
++			}
++			if (!status)
++				status = AudioDeviceStart(m_inputDevice, m_inputProcID);
++			if (status)
++			{
++				AudioDeviceDestroyIOProcID(m_inputDevice, m_inputProcID);
++				m_inputProcID = 0;
++			}
++		}
++		if (status)
++		{
++			if (m_outputProcID)
++			{
++				AudioDeviceStop(m_outputDevice, m_outputProcID);
++				AudioDeviceDestroyIOProcID(m_outputDevice, m_outputProcID);
++				m_outputProcID = 0;
++			}
++			return status;
++		}
+ 	}
+ 
+ 	m_running = m_enableOutput || m_enableInput;
+@@ -111,20 +268,49 @@ OSStatus AUHAL::Stop()
  	{
  		AudioDeviceStop(m_outputDevice, m_outputProcID);
  		AudioDeviceDestroyIOProcID(m_outputDevice, m_outputProcID);
@@ -2469,13 +2999,36 @@ index fe4d1eaa1..9321edcdf 100644
  	switch (inID)
  	{
 +        case kAudioDevicePropertyBufferFrameSize: {
++            // An input-only unit (EnableIO output=0) sizes its input device's IO cycle.
 +            AudioObjectPropertyAddress p={inID,kAudioObjectPropertyScopeOutput,kAudioObjectPropertyElementMaster};
-+            return AudioObjectSetPropertyData(m_outputDevice,&p,0,nullptr,inDataSize,inData);
++            OSStatus status=noErr;
++            if(m_enableOutput || !m_enableInput) status=AudioObjectSetPropertyData(m_outputDevice,&p,0,nullptr,inDataSize,inData);
++            if(!status && m_enableInput) {
++                p.mScope=kAudioObjectPropertyScopeInput;
++                status=AudioObjectSetPropertyData(m_inputDevice,&p,0,nullptr,inDataSize,inData);
++            }
++            return status;
 +        }
  		case kAudioOutputUnitProperty_SetInputCallback:
  		{
  			ca_require(inDataSize == sizeof(AURenderCallbackStruct), InvalidPropertyValue);
-@@ -176,15 +246,23 @@ OSStatus AUHAL::SetProperty(AudioUnitPropertyID inID, AudioUnitScope inScope, Au
+@@ -161,7 +347,14 @@ OSStatus AUHAL::SetProperty(AudioUnitPropertyID inID, AudioUnitScope inScope, Au
+ 			ca_require(inDataSize == sizeof(AudioDeviceID), InvalidPropertyValue);
+ 			const AudioDeviceID* dev = static_cast<const AudioDeviceID*>(inData);
+ 
+-			if (inElement == kOutputBus)
++			// macOS AUHAL has one current device, normally set on element 0; for an
++			// input-only unit (EnableIO input=1, output=0) that is the capture device.
++			if (inElement == kOutputBus && m_enableInput && !m_enableOutput)
++			{
++				m_inputDevice = *dev;
++				PropertyChanged(inID, inScope, inElement);
++			}
++			else if (inElement == kOutputBus)
+ 			{
+ 				m_outputDevice = *dev;
+ 				PropertyChanged(inID, inScope, inElement);
+@@ -176,20 +369,28 @@ OSStatus AUHAL::SetProperty(AudioUnitPropertyID inID, AudioUnitScope inScope, Au
  			return noErr;
  		}
  	}
@@ -2500,7 +3053,13 @@ index fe4d1eaa1..9321edcdf 100644
  		case kAudioOutputUnitProperty_SetInputCallback:
  		{
  			outDataSize = sizeof(AURenderCallbackStruct);
-@@ -210,13 +288,22 @@ OSStatus AUHAL::GetPropertyInfo(AudioUnitPropertyID inID, AudioUnitScope inScope
+ 			outWritable = true;
+-			break;
++			return noErr;
+ 		}
+ 		case kAudioOutputUnitProperty_EnableIO:
+ 		{
+@@ -210,13 +411,23 @@ OSStatus AUHAL::GetPropertyInfo(AudioUnitPropertyID inID, AudioUnitScope inScope
  			return noErr;
  		}
  	}
@@ -2517,14 +3076,15 @@ index fe4d1eaa1..9321edcdf 100644
  	switch (inID)
  	{
 +        case kAudioDevicePropertyBufferFrameSize: {
-+            AudioObjectPropertyAddress p={inID,kAudioObjectPropertyScopeOutput,kAudioObjectPropertyElementMaster};
++            const bool input=m_enableInput && !m_enableOutput;
++            AudioObjectPropertyAddress p={inID,input?kAudioObjectPropertyScopeInput:kAudioObjectPropertyScopeOutput,kAudioObjectPropertyElementMaster};
 +            UInt32 size=sizeof(UInt32);
-+            return AudioObjectGetPropertyData(m_outputDevice,&p,0,nullptr,&size,outData);
++            return AudioObjectGetPropertyData(input?m_inputDevice:m_outputDevice,&p,0,nullptr,&size,outData);
 +        }
  		case kAudioOutputUnitProperty_SetInputCallback:
  		{
  			memcpy(outData, &m_outputAvailableCb, sizeof(m_outputAvailableCb));
-@@ -228,12 +315,12 @@ OSStatus AUHAL::GetProperty(AudioUnitPropertyID inID, AudioUnitScope inScope, Au
+@@ -228,12 +439,12 @@ OSStatus AUHAL::GetProperty(AudioUnitPropertyID inID, AudioUnitScope inScope, Au
  			if (inElement == kOutputBus)
  			{
  				UInt32 value = m_enableOutput;
@@ -2539,7 +3099,20 @@ index fe4d1eaa1..9321edcdf 100644
  			}
  			else
  				return kAudioUnitErr_InvalidElement;
-@@ -277,9 +364,89 @@ OSStatus AUHAL::recordCallback(AudioObjectID inObjectID,
+@@ -241,7 +452,11 @@ OSStatus AUHAL::GetProperty(AudioUnitPropertyID inID, AudioUnitScope inScope, Au
+ 		}
+ 		case kAudioOutputUnitProperty_CurrentDevice:
+ 		{
+-			if (inElement == kOutputBus)
++			if (inElement == kOutputBus && m_enableInput && !m_enableOutput)
++			{
++				memcpy(outData, &m_inputDevice, sizeof(m_inputDevice));
++			}
++			else if (inElement == kOutputBus)
+ 			{
+ 				memcpy(outData, &m_outputDevice, sizeof(m_outputDevice));
+ 			}
+@@ -277,9 +492,89 @@ OSStatus AUHAL::recordCallback(AudioObjectID inObjectID,
  	return This->doRecord(inNow, inInputData, inInputTime);
  }
  
@@ -2629,7 +3202,7 @@ index fe4d1eaa1..9321edcdf 100644
  	if (!HasInput(0))
  	{
  		// std::cerr << "No connection\n";
-@@ -290,9 +457,75 @@ OSStatus AUHAL::doPlayback(const AudioTimeStamp* inNow, AudioBufferList* outOutp
+@@ -290,9 +585,75 @@ OSStatus AUHAL::doPlayback(const AudioTimeStamp* inNow, AudioBufferList* outOutp
  	AudioUnitRenderActionFlags flags = kAudioUnitRenderAction_PreRender;
  	const CAStreamBasicDescription& desc = GetStreamFormat(kAudioUnitScope_Input, kOutputBus);
  
@@ -2708,8 +3281,75 @@ index fe4d1eaa1..9321edcdf 100644
  	// std::cout << "Pull result: " << result << std::endl;
  	// std::cout << "Bytes: " << outOutputData->mBuffers[0].mDataByteSize << std::endl;
  	// m_auhalData.write((char*) outOutputData->mBuffers[0].mData, outOutputData->mBuffers[0].mDataByteSize);
+@@ -303,30 +664,46 @@ OSStatus AUHAL::doPlayback(const AudioTimeStamp* inNow, AudioBufferList* outOutp
+ 
+ OSStatus AUHAL::doRecord(const AudioTimeStamp* inNow, const AudioBufferList* inInputData, const AudioTimeStamp* inInputTime)
+ {
+-	// TODO: Prepare for non-interleaved audio
+-	std::unique_lock<std::mutex> lk(m_dataAvailableMutex);
+-
+-	if (m_bufferSize < inInputData->mBuffers[0].mDataByteSize)
+-	{
+-		m_buffer.reset(new uint8_t[inInputData->mBuffers[0].mDataByteSize]);
+-		m_bufferSize = inInputData->mBuffers[0].mDataByteSize;
+-	}
+-
+-	m_bufferUsed = inInputData->mBuffers[0].mDataByteSize;
+-	memcpy(m_buffer.get(), inInputData->mBuffers[0].mData, m_bufferUsed);
+-
+-	m_dataAvailable = true;
++	// The device records interleaved data in the bus 1 output format (see Start()).
++	const CAStreamBasicDescription& desc = GetStreamFormat(kAudioUnitScope_Output, kInputBus);
++	const UInt32 frameBytes = desc.mChannelsPerFrame * (desc.mBitsPerChannel / 8);
++	if (!inInputData || !inInputData->mNumberBuffers || !frameBytes)
++		return noErr;
+ 
+-	lk.unlock();
+-	m_dataAvailableCV.notify_one();
++	const uint8_t* source = static_cast<const uint8_t*>(inInputData->mBuffers[0].mData);
++	const UInt32 totalFrames = inInputData->mBuffers[0].mDataByteSize / frameBytes;
++	// AudioUnitRender refuses more than kAudioUnitProperty_MaximumFramesPerSlice frames.
++	const UInt32 maxFrames = std::max<UInt32>(1, GetMaxFramesPerSlice());
++	static mach_timebase_info_data_t tb = {0, 0};
++	if (!tb.denom) mach_timebase_info(&tb);
+ 
+-	if (m_outputAvailableCb.inputProc)
++	for (UInt32 offset = 0; offset < totalFrames; )
+ 	{
+-		AudioUnitRenderActionFlags flags = kAudioUnitRenderAction_PostRender;
+-		const CAStreamBasicDescription& desc = GetStreamFormat(kAudioUnitScope_Output, kInputBus);
+-		UInt32 numFrames = m_bufferUsed / desc.mBytesPerFrame;
++		const UInt32 numFrames = std::min(maxFrames, totalFrames - offset);
++		const size_t bytes = size_t(numFrames) * frameBytes;
++		{
++			std::lock_guard<std::mutex> lk(m_dataAvailableMutex);
++			if (m_bufferSize < bytes)
++			{
++				m_buffer.reset(new uint8_t[bytes]);
++				m_bufferSize = bytes;
++			}
++			memcpy(m_buffer.get(), source + size_t(offset) * frameBytes, bytes);
++			m_bufferUsed = bytes;
++		}
+ 
+-		m_outputAvailableCb.inputProc(m_outputAvailableCb.inputProcRefCon, &flags, inInputTime, kInputBus, numFrames, nullptr);
++		AudioTimeStamp time = *inInputTime;
++		time.mSampleTime += offset;
++		if (offset && desc.mSampleRate > 0 && tb.numer)
++			time.mHostTime += uint64_t(double(offset) / desc.mSampleRate * 1e9 * tb.denom / tb.numer);
++
++		// The client pulls the slice with AudioUnitRender(bus 1, numFrames) from this callback.
++		if (m_outputAvailableCb.inputProc)
++		{
++			AudioUnitRenderActionFlags flags = 0;
++			m_outputAvailableCb.inputProc(m_outputAvailableCb.inputProcRefCon, &flags, &time, kInputBus, numFrames, nullptr);
++		}
++		offset += numFrames;
+ 	}
+ 
+ 	return noErr;
 diff --git a/src/CoreAudio/CoreAudioComponent/AUHAL.h b/src/CoreAudio/CoreAudioComponent/AUHAL.h
-index bc21bcbbb..e369f95d1 100644
+index bc21bcbbb..fad727962 100644
 --- a/src/CoreAudio/CoreAudioComponent/AUHAL.h
 +++ b/src/CoreAudio/CoreAudioComponent/AUHAL.h
 @@ -25,6 +25,7 @@ along with Darling.  If not, see <http://www.gnu.org/licenses/>.
@@ -2720,7 +3360,7 @@ index bc21bcbbb..e369f95d1 100644
  
  class AUHAL : public AUBase
  {
-@@ -32,6 +33,9 @@ public:
+@@ -32,8 +33,12 @@ public:
  	AUHAL(AudioComponentInstance inInstance, bool supportRecording = true);
  	~AUHAL();
  
@@ -2729,8 +3369,20 @@ index bc21bcbbb..e369f95d1 100644
 +    OSStatus SetAudioChannelLayout(AudioUnitScope scope,AudioUnitElement element,const AudioChannelLayout* layout) override;
  	bool CanScheduleParameters() const override;
  	bool StreamFormatWritable(AudioUnitScope scope, AudioUnitElement element) override;
++	bool ValidFormat(AudioUnitScope scope, AudioUnitElement element, const CAStreamBasicDescription& format) override;
  	OSStatus Version() override;
-@@ -59,6 +63,7 @@ private:
+ 
+ 	OSStatus Start() override;
+@@ -43,7 +48,7 @@ public:
+ 	OSStatus GetPropertyInfo(AudioUnitPropertyID inID, AudioUnitScope inScope, AudioUnitElement inElement, UInt32& outDataSize, Boolean& outWritable) override;
+ 	OSStatus GetProperty(AudioUnitPropertyID inID, AudioUnitScope inScope, AudioUnitElement inElement, void* outData) override;
+ 
+-	OSStatus Render(AudioUnitRenderActionFlags& ioActionFlags, const AudioTimeStamp& inTimeStamp, UInt32 inNumberFrames) override;
++	OSStatus RenderBus(AudioUnitRenderActionFlags& ioActionFlags, const AudioTimeStamp& inTimeStamp, UInt32 inBusNumber, UInt32 inNumberFrames) override;
+ 
+ 	static OSStatus ComponentEntryDispatch(ComponentParameters *params, AUHAL *This);
+ private:
+@@ -59,6 +64,7 @@ private:
  		void* inClientData);
  
  	OSStatus doPlayback(const AudioTimeStamp* inNow, AudioBufferList* outOutputData, const AudioTimeStamp* inOutputTime);
@@ -2738,8 +3390,17 @@ index bc21bcbbb..e369f95d1 100644
  	OSStatus doRecord(const AudioTimeStamp* inNow, const AudioBufferList* inInputData, const AudioTimeStamp* inInputTime);
  	
  protected:
-@@ -76,6 +81,24 @@ protected:
- 	// TODO: Prepare for non-interleaved audio
+@@ -69,13 +75,29 @@ protected:
+ 	AudioDeviceID m_outputDevice, m_inputDevice;
+ 	AudioDeviceIOProcID m_outputProcID = 0, m_inputProcID = 0;
+ 
+-	bool m_dataAvailable = false;
+-	std::condition_variable m_dataAvailableCV;
++	// The latest recorded slice (interleaved, in the bus 1 output format), handed to
++	// AudioUnitRender(bus 1) from inside the input callback.
+ 	std::mutex m_dataAvailableMutex;
+-
+-	// TODO: Prepare for non-interleaved audio
  	std::unique_ptr<uint8_t[]> m_buffer;
  	size_t m_bufferSize = 0, m_bufferUsed = 0;
 +
@@ -2857,6 +3518,187 @@ index da44a9f18..f658118d8 100644
  	</array>
  	<key>CFBundleExecutable</key>
  	<string>CoreAudio</string>
+diff --git a/src/CoreAudio/CoreAudioComponent/MatrixMixerAU.cpp b/src/CoreAudio/CoreAudioComponent/MatrixMixerAU.cpp
+new file mode 100644
+index 000000000..57c70474a
+--- /dev/null
++++ b/src/CoreAudio/CoreAudioComponent/MatrixMixerAU.cpp
+@@ -0,0 +1,175 @@
++#include "../AudioTrace.h"
++/* This file is part of Darling, distributed under the GNU GPL v3 or later. */
++#include "AUBase.h"
++#include "AUInputElement.h"
++#include "AUOutputElement.h"
++#include "AUPlugInDispatch.h"
++#include <AudioToolbox/AudioUnitParameters.h>
++#include <map>
++#include <mutex>
++#include <cmath>
++#include <cstring>
++#include <cstdio>
++#include <cstdlib>
++#include <atomic>
++
++// Float PCM matrix mixing. Channel indices are flattened across each scope's buses.
++class MatrixMixerAU : public AUBase {
++    std::mutex mMutex;
++    std::map<UInt32, Float32> mGains;
++    std::map<UInt32, Float32> mInputEnabled, mOutputEnabled;
++    UInt32 channels(AudioUnitScope scope) {
++        auto& buses = GetScope(scope);
++        UInt32 count = 0;
++        for (UInt32 b = 0; b < buses.GetNumberOfElements(); ++b)
++            count += buses.GetIOElement(b)->GetStreamFormat().mChannelsPerFrame;
++        return count;
++    }
++    static Float32 value(const std::map<UInt32, Float32>& values, UInt32 key, Float32 fallback = 0) {
++        auto it = values.find(key);
++        return it == values.end() ? fallback : it->second;
++    }
++    bool validGain(UInt32 element) {
++        UInt32 input = element >> 16, output = element & 0xffff;
++        return (input == 0xffff || input < channels(kAudioUnitScope_Input)) &&
++               (output == 0xffff || output < channels(kAudioUnitScope_Output));
++    }
++    static Float32* sample(AudioBufferList& buffers, UInt32 channel, UInt32& stride) {
++        for (UInt32 b = 0; b < buffers.mNumberBuffers; ++b) {
++            AudioBuffer& buffer = buffers.mBuffers[b];
++            if (channel < buffer.mNumberChannels) {
++                stride = buffer.mNumberChannels;
++                return buffer.mData ? static_cast<Float32*>(buffer.mData) + channel : nullptr;
++            }
++            channel -= buffer.mNumberChannels;
++        }
++        return nullptr;
++    }
++public:
++    MatrixMixerAU(AudioComponentInstance instance) : AUBase(instance, 1, 1) {}
++    bool CanScheduleParameters() const override { return false; }
++    bool StreamFormatWritable(AudioUnitScope, AudioUnitElement) override { return !IsInitialized(); }
++    bool BusCountWritable(AudioUnitScope scope) override {
++        return scope == kAudioUnitScope_Input || scope == kAudioUnitScope_Output;
++    }
++    bool ValidFormat(AudioUnitScope scope, AudioUnitElement, const CAStreamBasicDescription& f) override {
++        if (!f.IsPCM() || !f.IsFloat() || f.mBitsPerChannel != 32 ||
++            !f.mChannelsPerFrame || f.mChannelsPerFrame >= 0xffff || f.mSampleRate <= 0 ||
++            (f.mFormatFlags & kAudioFormatFlagIsBigEndian) || f.mFramesPerPacket != 1)
++            return false;
++        UInt32 bytes = 4 * (f.IsInterleaved() ? f.mChannelsPerFrame : 1);
++        return f.mBytesPerFrame == bytes && f.mBytesPerPacket == bytes;
++    }
++    OSStatus Initialize() override {
++        if (!Inputs().GetNumberOfElements() || !Outputs().GetNumberOfElements() ||
++            channels(kAudioUnitScope_Input) >= 0xffff || channels(kAudioUnitScope_Output) >= 0xffff)
++            return kAudioUnitErr_FormatNotSupported;
++        /* darling-lol: the rate must agree across the buses that are in use. League declares more buses than it uses (it
++         * sets the element counts and configures bus 0 only); the unused ones keep a default rate and used to make this
++         * initialize fail with FormatNotSupported, which sent the game into an endless graph rebuild loop. Input buses
++         * that have no source are never pulled (RenderBus skips them), and only output bus 0 is ever connected. */
++        double rate = GetOutput(0)->GetStreamFormat().mSampleRate;
++        for (UInt32 b = 0; b < Inputs().GetNumberOfElements(); ++b) {
++            const double r = GetInput(b)->GetStreamFormat().mSampleRate;
++            if (GetInput(b)->IsActive() && r != rate) {
++                rclolAudioTrace("MIXER_INIT_RATE_MISMATCH input=%u rate=%.0f output0=%.0f\n", b, r, rate);
++                return kAudioUnitErr_FormatNotSupported;
++            }
++        }
++        return AUBase::Initialize();
++    }
++    OSStatus SetParameter(AudioUnitParameterID id, AudioUnitScope scope, AudioUnitElement element,
++                          AudioUnitParameterValue gain, UInt32) override {
++        static std::atomic<unsigned> traceCount{0};
++        if (rclolAudioTraceEnabled() && traceCount++ < 64)
++            rclolAudioTrace("AUDIO_MATRIX_PARAM id=%u scope=%u element=%08x gain=%g\n",id,scope,element,gain);
++        std::lock_guard<std::mutex> lock(mMutex);
++        if (!std::isfinite(gain)) return kAudioUnitErr_InvalidParameter;
++        if (id == kMatrixMixerParam_Volume) {
++            if (scope == kAudioUnitScope_Input) {
++                if (element >= channels(scope)) return kAudioUnitErr_InvalidElement;
++                element = (element << 16) | 0xffff;
++            } else if (scope == kAudioUnitScope_Output) {
++                if (element >= channels(scope)) return kAudioUnitErr_InvalidElement;
++                element |= 0xffff0000;
++            } else if (scope != kAudioUnitScope_Global) return kAudioUnitErr_InvalidScope;
++            if (!validGain(element)) return kAudioUnitErr_InvalidElement;
++            mGains[element] = gain;
++            return noErr;
++        }
++        if (id == kMatrixMixerParam_Enable &&
++            (scope == kAudioUnitScope_Input || scope == kAudioUnitScope_Output)) {
++            if (element >= GetScope(scope).GetNumberOfElements()) return kAudioUnitErr_InvalidElement;
++            (scope == kAudioUnitScope_Input ? mInputEnabled : mOutputEnabled)[element] = gain != 0;
++            return noErr;
++        }
++        return kAudioUnitErr_InvalidParameter;
++    }
++    OSStatus GetParameter(AudioUnitParameterID id, AudioUnitScope scope, AudioUnitElement element,
++                          AudioUnitParameterValue& gain) override {
++        std::lock_guard<std::mutex> lock(mMutex);
++        if (id == kMatrixMixerParam_Volume) {
++            if (scope == kAudioUnitScope_Input || scope == kAudioUnitScope_Output) {
++                if (element >= channels(scope)) return kAudioUnitErr_InvalidElement;
++                element = scope == kAudioUnitScope_Input ? (element << 16) | 0xffff : element | 0xffff0000;
++            } else if (scope != kAudioUnitScope_Global) return kAudioUnitErr_InvalidScope;
++            if (!validGain(element)) return kAudioUnitErr_InvalidElement;
++            gain = value(mGains, element);
++            return noErr;
++        }
++        if (id == kMatrixMixerParam_Enable &&
++            (scope == kAudioUnitScope_Input || scope == kAudioUnitScope_Output)) {
++            if (element >= GetScope(scope).GetNumberOfElements()) return kAudioUnitErr_InvalidElement;
++            gain = value(scope == kAudioUnitScope_Input ? mInputEnabled : mOutputEnabled, element, 1);
++            return noErr;
++        }
++        return kAudioUnitErr_InvalidParameter;
++    }
++    OSStatus RenderBus(AudioUnitRenderActionFlags& flags, const AudioTimeStamp& time,
++                       UInt32 bus, UInt32 frames) override {
++        auto& output = GetOutput(bus)->GetBufferList();
++        for (UInt32 b = 0; b < output.mNumberBuffers; ++b)
++            if (output.mBuffers[b].mData) memset(output.mBuffers[b].mData, 0, output.mBuffers[b].mDataByteSize);
++        UInt32 outputOffset = 0;
++        for (UInt32 b = 0; b < bus; ++b) outputOffset += GetOutput(b)->GetStreamFormat().mChannelsPerFrame;
++        UInt32 inputOffset = 0;
++        bool silent = true;
++        for (UInt32 b = 0; b < Inputs().GetNumberOfElements(); ++b) {
++            auto* input = GetInput(b);
++            UInt32 inputChannels = input->GetStreamFormat().mChannelsPerFrame;
++            // Pull without holding the parameter lock: callbacks may change parameters.
++            if (input->IsActive()) {
++                AudioUnitRenderActionFlags inputFlags = 0;
++                OSStatus status = input->PullInput(inputFlags, time, b, frames);
++                if (status) return status;
++                auto& data = input->GetBufferList();
++                std::lock_guard<std::mutex> lock(mMutex);
++                if (value(mInputEnabled, b, 1) && value(mOutputEnabled, bus, 1) &&
++                    !(inputFlags & kAudioUnitRenderAction_OutputIsSilence)) {
++                    for (UInt32 i = 0; i < inputChannels; ++i) {
++                        UInt32 inputStride = 0;
++                        Float32* src = sample(data, i, inputStride);
++                        for (UInt32 o = 0; o < GetOutput(bus)->GetStreamFormat().mChannelsPerFrame; ++o) {
++                            UInt32 outputStride = 0;
++                            Float32* dst = sample(output, o, outputStride);
++                            Float32 gain = value(mGains, 0xffffffff) *
++                                value(mGains, ((inputOffset+i) << 16) | 0xffff) *
++                                value(mGains, 0xffff0000 | (outputOffset+o)) *
++                                value(mGains, ((inputOffset+i) << 16) | (outputOffset+o));
++                            if (!src || !dst || !gain) continue;
++                            for (UInt32 f = 0; f < frames; ++f) dst[f*outputStride] += src[f*inputStride] * gain;
++                            silent = false;
++                        }
++                    }
++                }
++            }
++            inputOffset += inputChannels;
++        }
++        if (silent) flags |= kAudioUnitRenderAction_OutputIsSilence;
++        else flags &= ~kAudioUnitRenderAction_OutputIsSilence;
++        return noErr;
++    }
++};
++#pragma GCC visibility push(default)
++AUDIOCOMPONENT_ENTRY(AUBaseFactory, MatrixMixerAU);
++#pragma GCC visibility pop
 diff --git a/src/CoreAudio/include/CoreAudio/AudioHardwareBase.h b/src/CoreAudio/include/CoreAudio/AudioHardwareBase.h
 index 102614203..9b80671a6 100644
 --- a/src/CoreAudio/include/CoreAudio/AudioHardwareBase.h
@@ -2896,174 +3738,6 @@ index 102614203..9b80671a6 100644
  
  #endif /* AUDIOHARDWAREBASE_H */
 -
-diff --git a/src/external/IOKitUser b/src/external/IOKitUser
---- a/src/external/IOKitUser
-+++ b/src/external/IOKitUser
-@@ -1 +1 @@
--Subproject commit 534684e6748dffbd875c6cd1942477a52b66a077
-+Subproject commit 534684e6748dffbd875c6cd1942477a52b66a077-dirty
-diff --git a/src/external/Libinfo b/src/external/Libinfo
---- a/src/external/Libinfo
-+++ b/src/external/Libinfo
-@@ -1 +1 @@
--Subproject commit 93d242ce3f86d1de67522279edb3a2dcb23f30c7
-+Subproject commit 93d242ce3f86d1de67522279edb3a2dcb23f30c7-dirty
-diff --git a/src/external/OpenDirectory b/src/external/OpenDirectory
---- a/src/external/OpenDirectory
-+++ b/src/external/OpenDirectory
-@@ -1 +1 @@
--Subproject commit 67a8ad2ed0b06775bf53839446e2df7d49ab1c96
-+Subproject commit 67a8ad2ed0b06775bf53839446e2df7d49ab1c96-dirty
-diff --git a/src/external/cfnetwork b/src/external/cfnetwork
---- a/src/external/cfnetwork
-+++ b/src/external/cfnetwork
-@@ -1 +1 @@
--Subproject commit e7e3db881008d883f82914765a72ce842bcba735
-+Subproject commit e7e3db881008d883f82914765a72ce842bcba735-dirty
-diff --git a/src/external/cocotron b/src/external/cocotron
---- a/src/external/cocotron
-+++ b/src/external/cocotron
-@@ -1 +1 @@
--Subproject commit c8d38d16a9f613d300157bebbab2b9501bc0c274
-+Subproject commit c8d38d16a9f613d300157bebbab2b9501bc0c274-dirty
-diff --git a/src/external/compiler-rt b/src/external/compiler-rt
---- a/src/external/compiler-rt
-+++ b/src/external/compiler-rt
-@@ -1 +1 @@
--Subproject commit 5fd9bc0effa307b99b35da59ce579e8e031c22da
-+Subproject commit 5fd9bc0effa307b99b35da59ce579e8e031c22da-dirty
-diff --git a/src/external/configd b/src/external/configd
---- a/src/external/configd
-+++ b/src/external/configd
-@@ -1 +1 @@
--Subproject commit 98e52de19c52f7938e581ed20385f38abd7fa197
-+Subproject commit 98e52de19c52f7938e581ed20385f38abd7fa197-dirty
-diff --git a/src/external/corecrypto b/src/external/corecrypto
---- a/src/external/corecrypto
-+++ b/src/external/corecrypto
-@@ -1 +1 @@
--Subproject commit 875f1cd9e75b0029d872b88ce8a77da276c00c84
-+Subproject commit 875f1cd9e75b0029d872b88ce8a77da276c00c84-dirty
-diff --git a/src/external/corefoundation b/src/external/corefoundation
---- a/src/external/corefoundation
-+++ b/src/external/corefoundation
-@@ -1 +1 @@
--Subproject commit a3640a77410cf1825f7855172b1551ae7917c461
-+Subproject commit a3640a77410cf1825f7855172b1551ae7917c461-dirty
-diff --git a/src/external/curl b/src/external/curl
---- a/src/external/curl
-+++ b/src/external/curl
-@@ -1 +1 @@
--Subproject commit 92f54fd7eceabed2c2382a4acc0f7293dedd92ff
-+Subproject commit 92f54fd7eceabed2c2382a4acc0f7293dedd92ff-dirty
-diff --git a/src/external/darlingserver b/src/external/darlingserver
---- a/src/external/darlingserver
-+++ b/src/external/darlingserver
-@@ -1 +1 @@
--Subproject commit 89751e64bc6c2082f7725061824ee0e33395b0de
-+Subproject commit 89751e64bc6c2082f7725061824ee0e33395b0de-dirty
-diff --git a/src/external/foundation b/src/external/foundation
---- a/src/external/foundation
-+++ b/src/external/foundation
-@@ -1 +1 @@
--Subproject commit 55a4341b470c2a56fea667c1d2167fb074226f04
-+Subproject commit 55a4341b470c2a56fea667c1d2167fb074226f04-dirty
-diff --git a/src/external/iokitd b/src/external/iokitd
---- a/src/external/iokitd
-+++ b/src/external/iokitd
-@@ -1 +1 @@
--Subproject commit 5549ac4cd2db923c256f016a1381b3bfb716730a
-+Subproject commit 5549ac4cd2db923c256f016a1381b3bfb716730a-dirty
-diff --git a/src/external/libcxxabi b/src/external/libcxxabi
---- a/src/external/libcxxabi
-+++ b/src/external/libcxxabi
-@@ -1 +1 @@
--Subproject commit c9c851718eb304a9aefa097aeaaf8c3bd1dff1bc
-+Subproject commit c9c851718eb304a9aefa097aeaaf8c3bd1dff1bc-dirty
-diff --git a/src/external/libdispatch b/src/external/libdispatch
---- a/src/external/libdispatch
-+++ b/src/external/libdispatch
-@@ -1 +1 @@
--Subproject commit 380f03c180b80d940134fb35783ddc714784a53a
-+Subproject commit 380f03c180b80d940134fb35783ddc714784a53a-dirty
-diff --git a/src/external/libkqueue b/src/external/libkqueue
---- a/src/external/libkqueue
-+++ b/src/external/libkqueue
-@@ -1 +1 @@
--Subproject commit b0795a2e1dab5331116770139bfea8d832478f5f
-+Subproject commit b0795a2e1dab5331116770139bfea8d832478f5f-dirty
-diff --git a/src/external/libmalloc b/src/external/libmalloc
---- a/src/external/libmalloc
-+++ b/src/external/libmalloc
-@@ -1 +1 @@
--Subproject commit a57991e2651226a675654bd96e5d9ab6bec288c5
-+Subproject commit a57991e2651226a675654bd96e5d9ab6bec288c5-dirty
-diff --git a/src/external/libnetwork b/src/external/libnetwork
---- a/src/external/libnetwork
-+++ b/src/external/libnetwork
-@@ -1 +1 @@
--Subproject commit 56c5fad43f24a40d8ca7f8a1d0badedfeaf7e64e
-+Subproject commit 56c5fad43f24a40d8ca7f8a1d0badedfeaf7e64e-dirty
-diff --git a/src/external/libnotify b/src/external/libnotify
---- a/src/external/libnotify
-+++ b/src/external/libnotify
-@@ -1 +1 @@
--Subproject commit 98156d3f847a3ced6c5f52c12a889047bc4f9b20
-+Subproject commit 98156d3f847a3ced6c5f52c12a889047bc4f9b20-dirty
-diff --git a/src/external/libplatform b/src/external/libplatform
---- a/src/external/libplatform
-+++ b/src/external/libplatform
-@@ -1 +1 @@
--Subproject commit 5a3e5b529d25c70257dcfa97e94f1826e71e9f40
-+Subproject commit 5a3e5b529d25c70257dcfa97e94f1826e71e9f40-dirty
-diff --git a/src/external/libpthread b/src/external/libpthread
---- a/src/external/libpthread
-+++ b/src/external/libpthread
-@@ -1 +1 @@
--Subproject commit f07f265bfbcf071c1adfc808de971e053ea5edc5
-+Subproject commit f07f265bfbcf071c1adfc808de971e053ea5edc5-dirty
-diff --git a/src/external/libresolv b/src/external/libresolv
---- a/src/external/libresolv
-+++ b/src/external/libresolv
-@@ -1 +1 @@
--Subproject commit cf955392e5449efb269b8b3510c755085fd36a2d
-+Subproject commit cf955392e5449efb269b8b3510c755085fd36a2d-dirty
-diff --git a/src/external/libtrace b/src/external/libtrace
---- a/src/external/libtrace
-+++ b/src/external/libtrace
-@@ -1 +1 @@
--Subproject commit 8cf07f02b15f7dca6436882a03678fff0392eaf6
-+Subproject commit 8cf07f02b15f7dca6436882a03678fff0392eaf6-dirty
-diff --git a/src/external/libxpc b/src/external/libxpc
---- a/src/external/libxpc
-+++ b/src/external/libxpc
-@@ -1 +1 @@
--Subproject commit 394e033333d3c253a12f08a99090c113b0917d00
-+Subproject commit 394e033333d3c253a12f08a99090c113b0917d00-dirty
-diff --git a/src/external/metal b/src/external/metal
---- a/src/external/metal
-+++ b/src/external/metal
-@@ -1 +1 @@
--Subproject commit ae20248dc144beab899e38752f5a530f28a0ea56
-+Subproject commit ae20248dc144beab899e38752f5a530f28a0ea56-dirty
-diff --git a/src/external/objc4 b/src/external/objc4
---- a/src/external/objc4
-+++ b/src/external/objc4
-@@ -1 +1 @@
--Subproject commit 1a12df76d12bfc9fdfffadb290f7742763568765
-+Subproject commit 1a12df76d12bfc9fdfffadb290f7742763568765-dirty
-diff --git a/src/external/security b/src/external/security
---- a/src/external/security
-+++ b/src/external/security
-@@ -1 +1 @@
--Subproject commit 3cfffcf2c5b5900169c964facdf42cc05c23005c
-+Subproject commit 3cfffcf2c5b5900169c964facdf42cc05c23005c-dirty
-diff --git a/src/external/xnu b/src/external/xnu
---- a/src/external/xnu
-+++ b/src/external/xnu
-@@ -1 +1 @@
--Subproject commit fa29287aa2f0115271e091f1031f53c9e024005d
-+Subproject commit fa29287aa2f0115271e091f1031f53c9e024005d-dirty
 diff --git a/src/frameworks/AVFoundation/include/AVFoundation/AVCaptureDevice.h b/src/frameworks/AVFoundation/include/AVFoundation/AVCaptureDevice.h
 index cb2896957..b2c25fbd4 100644
 --- a/src/frameworks/AVFoundation/include/AVFoundation/AVCaptureDevice.h
@@ -3092,10 +3766,16 @@ index cb2896957..b2c25fbd4 100644
 +
  @end
 diff --git a/src/frameworks/AVFoundation/src/AVCaptureDevice.m b/src/frameworks/AVFoundation/src/AVCaptureDevice.m
-index cab525b91..2fcab003d 100644
+index cab525b91..4b3dd6541 100644
 --- a/src/frameworks/AVFoundation/src/AVCaptureDevice.m
 +++ b/src/frameworks/AVFoundation/src/AVCaptureDevice.m
-@@ -21,6 +21,37 @@
+@@ -18,9 +18,75 @@
+ */
+ 
+ #import <AVFoundation/AVCaptureDevice.h>
++#include <dispatch/dispatch.h>
++#include <dlfcn.h>
++#include <CoreAudio/AudioHardware.h>
  
  @implementation AVCaptureDevice
  
@@ -3114,20 +3794,52 @@ index cab525b91..2fcab003d 100644
 +}
 +
 +
++// Darling has no TCC consent store. Microphone input works through CoreAudio
++// (PulseAudio), so audio is authorized whenever CoreAudio reports a default input
++// device. CoreAudio is looked up at run time: AVFoundation does not link it, and
++// this query only reads its device table (no PulseAudio connection is made).
++static BOOL hasDefaultInputDevice(void)
++{
++	static OSStatus (*getProperty)(AudioObjectID, const AudioObjectPropertyAddress*, UInt32, const void*, UInt32*, void*);
++	static dispatch_once_t once;
++	dispatch_once(&once, ^{
++		// Never closed: CoreAudio keeps process-wide state once loaded.
++		void* coreAudio = dlopen("/System/Library/Frameworks/CoreAudio.framework/CoreAudio", RTLD_LAZY | RTLD_LOCAL);
++		if (coreAudio)
++			getProperty = dlsym(coreAudio, "AudioObjectGetPropertyData");
++	});
++	if (!getProperty)
++		return NO;
++	AudioDeviceID device = kAudioObjectUnknown;
++	UInt32 size = sizeof(device);
++	AudioObjectPropertyAddress address = {
++		kAudioHardwarePropertyDefaultInputDevice, kAudioObjectPropertyScopeGlobal, kAudioObjectPropertyElementMaster
++	};
++	return getProperty(kAudioObjectSystemObject, &address, 0, NULL, &size, &device) == noErr
++		&& device != kAudioObjectUnknown;
++}
++
 ++ (AVAuthorizationStatus)authorizationStatusForMediaType:(AVMediaType)mediaType
 +{
-+	// Darling has no camera/microphone capture or TCC consent store;
-+	// report Denied so callers take their no-access path instead of
-+	// raising an unrecognized-selector exception.
-+	(void)mediaType;
++	// There is no camera capture; report Denied so callers take their
++	// no-access path instead of raising an unrecognized-selector exception.
++	if ([mediaType isEqualToString: AVMediaTypeAudio] && hasDefaultInputDevice())
++		return AVAuthorizationStatusAuthorized;
 +	return AVAuthorizationStatusDenied;
 +}
 +
 ++ (void)requestAccessForMediaType:(AVMediaType)mediaType completionHandler:(void (^)(BOOL))handler
 +{
-+	(void)mediaType;
-+	if (handler)
-+		handler(NO);
++	if (!handler)
++		return;
++	BOOL granted = [self authorizationStatusForMediaType: mediaType] == AVAuthorizationStatusAuthorized;
++	// macOS calls the handler later on an arbitrary queue, never inside this call;
++	// callers may hold locks here or wait on the main thread for the result.
++	void (^copied)(BOOL) = [handler copy];
++	dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
++		copied(granted);
++		[copied release];
++	});
 +}
 +
  - (NSMethodSignature *)methodSignatureForSelector:(SEL)aSelector {
@@ -3311,6 +4023,238 @@ index c6b437c5b..88505eda4 100644
  void* vDSP_zvmulD(void);
  void* vDSP_zvneg(void);
  void* vDSP_zvnegD(void);
+diff --git a/src/frameworks/Accelerate/vecLib/vDSP/src/arith.c b/src/frameworks/Accelerate/vecLib/vDSP/src/arith.c
+new file mode 100644
+index 000000000..52550fb96
+--- /dev/null
++++ b/src/frameworks/Accelerate/vecLib/vDSP/src/arith.c
+@@ -0,0 +1,226 @@
++/*
++ This file is part of Darling.
++
++ Copyright (C) 2026 Darling Developers
++
++ Darling is free software: you can redistribute it and/or modify
++ it under the terms of the GNU General Public License as published by
++ the Free Software Foundation, either version 3 of the License, or
++ (at your option) any later version.
++
++ Darling is distributed in the hope that it will be useful,
++ but WITHOUT ANY WARRANTY; without even the implied warranty of
++ MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++ GNU General Public License for more details.
++
++ You should have received a copy of the GNU General Public License
++ along with Darling.  If not, see <http://www.gnu.org/licenses/>.
++*/
++
++#include <vDSP/vDSP.h>
++
++void vDSP_vadd(const float *__A, vDSP_Stride __IA, const float *__B, vDSP_Stride __IB, float *__C, vDSP_Stride __IC, vDSP_Length __N)
++{
++	if (__IA == 1 && __IB == 1 && __IC == 1)
++	{
++		for (vDSP_Length i = 0; i < __N; i++)
++			__C[i] = __A[i] + __B[i];
++	}
++	else
++	{
++		for (vDSP_Length i = 0; i < __N; i++)
++			__C[i * __IC] = __A[i * __IA] + __B[i * __IB];
++	}
++}
++
++// Apple's argument order: the subtrahend B comes first, C = A - B.
++void vDSP_vsub(const float *__B, vDSP_Stride __IB, const float *__A, vDSP_Stride __IA, float *__C, vDSP_Stride __IC, vDSP_Length __N)
++{
++	if (__IA == 1 && __IB == 1 && __IC == 1)
++	{
++		for (vDSP_Length i = 0; i < __N; i++)
++			__C[i] = __A[i] - __B[i];
++	}
++	else
++	{
++		for (vDSP_Length i = 0; i < __N; i++)
++			__C[i * __IC] = __A[i * __IA] - __B[i * __IB];
++	}
++}
++
++void vDSP_vmul(const float *__A, vDSP_Stride __IA, const float *__B, vDSP_Stride __IB, float *__C, vDSP_Stride __IC, vDSP_Length __N)
++{
++	if (__IA == 1 && __IB == 1 && __IC == 1)
++	{
++		for (vDSP_Length i = 0; i < __N; i++)
++			__C[i] = __A[i] * __B[i];
++	}
++	else
++	{
++		for (vDSP_Length i = 0; i < __N; i++)
++			__C[i * __IC] = __A[i * __IA] * __B[i * __IB];
++	}
++}
++
++void vDSP_vsmul(const float *__A, vDSP_Stride __IA, const float *__B, float *__C, vDSP_Stride __IC, vDSP_Length __N)
++{
++	const float b = *__B;
++
++	if (__IA == 1 && __IC == 1)
++	{
++		for (vDSP_Length i = 0; i < __N; i++)
++			__C[i] = __A[i] * b;
++	}
++	else
++	{
++		for (vDSP_Length i = 0; i < __N; i++)
++			__C[i * __IC] = __A[i * __IA] * b;
++	}
++}
++
++void vDSP_vsadd(const float *__A, vDSP_Stride __IA, const float *__B, float *__C, vDSP_Stride __IC, vDSP_Length __N)
++{
++	const float b = *__B;
++
++	if (__IA == 1 && __IC == 1)
++	{
++		for (vDSP_Length i = 0; i < __N; i++)
++			__C[i] = __A[i] + b;
++	}
++	else
++	{
++		for (vDSP_Length i = 0; i < __N; i++)
++			__C[i * __IC] = __A[i * __IA] + b;
++	}
++}
++
++void vDSP_vsma(const float *__A, vDSP_Stride __IA, const float *__B, const float *__C, vDSP_Stride __IC, float *__D, vDSP_Stride __ID, vDSP_Length __N)
++{
++	const float b = *__B;
++
++	if (__IA == 1 && __IC == 1 && __ID == 1)
++	{
++		for (vDSP_Length i = 0; i < __N; i++)
++			__D[i] = __A[i] * b + __C[i];
++	}
++	else
++	{
++		for (vDSP_Length i = 0; i < __N; i++)
++			__D[i * __ID] = __A[i * __IA] * b + __C[i * __IC];
++	}
++}
++
++void vDSP_svesq(const float *__A, vDSP_Stride __IA, float *__C, vDSP_Length __N)
++{
++	float sum = 0;
++
++	for (vDSP_Length i = 0; i < __N; i++)
++		sum += __A[i * __IA] * __A[i * __IA];
++	*__C = sum;
++}
++
++void vDSP_vclip(const float *__A, vDSP_Stride __IA, const float *__B, const float *__C, float *__D, vDSP_Stride __ID, vDSP_Length __N)
++{
++	const float low = *__B, high = *__C;
++
++	for (vDSP_Length i = 0; i < __N; i++)
++	{
++		float v = __A[i * __IA];
++		if (v < low)
++			v = low;
++		else if (v > high)
++			v = high;
++		__D[i * __ID] = v;
++	}
++}
++
++// Correlation, or convolution when F points at the filter's last tap with a negative stride.
++void vDSP_conv(const float *__A, vDSP_Stride __IA, const float *__F, vDSP_Stride __IF, float *__C, vDSP_Stride __IC, vDSP_Length __N, vDSP_Length __P)
++{
++	for (vDSP_Length n = 0; n < __N; n++)
++	{
++		const float *a = __A + n * __IA;
++		float sum = 0;
++
++		for (vDSP_Length p = 0; p < __P; p++)
++			sum += a[p * __IA] * __F[p * __IF];
++		__C[n * __IC] = sum;
++	}
++}
++
++// IC counts floats, so 2 is a contiguous DSPComplex array.
++void vDSP_ctoz(const DSPComplex *__C, vDSP_Stride __IC, const DSPSplitComplex *__Z, vDSP_Stride __IZ, vDSP_Length __N)
++{
++	const float *c = (const float *) __C;
++
++	for (vDSP_Length i = 0; i < __N; i++)
++	{
++		__Z->realp[i * __IZ] = c[i * __IC];
++		__Z->imagp[i * __IZ] = c[i * __IC + 1];
++	}
++}
++
++void vDSP_ztoc(const DSPSplitComplex *__Z, vDSP_Stride __IZ, DSPComplex *__C, vDSP_Stride __IC, vDSP_Length __N)
++{
++	float *c = (float *) __C;
++
++	for (vDSP_Length i = 0; i < __N; i++)
++	{
++		c[i * __IC] = __Z->realp[i * __IZ];
++		c[i * __IC + 1] = __Z->imagp[i * __IZ];
++	}
++}
++
++// C may alias A or B. Conjugate is 1 for A * B and -1 for conj(A) * B.
++void vDSP_zvmul(const DSPSplitComplex *__A, vDSP_Stride __IA, const DSPSplitComplex *__B, vDSP_Stride __IB, const DSPSplitComplex *__C, vDSP_Stride __IC, vDSP_Length __N, int __Conjugate)
++{
++	const float sign = __Conjugate == -1 ? -1.0f : 1.0f;
++
++	for (vDSP_Length i = 0; i < __N; i++)
++	{
++		const float ar = __A->realp[i * __IA], ai = sign * __A->imagp[i * __IA];
++		const float br = __B->realp[i * __IB], bi = __B->imagp[i * __IB];
++
++		__C->realp[i * __IC] = ar * br - ai * bi;
++		__C->imagp[i * __IC] = ar * bi + ai * br;
++	}
++}
++
++// Two-pole two-zero filter. A and C hold N + 2 elements; C[0] and C[1] are the initial outputs.
++void vDSP_deq22D(const double *__A, vDSP_Stride __IA, const double *__B, double *__C, vDSP_Stride __IC, vDSP_Length __N)
++{
++	const double b0 = __B[0], b1 = __B[1], b2 = __B[2], a1 = __B[3], a2 = __B[4];
++	double x1 = __A[__IA], x2 = __A[0];
++	double y1 = __C[__IC], y2 = __C[0];
++
++	for (vDSP_Length n = 2; n < __N + 2; n++)
++	{
++		const double x = __A[n * __IA];
++		const double y = b0 * x + b1 * x1 + b2 * x2 - a1 * y1 - a2 * y2;
++
++		__C[n * __IC] = y;
++		x2 = x1;
++		x1 = x;
++		y2 = y1;
++		y1 = y;
++	}
++}
++
++void vDSP_deq22(const float *__A, vDSP_Stride __IA, const float *__B, float *__C, vDSP_Stride __IC, vDSP_Length __N)
++{
++	const float b0 = __B[0], b1 = __B[1], b2 = __B[2], a1 = __B[3], a2 = __B[4];
++	float x1 = __A[__IA], x2 = __A[0];
++	float y1 = __C[__IC], y2 = __C[0];
++
++	for (vDSP_Length n = 2; n < __N + 2; n++)
++	{
++		const float x = __A[n * __IA];
++		const float y = b0 * x + b1 * x1 + b2 * x2 - a1 * y1 - a2 * y2;
++
++		__C[n * __IC] = y;
++		x2 = x1;
++		x1 = x;
++		y2 = y1;
++		y1 = y;
++	}
++}
 diff --git a/src/frameworks/Accelerate/vecLib/vDSP/src/basic.c b/src/frameworks/Accelerate/vecLib/vDSP/src/basic.c
 deleted file mode 100644
 index ecdd15b23..000000000
@@ -3353,6 +4297,174 @@ index ecdd15b23..000000000
 -			__C[i * __IC] = __A[i * __IA] + __B[i * __IA];
 -	}
 -}
+diff --git a/src/frameworks/Accelerate/vecLib/vDSP/src/fft.c b/src/frameworks/Accelerate/vecLib/vDSP/src/fft.c
+new file mode 100644
+index 000000000..92873d796
+--- /dev/null
++++ b/src/frameworks/Accelerate/vecLib/vDSP/src/fft.c
+@@ -0,0 +1,162 @@
++/*
++ This file is part of Darling.
++
++ Copyright (C) 2026 Darling Developers
++
++ Darling is free software: you can redistribute it and/or modify
++ it under the terms of the GNU General Public License as published by
++ the Free Software Foundation, either version 3 of the License, or
++ (at your option) any later version.
++
++ Darling is distributed in the hope that it will be useful,
++ but WITHOUT ANY WARRANTY; without even the implied warranty of
++ MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++ GNU General Public License for more details.
++
++ You should have received a copy of the GNU General Public License
++ along with Darling.  If not, see <http://www.gnu.org/licenses/>.
++*/
++
++#include <vDSP/vDSP.h>
++#include <stdlib.h>
++#include <math.h>
++
++// Setups are shared between threads, so only read-only twiddles live here.
++struct OpaqueFFTSetup
++{
++	vDSP_Length log2n;
++	float *cosine;
++	float *sine;
++};
++
++FFTSetup vDSP_create_fftsetup(vDSP_Length __Log2n, FFTRadix __Radix)
++{
++	if (__Radix != kFFTRadix2 || __Log2n > 30)
++		return NULL;
++
++	const size_t n = (size_t) 1 << __Log2n;
++	const size_t half = n > 1 ? n / 2 : 1;
++	struct OpaqueFFTSetup *setup = malloc(sizeof(*setup) + 2 * half * sizeof(float));
++
++	if (!setup)
++		return NULL;
++	setup->log2n = __Log2n;
++	setup->cosine = (float *) (setup + 1);
++	setup->sine = setup->cosine + half;
++	for (size_t j = 0; j < half; j++)
++	{
++		const double angle = 2.0 * M_PI * (double) j / (double) n;
++		setup->cosine[j] = cos(angle);
++		setup->sine[j] = sin(angle);
++	}
++	return setup;
++}
++
++void vDSP_destroy_fftsetup(FFTSetup __setup)
++{
++	free(__setup);
++}
++
++// In-place radix-2 complex FFT of 2^log2m points, e^-i for forward and e^+i for inverse, unscaled.
++static void complex_fft(const struct OpaqueFFTSetup *setup, float *re, float *im, vDSP_Stride stride, vDSP_Length log2m, int inverse)
++{
++	const size_t m = (size_t) 1 << log2m;
++	const size_t full = (size_t) 1 << setup->log2n;
++
++	for (size_t i = 1, j = 0; i < m; i++)
++	{
++		size_t bit = m >> 1;
++		for (; j & bit; bit >>= 1)
++			j ^= bit;
++		j ^= bit;
++		if (i < j)
++		{
++			float t = re[i * stride];
++			re[i * stride] = re[j * stride];
++			re[j * stride] = t;
++			t = im[i * stride];
++			im[i * stride] = im[j * stride];
++			im[j * stride] = t;
++		}
++	}
++
++	for (size_t len = 2; len <= m; len <<= 1)
++	{
++		const size_t half = len >> 1;
++		const size_t step = full / len;
++
++		for (size_t base = 0; base < m; base += len)
++		{
++			for (size_t k = 0; k < half; k++)
++			{
++				const float wr = setup->cosine[k * step];
++				const float wi = inverse ? setup->sine[k * step] : -setup->sine[k * step];
++				const size_t a = (base + k) * stride, b = (base + k + half) * stride;
++				const float tr = re[b] * wr - im[b] * wi;
++				const float ti = re[b] * wi + im[b] * wr;
++
++				re[b] = re[a] - tr;
++				im[b] = im[a] - ti;
++				re[a] += tr;
++				im[a] += ti;
++			}
++		}
++	}
++}
++
++// Real FFT on N = 2^Log2N points packed as N/2 complex values (even samples real, odd imaginary).
++// Forward returns twice the DFT with X[0] in realp[0] and X[N/2] in imagp[0]; inverse is unscaled,
++// so a round trip multiplies by 2N, as on macOS.
++void vDSP_fft_zrip(FFTSetup __Setup, const DSPSplitComplex *__C, vDSP_Stride __IC, vDSP_Length __Log2N, FFTDirection __Direction)
++{
++	if (!__Setup || __Log2N == 0 || __Log2N > __Setup->log2n)
++		return;
++
++	float *re = __C->realp, *im = __C->imagp;
++	const vDSP_Stride s = __IC;
++	const size_t m = (size_t) 1 << (__Log2N - 1);
++	const size_t step = ((size_t) 1 << __Setup->log2n) >> __Log2N;
++
++	if (__Direction != kFFTDirection_Inverse)
++	{
++		complex_fft(__Setup, re, im, s, __Log2N - 1, 0);
++
++		const float z0r = re[0], z0i = im[0];
++		re[0] = 2 * (z0r + z0i);
++		im[0] = 2 * (z0r - z0i);
++
++		for (size_t k = 1; k <= m / 2; k++)
++		{
++			const size_t j = m - k;
++			const float c = __Setup->cosine[k * step], sn = __Setup->sine[k * step];
++			const float ar = re[k * s], ai = im[k * s], br = re[j * s], bi = im[j * s];
++			const float sr = ar + br, si = ai - bi, dr = ar - br, di = ai + bi;
++
++			re[k * s] = sr + (c * di - sn * dr);
++			im[k * s] = si - (c * dr + sn * di);
++			re[j * s] = sr - (c * di - sn * dr);
++			im[j * s] = -si - (c * dr + sn * di);
++		}
++	}
++	else
++	{
++		const float p0r = re[0], p0i = im[0];
++		re[0] = p0r + p0i;
++		im[0] = p0r - p0i;
++
++		for (size_t k = 1; k <= m / 2; k++)
++		{
++			const size_t j = m - k;
++			const float c = __Setup->cosine[k * step], sn = __Setup->sine[k * step];
++			const float ar = re[k * s], ai = im[k * s], br = re[j * s], bi = im[j * s];
++			const float sr = ar + br, si = ai - bi, dr = ar - br, di = ai + bi;
++
++			re[k * s] = sr - (c * di + sn * dr);
++			im[k * s] = si + (c * dr - sn * di);
++			re[j * s] = sr + (c * di + sn * dr);
++			im[j * s] = -si + (c * dr - sn * di);
++		}
++
++		complex_fft(__Setup, re, im, s, __Log2N - 1, 1);
++	}
++}
 diff --git a/src/frameworks/Accelerate/vecLib/vDSP/src/vDSP.c b/src/frameworks/Accelerate/vecLib/vDSP/src/vDSP.c
 index 24c037abc..cc18546ce 100644
 --- a/src/frameworks/Accelerate/vecLib/vDSP/src/vDSP.c
@@ -3629,6 +4741,26 @@ index a37fc641f..98e29c97a 100644
 +	// Its last-used keyboard type is therefore the current keyboard type.
 +	return LMGetKbdType();
 +}
+diff --git a/src/frameworks/Carbon/HIToolbox/src/SecureInput.c b/src/frameworks/Carbon/HIToolbox/src/SecureInput.c
+new file mode 100644
+index 000000000..ce290be4b
+--- /dev/null
++++ b/src/frameworks/Carbon/HIToolbox/src/SecureInput.c
+@@ -0,0 +1,14 @@
++/* X11 does not provide the macOS secure-event or TSM document facilities.
++ * Export the entry points and report unsupported instead of aborting in dyld.
++ * Do not claim that ordinary X11 keyboard input has become secure. */
++int EnableSecureEventInput(void) { return -4; }
++int DisableSecureEventInput(void) { return -4; }
++int TSMSetDocumentProperty(void *document, unsigned tag, unsigned size,
++                          void *data) {
++    (void)document; (void)tag; (void)size; (void)data;
++    return -4;
++}
++int TSMRemoveDocumentProperty(void *document, unsigned tag) {
++    (void)document; (void)tag;
++    return -4;
++}
 diff --git a/src/frameworks/Carbon/HIToolbox/src/TextInputSources.mm b/src/frameworks/Carbon/HIToolbox/src/TextInputSources.mm
 index 347cb530c..f73278a35 100644
 --- a/src/frameworks/Carbon/HIToolbox/src/TextInputSources.mm
@@ -3711,6 +4843,52 @@ index 0b927c40e..d186494e7 100644
  - (NSMethodSignature *)methodSignatureForSelector:(SEL)aSelector
  {
      return [NSMethodSignature signatureWithObjCTypes: "v@:"];
+diff --git a/src/frameworks/CoreMedia/include/CoreMedia/CMFormatDescription.h b/src/frameworks/CoreMedia/include/CoreMedia/CMFormatDescription.h
+new file mode 100644
+index 000000000..9ea4a90c1
+--- /dev/null
++++ b/src/frameworks/CoreMedia/include/CoreMedia/CMFormatDescription.h
+@@ -0,0 +1,40 @@
++#ifndef _COREMEDIA_CMFORMATDESCRIPTION_H_
++#define _COREMEDIA_CMFORMATDESCRIPTION_H_
++
++#include <CoreFoundation/CoreFoundation.h>
++
++#ifdef __cplusplus
++extern "C" {
++#endif
++
++extern const CFStringRef kCMFormatDescriptionTransferFunction_ITU_R_709_2;
++extern const CFStringRef kCMFormatDescriptionTransferFunction_SMPTE_240M_1995;
++extern const CFStringRef kCMFormatDescriptionTransferFunction_UseGamma;
++extern const CFStringRef kCMFormatDescriptionTransferFunction_ITU_R_2020;
++extern const CFStringRef kCMFormatDescriptionTransferFunction_ITU_R_2100_HLG;
++extern const CFStringRef kCMFormatDescriptionTransferFunction_SMPTE_ST_2084_PQ;
++extern const CFStringRef kCMFormatDescriptionTransferFunction_SMPTE_ST_428_1;
++extern const CFStringRef kCMFormatDescriptionTransferFunction_Linear;
++extern const CFStringRef kCMFormatDescriptionTransferFunction_sRGB;
++extern const CFStringRef kCMFormatDescriptionColorPrimaries_ITU_R_709_2;
++extern const CFStringRef kCMFormatDescriptionColorPrimaries_EBU_3213;
++extern const CFStringRef kCMFormatDescriptionColorPrimaries_SMPTE_C;
++extern const CFStringRef kCMFormatDescriptionColorPrimaries_ITU_R_2020;
++extern const CFStringRef kCMFormatDescriptionColorPrimaries_P3_D65;
++extern const CFStringRef kCMFormatDescriptionColorPrimaries_DCI_P3;
++extern const CFStringRef kCMFormatDescriptionExtension_ContentLightLevelInfo;
++extern const CFStringRef kCMFormatDescriptionExtension_Depth;
++extern const CFStringRef kCMFormatDescriptionExtension_FormatName;
++extern const CFStringRef kCMFormatDescriptionExtension_FullRangeVideo;
++extern const CFStringRef kCMFormatDescriptionExtension_MasteringDisplayColorVolume;
++extern const CFStringRef kCMSampleAttachmentKey_IsDependedOnByOthers;
++extern const CFStringRef kCMFormatDescriptionYCbCrMatrix_ITU_R_709_2;
++extern const CFStringRef kCMFormatDescriptionYCbCrMatrix_ITU_R_601_4;
++extern const CFStringRef kCMFormatDescriptionYCbCrMatrix_SMPTE_240M_1995;
++extern const CFStringRef kCMFormatDescriptionYCbCrMatrix_ITU_R_2020;
++
++#ifdef __cplusplus
++}
++#endif
++
++#endif // _COREMEDIA_CMFORMATDESCRIPTION_H_
 diff --git a/src/frameworks/CoreMedia/src/CoreMedia.c b/src/frameworks/CoreMedia/src/CoreMedia.c
 index 3d76e8103..4a975959c 100644
 --- a/src/frameworks/CoreMedia/src/CoreMedia.c
@@ -3900,6 +5078,669 @@ index bb7f35068..957cc9d3e 100644
  		LSInfo.m
  		LSOpen.m
  		UTType.m
+diff --git a/src/frameworks/CoreServices/src/LaunchServices/LSHostOpen.c b/src/frameworks/CoreServices/src/LaunchServices/LSHostOpen.c
+new file mode 100644
+index 000000000..9128dc692
+--- /dev/null
++++ b/src/frameworks/CoreServices/src/LaunchServices/LSHostOpen.c
+@@ -0,0 +1,207 @@
++/*
++This file is part of Darling.
++
++Copyright (C) 2026 Darling developers
++
++Darling is free software: you can redistribute it and/or modify
++it under the terms of the GNU General Public License as published by
++the Free Software Foundation, either version 3 of the License, or
++(at your option) any later version.
++
++Darling is distributed in the hope that it will be useful,
++but WITHOUT ANY WARRANTY; without even the implied warranty of
++MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++GNU General Public License for more details.
++
++You should have received a copy of the GNU General Public License
++along with Darling.  If not, see <http://www.gnu.org/licenses/>.
++*/
++
++/*
++ * Web and mail URLs have no handler inside the prefix, so they are handed to
++ * the Linux desktop. sd-bus is used from the host's libsystemd, loaded through
++ * the ELF loader; the guest shares the host's user and network, so the
++ * session bus is reachable directly.
++ */
++
++#include "LSHostOpen.h"
++#include "LSHostOpenBus.h"
++#include <CarbonCore/MacErrors.h>
++#include <elfcalls.h>
++#include <pthread.h>
++#include <stdlib.h>
++#include <stdio.h>
++#include <string.h>
++
++extern struct elf_calls* _elfcalls;
++
++/* Where the host's root file system appears inside the prefix. */
++#define HOST_ROOT "/Volumes/SystemRoot"
++
++static struct ls_host_api host_api;
++static Boolean host_api_ready;
++static pthread_once_t host_api_once = PTHREAD_ONCE_INIT;
++
++static void load_host_api(void)
++{
++	void *systemd, *libc;
++	struct ls_host_api api;
++
++	if (_elfcalls == NULL)
++		return;
++
++	systemd = _elfcalls->dlopen("libsystemd.so.0");
++	if (systemd == NULL)
++		return;
++	libc = _elfcalls->dlopen("libc.so.6");
++	if (libc == NULL)
++	{
++		_elfcalls->dlclose(systemd);
++		return;
++	}
++
++	memset(&api, 0, sizeof(api));
++#define BIND(lib, field) \
++	if ((*(void**) &api.field = _elfcalls->dlsym(lib, #field)) == NULL) \
++		goto fail;
++	BIND(systemd, sd_bus_new);
++	BIND(systemd, sd_bus_set_address);
++	BIND(systemd, sd_bus_set_bus_client);
++	BIND(systemd, sd_bus_start);
++	BIND(systemd, sd_bus_flush_close_unref);
++	BIND(systemd, sd_bus_message_new_method_call);
++	BIND(systemd, sd_bus_message_append);
++	BIND(systemd, sd_bus_message_append_strv);
++	BIND(systemd, sd_bus_message_open_container);
++	BIND(systemd, sd_bus_message_close_container);
++	BIND(systemd, sd_bus_call);
++	BIND(systemd, sd_bus_message_unref);
++	BIND(systemd, sd_bus_error_free);
++	/* Host IDs and paths, not the prefix's view of them. */
++	BIND(libc, getuid);
++	BIND(libc, access);
++#undef BIND
++	api.getenv = getenv;
++	api.runtime_dir_root = "/run/user";
++
++	host_api = api;
++	host_api_ready = TRUE;
++	return;
++
++fail:
++	_elfcalls->dlclose(libc);
++	_elfcalls->dlclose(systemd);
++}
++
++static const struct ls_host_api* get_host_api(void)
++{
++	pthread_once(&host_api_once, load_host_api);
++	return host_api_ready ? &host_api : NULL;
++}
++
++/* Returns the absolute URL as a malloc'd UTF-8 string. */
++static char* copy_url_string(CFURLRef url)
++{
++	CFURLRef absolute;
++	CFStringRef string;
++	CFIndex size;
++	char* buffer = NULL;
++
++	if (url == NULL)
++		return NULL;
++	absolute = CFURLCopyAbsoluteURL(url);
++	if (absolute == NULL)
++		return NULL;
++
++	string = CFURLGetString(absolute);
++	size = CFStringGetMaximumSizeForEncoding(CFStringGetLength(string), kCFStringEncodingUTF8) + 1;
++	if (size <= LS_HOST_OPEN_MAX_URL_LENGTH * 4 + 1)
++	{
++		buffer = malloc(size);
++		if (buffer != NULL && !CFStringGetCString(string, buffer, size, kCFStringEncodingUTF8))
++		{
++			free(buffer);
++			buffer = NULL;
++		}
++	}
++	CFRelease(absolute);
++	return buffer;
++}
++
++Boolean _LSIsHostOpenURL(CFURLRef url)
++{
++	CFStringRef scheme;
++	Boolean result = FALSE;
++
++	if (url == NULL)
++		return FALSE;
++	scheme = CFURLCopyScheme(url);
++	if (scheme == NULL)
++		return FALSE;
++
++	result = CFStringCompare(scheme, CFSTR("http"), kCFCompareCaseInsensitive) == kCFCompareEqualTo
++		|| CFStringCompare(scheme, CFSTR("https"), kCFCompareCaseInsensitive) == kCFCompareEqualTo
++		|| CFStringCompare(scheme, CFSTR("mailto"), kCFCompareCaseInsensitive) == kCFCompareEqualTo;
++	CFRelease(scheme);
++	return result;
++}
++
++OSStatus _LSOpenURLOnHost(CFURLRef url)
++{
++	const struct ls_host_api* api;
++	char* string = copy_url_string(url);
++	int r;
++
++	if (string == NULL || _LSHostOpenValidateURL(string) < 0)
++	{
++		free(string);
++		return paramErr;
++	}
++
++	api = get_host_api();
++	if (api == NULL)
++	{
++		fprintf(stderr, "LaunchServices: cannot open URL: host libsystemd is unavailable\n");
++		free(string);
++		return kLSApplicationNotFoundErr;
++	}
++
++	r = _LSHostOpenURL(api, string, NULL);
++	free(string);
++	if (r < 0)
++	{
++		fprintf(stderr, "LaunchServices: host desktop did not accept URL (error %d)\n", -r);
++		return kLSServerCommunicationErr;
++	}
++	return noErr;
++}
++
++OSStatus _LSGetHostHandlerForURL(CFURLRef url, FSRef* outAppRef, CFURLRef* outAppURL)
++{
++	const struct ls_host_api* api;
++	const char* opener;
++	char path[256];
++
++	if (!_LSIsHostOpenURL(url))
++		return kLSApplicationNotFoundErr;
++	api = get_host_api();
++	if (api == NULL)
++		return kLSApplicationNotFoundErr;
++
++	opener = _LSHostOpenFindOpener(api);
++	snprintf(path, sizeof(path), HOST_ROOT "%s", opener ? opener : "/usr/bin/xdg-open");
++
++	if (outAppRef != NULL)
++	{
++		OSStatus status = FSPathMakeRef((const UInt8*) path, outAppRef, NULL);
++		if (status != noErr)
++			return status;
++	}
++	if (outAppURL != NULL)
++	{
++		*outAppURL = CFURLCreateFromFileSystemRepresentation(NULL, (const UInt8*) path, strlen(path), FALSE);
++		if (*outAppURL == NULL)
++			return kLSApplicationNotFoundErr;
++	}
++	return noErr;
++}
+diff --git a/src/frameworks/CoreServices/src/LaunchServices/LSHostOpen.h b/src/frameworks/CoreServices/src/LaunchServices/LSHostOpen.h
+new file mode 100644
+index 000000000..70db471f9
+--- /dev/null
++++ b/src/frameworks/CoreServices/src/LaunchServices/LSHostOpen.h
+@@ -0,0 +1,43 @@
++/*
++This file is part of Darling.
++
++Copyright (C) 2026 Darling developers
++
++Darling is free software: you can redistribute it and/or modify
++it under the terms of the GNU General Public License as published by
++the Free Software Foundation, either version 3 of the License, or
++(at your option) any later version.
++
++Darling is distributed in the hope that it will be useful,
++but WITHOUT ANY WARRANTY; without even the implied warranty of
++MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++GNU General Public License for more details.
++
++You should have received a copy of the GNU General Public License
++along with Darling.  If not, see <http://www.gnu.org/licenses/>.
++*/
++
++#ifndef LS_HOST_OPEN_H_
++#define LS_HOST_OPEN_H_
++
++#include <CoreFoundation/CoreFoundation.h>
++#include <LaunchServices/LaunchServices.h>
++
++#ifdef __cplusplus
++extern "C" {
++#endif
++
++/* URLs with these schemes (http, https, mailto) are opened by the host desktop. */
++Boolean _LSIsHostOpenURL(CFURLRef url);
++
++/* Hands the URL to the host desktop. */
++OSStatus _LSOpenURLOnHost(CFURLRef url);
++
++/* Reports the host opener as the default application for a host-opened URL. */
++OSStatus _LSGetHostHandlerForURL(CFURLRef url, FSRef* outAppRef, CFURLRef* outAppURL);
++
++#ifdef __cplusplus
++}
++#endif
++
++#endif
+diff --git a/src/frameworks/CoreServices/src/LaunchServices/LSHostOpenBus.c b/src/frameworks/CoreServices/src/LaunchServices/LSHostOpenBus.c
+new file mode 100644
+index 000000000..433323dcb
+--- /dev/null
++++ b/src/frameworks/CoreServices/src/LaunchServices/LSHostOpenBus.c
+@@ -0,0 +1,278 @@
++/*
++This file is part of Darling.
++
++Copyright (C) 2026 Darling developers
++
++Darling is free software: you can redistribute it and/or modify
++it under the terms of the GNU General Public License as published by
++the Free Software Foundation, either version 3 of the License, or
++(at your option) any later version.
++
++Darling is distributed in the hope that it will be useful,
++but WITHOUT ANY WARRANTY; without even the implied warranty of
++MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++GNU General Public License for more details.
++
++You should have received a copy of the GNU General Public License
++along with Darling.  If not, see <http://www.gnu.org/licenses/>.
++*/
++
++#include "LSHostOpenBus.h"
++#include <stdio.h>
++#include <string.h>
++#include <strings.h>
++#include <time.h>
++#include <unistd.h>
++
++#define DEFAULT_TIMEOUT_USEC (10ULL * 1000 * 1000)
++#define HOST_X_OK 1
++
++static const char* const supported_schemes[] = { "http:", "https:", "mailto:" };
++
++/* Passed to the transient unit so xdg-open finds the user's display. */
++static const char* const forwarded_environment[] = { "DISPLAY", "WAYLAND_DISPLAY", "XDG_CURRENT_DESKTOP" };
++
++int _LSHostOpenSchemeSupported(const char* url)
++{
++	if (url == NULL)
++		return 0;
++	for (size_t i = 0; i < sizeof(supported_schemes) / sizeof(supported_schemes[0]); i++)
++	{
++		size_t len = strlen(supported_schemes[i]);
++		if (strncasecmp(url, supported_schemes[i], len) == 0)
++			return 1;
++	}
++	return 0;
++}
++
++int _LSHostOpenValidateURL(const char* url)
++{
++	size_t len;
++
++	if (!_LSHostOpenSchemeSupported(url))
++		return -LS_HOST_LINUX_EINVAL;
++
++	len = strlen(url);
++	if (len > LS_HOST_OPEN_MAX_URL_LENGTH)
++		return -LS_HOST_LINUX_EINVAL;
++
++	for (size_t i = 0; i < len; i++)
++	{
++		unsigned char c = (unsigned char) url[i];
++		if (c < 0x20 || c == 0x7f)
++			return -LS_HOST_LINUX_EINVAL;
++	}
++	return 0;
++}
++
++const char* _LSHostOpenFindOpener(const struct ls_host_api* api)
++{
++	static const char* const candidates[] = {
++		"/usr/local/bin/xdg-open",
++		"/usr/bin/xdg-open",
++		"/bin/xdg-open",
++	};
++
++	if (api == NULL || api->access == NULL)
++		return NULL;
++	for (size_t i = 0; i < sizeof(candidates) / sizeof(candidates[0]); i++)
++	{
++		if (api->access(candidates[i], HOST_X_OK) == 0)
++			return candidates[i];
++	}
++	return NULL;
++}
++
++static int api_complete(const struct ls_host_api* api)
++{
++	return api != NULL && api->sd_bus_new && api->sd_bus_set_address && api->sd_bus_set_bus_client
++		&& api->sd_bus_start && api->sd_bus_flush_close_unref && api->sd_bus_message_new_method_call
++		&& api->sd_bus_message_append && api->sd_bus_message_append_strv
++		&& api->sd_bus_message_open_container && api->sd_bus_message_close_container
++		&& api->sd_bus_call && api->sd_bus_message_unref && api->sd_bus_error_free
++		&& api->getenv && api->getuid;
++}
++
++static int open_session_bus(const struct ls_host_api* api, void** ret)
++{
++	char address[512];
++	const char* env = api->getenv("DBUS_SESSION_BUS_ADDRESS");
++	void* bus = NULL;
++	int r;
++
++	if (env != NULL && env[0] != '\0')
++	{
++		if (strlen(env) >= sizeof(address))
++			return -LS_HOST_LINUX_EINVAL;
++		strcpy(address, env);
++	}
++	else
++	{
++		const char* root = api->runtime_dir_root ? api->runtime_dir_root : "/run/user";
++		if (snprintf(address, sizeof(address), "unix:path=%s/%u/bus", root, api->getuid())
++				>= (int) sizeof(address))
++			return -LS_HOST_LINUX_EINVAL;
++	}
++
++	r = api->sd_bus_new(&bus);
++	if (r < 0)
++		return r;
++	r = api->sd_bus_set_address(bus, address);
++	if (r >= 0)
++		r = api->sd_bus_set_bus_client(bus, 1);
++	if (r >= 0)
++		r = api->sd_bus_start(bus);
++	if (r < 0)
++	{
++		api->sd_bus_flush_close_unref(bus);
++		return r;
++	}
++	*ret = bus;
++	return 0;
++}
++
++static int call(const struct ls_host_api* api, void* bus, void* m)
++{
++	struct ls_host_bus_error error = { NULL, NULL, 0 };
++	void* reply = NULL;
++	uint64_t timeout = api->timeout_usec ? api->timeout_usec : DEFAULT_TIMEOUT_USEC;
++	int r = api->sd_bus_call(bus, m, timeout, &error, &reply);
++
++	if (reply != NULL)
++		api->sd_bus_message_unref(reply);
++	api->sd_bus_error_free(&error);
++	return r < 0 ? r : 0;
++}
++
++static int open_via_portal(const struct ls_host_api* api, void* bus, const char* url)
++{
++	void* m = NULL;
++	int r = api->sd_bus_message_new_method_call(bus, &m, "org.freedesktop.portal.Desktop",
++		"/org/freedesktop/portal/desktop", "org.freedesktop.portal.OpenURI", "OpenURI");
++	if (r < 0)
++		return r;
++
++	r = api->sd_bus_message_append(m, "ss", "", url);
++	if (r >= 0)
++		r = api->sd_bus_message_append(m, "a{sv}", 0);
++	if (r >= 0)
++		r = call(api, bus, m);
++	api->sd_bus_message_unref(m);
++	return r;
++}
++
++static int append_environment(const struct ls_host_api* api, void* m)
++{
++	char storage[3][1024];
++	char* entries[4];
++	size_t count = 0;
++	int r;
++
++	for (size_t i = 0; i < sizeof(forwarded_environment) / sizeof(forwarded_environment[0]); i++)
++	{
++		const char* value = api->getenv(forwarded_environment[i]);
++		int n;
++
++		if (value == NULL || value[0] == '\0')
++			continue;
++		n = snprintf(storage[count], sizeof(storage[count]), "%s=%s", forwarded_environment[i], value);
++		if (n < 0 || n >= (int) sizeof(storage[count]))
++			continue;
++		entries[count] = storage[count];
++		count++;
++	}
++	entries[count] = NULL;
++	if (count == 0)
++		return 0;
++
++	r = api->sd_bus_message_open_container(m, 'r', "sv");
++	if (r >= 0)
++		r = api->sd_bus_message_append(m, "s", "Environment");
++	if (r >= 0)
++		r = api->sd_bus_message_open_container(m, 'v', "as");
++	if (r >= 0)
++		r = api->sd_bus_message_append_strv(m, entries);
++	if (r >= 0)
++		r = api->sd_bus_message_close_container(m);
++	if (r >= 0)
++		r = api->sd_bus_message_close_container(m);
++	return r;
++}
++
++static int open_via_systemd(const struct ls_host_api* api, void* bus, const char* url)
++{
++	static unsigned int counter;
++	struct timespec now;
++	char unit[128];
++	const char* opener = _LSHostOpenFindOpener(api);
++	void* m = NULL;
++	int r;
++
++	/* Bare names are resolved by systemd >= 248. */
++	if (opener == NULL)
++		opener = "xdg-open";
++
++	clock_gettime(CLOCK_REALTIME, &now);
++	snprintf(unit, sizeof(unit), "app-darling-openurl-%d-%llx-%u.service", (int) getpid(),
++		(unsigned long long) now.tv_sec * 1000000000ULL + (unsigned long long) now.tv_nsec,
++		__atomic_add_fetch(&counter, 1, __ATOMIC_RELAXED));
++
++	r = api->sd_bus_message_new_method_call(bus, &m, "org.freedesktop.systemd1",
++		"/org/freedesktop/systemd1", "org.freedesktop.systemd1.Manager", "StartTransientUnit");
++	if (r < 0)
++		return r;
++
++	r = api->sd_bus_message_append(m, "ss", unit, "fail");
++	if (r >= 0)
++		r = api->sd_bus_message_open_container(m, 'a', "(sv)");
++	if (r >= 0)
++		r = api->sd_bus_message_append(m, "(sv)(sv)(sv)(sv)",
++			"Description", "s", "Open URL from Darling",
++			/* Keep the handler running after xdg-open exits. */
++			"KillMode", "s", "process",
++			"CollectMode", "s", "inactive-or-failed",
++			"ExecStart", "a(sasb)", 1, opener, 2, "xdg-open", url, 0);
++	if (r >= 0)
++		r = append_environment(api, m);
++	if (r >= 0)
++		r = api->sd_bus_message_close_container(m);
++	if (r >= 0)
++		r = api->sd_bus_message_append(m, "a(sa(sv))", 0);
++	if (r >= 0)
++		r = call(api, bus, m);
++	api->sd_bus_message_unref(m);
++	return r;
++}
++
++int _LSHostOpenURL(const struct ls_host_api* api, const char* url, int* method)
++{
++	void* bus = NULL;
++	int r;
++
++	r = _LSHostOpenValidateURL(url);
++	if (r < 0)
++		return r;
++	if (!api_complete(api))
++		return -LS_HOST_LINUX_ENOSYS;
++
++	r = open_session_bus(api, &bus);
++	if (r < 0)
++		return r;
++
++	r = open_via_portal(api, bus, url);
++	if (r >= 0)
++	{
++		if (method)
++			*method = LS_HOST_OPEN_VIA_PORTAL;
++	}
++	/* A portal that timed out may still open the URL; don't open it twice. */
++	else if (r != -LS_HOST_LINUX_ETIMEDOUT)
++	{
++		r = open_via_systemd(api, bus, url);
++		if (r >= 0 && method)
++			*method = LS_HOST_OPEN_VIA_SYSTEMD;
++	}
++
++	api->sd_bus_flush_close_unref(bus);
++	return r < 0 ? r : 0;
++}
+diff --git a/src/frameworks/CoreServices/src/LaunchServices/LSHostOpenBus.h b/src/frameworks/CoreServices/src/LaunchServices/LSHostOpenBus.h
+new file mode 100644
+index 000000000..044bca47a
+--- /dev/null
++++ b/src/frameworks/CoreServices/src/LaunchServices/LSHostOpenBus.h
+@@ -0,0 +1,111 @@
++/*
++This file is part of Darling.
++
++Copyright (C) 2026 Darling developers
++
++Darling is free software: you can redistribute it and/or modify
++it under the terms of the GNU General Public License as published by
++the Free Software Foundation, either version 3 of the License, or
++(at your option) any later version.
++
++Darling is distributed in the hope that it will be useful,
++but WITHOUT ANY WARRANTY; without even the implied warranty of
++MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++GNU General Public License for more details.
++
++You should have received a copy of the GNU General Public License
++along with Darling.  If not, see <http://www.gnu.org/licenses/>.
++*/
++
++/*
++ * Hands a URL to the host desktop over the user's D-Bus session bus.
++ *
++ * This part has no Darling or CoreFoundation dependencies: every host
++ * function comes from the table below, so it can also be built natively on
++ * Linux against libsystemd for testing. Errors are negative Linux errno
++ * values as returned by sd-bus.
++ */
++
++#ifndef LS_HOST_OPEN_BUS_H_
++#define LS_HOST_OPEN_BUS_H_
++
++#include <stdint.h>
++
++#ifdef __cplusplus
++extern "C" {
++#endif
++
++#define LS_HOST_OPEN_MAX_URL_LENGTH 4096
++
++/* Linux errno values; the guest's errno numbering differs. */
++#define LS_HOST_LINUX_ENOENT 2
++#define LS_HOST_LINUX_EINVAL 22
++#define LS_HOST_LINUX_ENOSYS 38
++#define LS_HOST_LINUX_ETIMEDOUT 110
++
++/* Layout of sd_bus_error. */
++struct ls_host_bus_error
++{
++	const char* name;
++	const char* message;
++	int _need_free;
++};
++
++struct ls_host_api
++{
++	/* libsystemd (sd-bus); bus and message objects are opaque */
++	int (*sd_bus_new)(void** ret);
++	int (*sd_bus_set_address)(void* bus, const char* address);
++	int (*sd_bus_set_bus_client)(void* bus, int b);
++	int (*sd_bus_start)(void* bus);
++	void* (*sd_bus_flush_close_unref)(void* bus);
++	int (*sd_bus_message_new_method_call)(void* bus, void** m, const char* destination,
++		const char* path, const char* interface, const char* member);
++	int (*sd_bus_message_append)(void* m, const char* types, ...);
++	int (*sd_bus_message_append_strv)(void* m, char** l);
++	int (*sd_bus_message_open_container)(void* m, char type, const char* contents);
++	int (*sd_bus_message_close_container)(void* m);
++	int (*sd_bus_call)(void* bus, void* m, uint64_t usec, struct ls_host_bus_error* ret_error, void** reply);
++	void* (*sd_bus_message_unref)(void* m);
++	void (*sd_bus_error_free)(struct ls_host_bus_error* e);
++
++	/* Host process environment */
++	char* (*getenv)(const char* name);
++	unsigned int (*getuid)(void);
++	int (*access)(const char* path, int mode);
++
++	/* Parent of the per-user runtime directories, normally "/run/user" */
++	const char* runtime_dir_root;
++	/* Per-call timeout; 0 selects the default */
++	uint64_t timeout_usec;
++};
++
++enum
++{
++	LS_HOST_OPEN_VIA_PORTAL = 1,
++	LS_HOST_OPEN_VIA_SYSTEMD = 2,
++};
++
++/* 1 if the URL has a scheme that is handed to the host (http, https, mailto). */
++int _LSHostOpenSchemeSupported(const char* url);
++
++/* 0 if the URL may be handed to the host, otherwise -EINVAL. */
++int _LSHostOpenValidateURL(const char* url);
++
++/* Host path of xdg-open, or NULL if it is not in the usual locations. */
++const char* _LSHostOpenFindOpener(const struct ls_host_api* api);
++
++/*
++ * Opens the URL through org.freedesktop.portal.OpenURI, or, if that fails,
++ * runs xdg-open in a transient systemd user service. Either way the handler
++ * is started by the host session, never as a child of the caller.
++ * Returns 0 and stores the method used in *method (may be NULL), or a
++ * negative errno.
++ */
++int _LSHostOpenURL(const struct ls_host_api* api, const char* url, int* method);
++
++#ifdef __cplusplus
++}
++#endif
++
++#endif
 diff --git a/src/frameworks/CoreServices/src/LaunchServices/LSInfo.m b/src/frameworks/CoreServices/src/LaunchServices/LSInfo.m
 index 4cb2a4941..29eef9956 100644
 --- a/src/frameworks/CoreServices/src/LaunchServices/LSInfo.m
@@ -4261,10 +6102,10 @@ index 299caa5b1..bdff6028c 100644
  
  __END_DECLS
 diff --git a/src/frameworks/CoreVideo/src/CVDisplayLink.mm b/src/frameworks/CoreVideo/src/CVDisplayLink.mm
-index 3e9cba226..f47f14b06 100644
+index 3e9cba226..6682716a9 100644
 --- a/src/frameworks/CoreVideo/src/CVDisplayLink.mm
 +++ b/src/frameworks/CoreVideo/src/CVDisplayLink.mm
-@@ -1,38 +1,899 @@
+@@ -1,38 +1,896 @@
  #include <CoreVideo/CVDisplayLink.h>
 +#include <stdint.h>
 +#include <string.h>
@@ -4757,13 +6598,9 @@ index 3e9cba226..f47f14b06 100644
 +}
 +
 +static uint32_t getTargetRefreshRate(void) {
-+	static uint32_t sTargetRate = 0;
-+	if (!sTargetRate) {
-+		const char *hz = getenv("RCLOL_REFRESH_HZ");
-+		int rate = hz ? atoi(hz) : 0;
-+		sTargetRate = (rate > 0 && rate <= 1000) ? (uint32_t)rate : 60;
-+	}
-+	return sTargetRate;
++	/* Chromium 108 / CEF FrameSink and Mojo IPC pump MUST run at 60 Hz to avoid
++	 * frame_impl.cc connection timeouts and IPC message queue saturation. */
++	return 60;
 +}
 +
 +static void rendererBeginTimerF(CFRunLoopTimerRef timer, void *info) {
@@ -5099,8 +6936,9 @@ index 3e9cba226..f47f14b06 100644
 +    if (__lolsys_syscall(1,(long)&deadline,0,0,0,0,228)<0) return NULL;
 +    static uint64_t cvIntervalNS = 0;
 +    if (!cvIntervalNS) {
-+        uint32_t rate = getTargetRefreshRate();
-+        cvIntervalNS = 1000000000ull / (uint64_t)rate;
++        const char *hz = getenv("RCLOL_REFRESH_HZ");
++        int rate = hz ? atoi(hz) : 0;
++        cvIntervalNS = (rate > 0 && rate <= 1000) ? 1000000000ull / (uint64_t)rate : (1000000000ull / 60ull);
 +    }
 +    for (;;) {
 +        deadline.nsec += cvIntervalNS;
@@ -5172,7 +7010,7 @@ index 3e9cba226..f47f14b06 100644
  	*displayLinkOut = (CVDisplayLinkRef) self;
  	return kCVReturnSuccess;
  }
-@@ -41,35 +902,128 @@ CVReturn CVDisplayLinkStart(CVDisplayLinkRef displayLink)
+@@ -41,35 +899,128 @@ CVReturn CVDisplayLinkStart(CVDisplayLinkRef displayLink)
  {
  	if (!displayLink)
  		return kCVReturnInvalidArgument;
@@ -5312,7 +7150,7 @@ index 3e9cba226..f47f14b06 100644
  	return kCVReturnSuccess;
  }
  
-@@ -91,7 +1045,7 @@ CVReturn CVDisplayLinkSetCurrentCGDisplayFromOpenGLContext(CVDisplayLinkRef disp
+@@ -91,7 +1042,7 @@ CVReturn CVDisplayLinkSetCurrentCGDisplayFromOpenGLContext(CVDisplayLinkRef disp
  			CGDirectDisplayID displayID = [window.screen cgDirectDisplayID];
  			NSMutableDictionary* self = (NSMutableDictionary*) displayLink;
  
@@ -5321,7 +7159,7 @@ index 3e9cba226..f47f14b06 100644
  					forKey: kDirectDisplayArray];
  			return kCVReturnSuccess;
  		}
-@@ -117,36 +1071,65 @@ CVReturn CVDisplayLinkCreateWithCGDisplay(
+@@ -117,36 +1068,65 @@ CVReturn CVDisplayLinkCreateWithCGDisplay(
      CGDirectDisplayID displayID,
      CV_RETURNS_RETAINED_PARAMETER CVDisplayLinkRef CV_NULLABLE * CV_NONNULL displayLinkOut )
  {
@@ -5452,6 +7290,72 @@ index d7ad1ed23..02230985d 100755
  - (void)addRemovalHandler:(id /* block */)arg1 forTokenID:(id)arg2;
  - (void)dealloc;
  - (id)init;
+diff --git a/src/frameworks/CryptoTokenKit/src/TKTokenWatcher.m b/src/frameworks/CryptoTokenKit/src/TKTokenWatcher.m
+new file mode 100644
+index 000000000..0e4f3871e
+--- /dev/null
++++ b/src/frameworks/CryptoTokenKit/src/TKTokenWatcher.m
+@@ -0,0 +1,60 @@
++#import <CryptoTokenKit/TKTokenWatcher.h>
++#import <Foundation/Foundation.h>
++
++@protocol TKProtocolTokenWatcher
++@end
++
++@implementation TKTokenWatcher
++
++- (id)init
++{
++	if ((self = [super init]) != nil) {
++		_tokenIDs = [[NSMutableArray alloc] init];
++		_removalHandlers = [[NSMutableDictionary alloc] init];
++	}
++	return self;
++}
++
++- (id)initWithInsertionHandler:(id)arg1
++{
++	if ((self = [self init]) != nil) {
++		_insertionHandler = [arg1 copy];
++	}
++	return self;
++}
++
++- (void)dealloc
++{
++	[_insertionHandler release];
++	[_removalHandlers release];
++	[_tokenIDs release];
++	[super dealloc];
++}
++
++- (NSArray *)tokenIDs
++{
++	return [NSArray array];
++}
++
++- (void)addRemovalHandler:(id)arg1 forTokenID:(id)arg2
++{
++	if (arg1 && arg2)
++		[_removalHandlers setObject: [[arg1 copy] autorelease] forKey: arg2];
++}
++
++- (void)insertedToken:(id)arg1 reply:(id)arg2
++{
++	// No smartcard/token hardware under Darling; ignore.
++}
++
++- (void)removedToken:(id)arg1 reply:(id)arg2
++{
++	// No smartcard/token hardware under Darling; ignore.
++}
++
++- (void)setup
++{
++	// No token daemon to connect to; remain empty.
++}
++
++@end
 diff --git a/src/frameworks/DiskArbitration/DADisk.c b/src/frameworks/DiskArbitration/DADisk.c
 index 83f1793b8..acc09c088 100644
 --- a/src/frameworks/DiskArbitration/DADisk.c
@@ -6634,6 +8538,196 @@ index b20ad7782..6f8d36d02 100644
          src/NSODSession.m
          src/ODSession.m
          src/NSODNode.m
+diff --git a/src/frameworks/OpenDirectory/src/ODLocalDirectory.h b/src/frameworks/OpenDirectory/src/ODLocalDirectory.h
+new file mode 100644
+index 000000000..1f7c0f135
+--- /dev/null
++++ b/src/frameworks/OpenDirectory/src/ODLocalDirectory.h
+@@ -0,0 +1,37 @@
++/*
++ This file is part of Darling.
++
++ Copyright (C) 2026 Darling Team
++
++ Darling is free software: you can redistribute it and/or modify
++ it under the terms of the GNU General Public License as published by
++ the Free Software Foundation, either version 3 of the License, or
++ (at your option) any later version.
++
++ Darling is distributed in the hope that it will be useful,
++ but WITHOUT ANY WARRANTY; without even the implied warranty of
++ MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++ GNU General Public License for more details.
++
++ You should have received a copy of the GNU General Public License
++ along with Darling.  If not, see <http://www.gnu.org/licenses/>.
++*/
++
++#import <Foundation/Foundation.h>
++#import <OpenDirectory/OpenDirectory.h>
++
++// The local node: user records read from the system account database.
++// Every value is an array of strings, keyed by attribute type.
++
++extern NSString *const ODLocalNodeName;
++
++NSError *ODLocalError(NSInteger code);
++// nil when the name is not one of the nodes a standalone system has
++NSString *ODLocalNodeNameForName(NSString *name);
++NSString *ODLocalNodeNameForType(unsigned int type);
++NSDictionary *ODLocalUserAttributes(NSString *name);
++NSArray *ODLocalAllUserAttributes(void);
++// a single record type or a list of them
++BOOL ODLocalRecordTypesIncludeUsers(id recordTypeOrList);
++
++ODRecord *ODLocalRecordCreate(NSDictionary *attributes);
+diff --git a/src/frameworks/OpenDirectory/src/ODLocalDirectory.m b/src/frameworks/OpenDirectory/src/ODLocalDirectory.m
+new file mode 100644
+index 000000000..43d2fb578
+--- /dev/null
++++ b/src/frameworks/OpenDirectory/src/ODLocalDirectory.m
+@@ -0,0 +1,141 @@
++/*
++ This file is part of Darling.
++
++ Copyright (C) 2026 Darling Team
++
++ Darling is free software: you can redistribute it and/or modify
++ it under the terms of the GNU General Public License as published by
++ the Free Software Foundation, either version 3 of the License, or
++ (at your option) any later version.
++
++ Darling is distributed in the hope that it will be useful,
++ but WITHOUT ANY WARRANTY; without even the implied warranty of
++ MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++ GNU General Public License for more details.
++
++ You should have received a copy of the GNU General Public License
++ along with Darling.  If not, see <http://www.gnu.org/licenses/>.
++*/
++
++#import "ODLocalDirectory.h"
++
++#include <arpa/inet.h>
++#include <membership.h>
++#include <pthread.h>
++#include <pwd.h>
++#include <uuid/uuid.h>
++
++NSString *const ODFrameworkErrorDomain = @"com.apple.OpenDirectory";
++NSString *const ODLocalNodeName = @"/Local/Default";
++
++// getpwent() iterates process-wide state
++static pthread_mutex_t enumerationLock = PTHREAD_MUTEX_INITIALIZER;
++
++NSError *ODLocalError(NSInteger code)
++{
++    return [NSError errorWithDomain: ODFrameworkErrorDomain code: code userInfo: nil];
++}
++
++NSString *ODLocalNodeNameForName(NSString *name)
++{
++    for (NSString *known in @[ODLocalNodeName, @"/Search", @"/Contacts"]) {
++        if ([known isEqualToString: name])
++            return known;
++    }
++    return nil;
++}
++
++NSString *ODLocalNodeNameForType(unsigned int type)
++{
++    switch (type) {
++        case 0x2201: // kODNodeTypeAuthentication
++        case 0x2205: // kODNodeTypeNetwork
++            return @"/Search";
++        case 0x2204: // kODNodeTypeContacts
++            return @"/Contacts";
++        default:
++            return ODLocalNodeName;
++    }
++}
++
++static NSDictionary *attributesForEntry(const struct passwd *entry)
++{
++    NSMutableDictionary *attributes = [NSMutableDictionary dictionary];
++    NSString *name = [NSString stringWithUTF8String: entry->pw_name];
++    uuid_t uuid;
++
++    if (name == nil)
++        return nil;
++
++    attributes[@"dsAttrTypeStandard:RecordName"] = @[name];
++    attributes[@"dsAttrTypeStandard:RecordType"] = @[@"dsRecTypeStandard:Users"];
++    attributes[@"dsAttrTypeStandard:AppleMetaNodeLocation"] = @[ODLocalNodeName];
++    attributes[@"dsAttrTypeStandard:UniqueID"] = @[[NSString stringWithFormat: @"%u", (unsigned int)entry->pw_uid]];
++    attributes[@"dsAttrTypeStandard:PrimaryGroupID"] = @[[NSString stringWithFormat: @"%u", (unsigned int)entry->pw_gid]];
++
++    if (mbr_uid_to_uuid(entry->pw_uid, uuid) != 0) {
++        // No stored UUID: use the membership library's compatibility mapping
++        // for such accounts, FFFFEEEE-DDDD-CCCC-BBBB-AAAA followed by the uid.
++        static const uuid_t prefix = {0xff, 0xff, 0xee, 0xee, 0xdd, 0xdd, 0xcc, 0xcc, 0xbb, 0xbb, 0xaa, 0xaa};
++        uint32_t uid = htonl(entry->pw_uid);
++
++        memcpy(uuid, prefix, sizeof(uuid_t));
++        memcpy(&uuid[12], &uid, sizeof(uid));
++    }
++    uuid_string_t text;
++    uuid_unparse_upper(uuid, text);
++    attributes[@"dsAttrTypeStandard:GeneratedUID"] = @[[NSString stringWithUTF8String: text]];
++
++    NSString *value;
++    if (entry->pw_gecos != NULL && (value = [NSString stringWithUTF8String: entry->pw_gecos]) != nil)
++        attributes[@"dsAttrTypeStandard:RealName"] = @[value];
++    if (entry->pw_dir != NULL && (value = [NSString stringWithUTF8String: entry->pw_dir]) != nil)
++        attributes[@"dsAttrTypeStandard:NFSHomeDirectory"] = @[value];
++    if (entry->pw_shell != NULL && (value = [NSString stringWithUTF8String: entry->pw_shell]) != nil)
++        attributes[@"dsAttrTypeStandard:UserShell"] = @[value];
++
++    return attributes;
++}
++
++NSDictionary *ODLocalUserAttributes(NSString *name)
++{
++    struct passwd entry, *result = NULL;
++    char buffer[4096];
++
++    if (![name isKindOfClass: [NSString class]] || [name UTF8String] == NULL)
++        return nil;
++    if (getpwnam_r([name UTF8String], &entry, buffer, sizeof(buffer), &result) != 0 || result == NULL)
++        return nil;
++
++    return attributesForEntry(result);
++}
++
++NSArray *ODLocalAllUserAttributes(void)
++{
++    NSMutableArray *users = [NSMutableArray array];
++    struct passwd *entry;
++
++    pthread_mutex_lock(&enumerationLock);
++    setpwent();
++    while ((entry = getpwent()) != NULL) {
++        NSDictionary *attributes = attributesForEntry(entry);
++        if (attributes != nil)
++            [users addObject: attributes];
++    }
++    endpwent();
++    pthread_mutex_unlock(&enumerationLock);
++
++    return users;
++}
++
++BOOL ODLocalRecordTypesIncludeUsers(id recordTypeOrList)
++{
++    NSArray *types = [recordTypeOrList isKindOfClass: [NSArray class]] ? recordTypeOrList
++                   : recordTypeOrList != nil ? @[recordTypeOrList] : @[];
++
++    for (id type in types) {
++        if ([type isKindOfClass: [NSString class]] && [type isEqualToString: @"dsRecTypeStandard:Users"])
++            return YES;
++    }
++    return NO;
++}
 diff --git a/src/frameworks/OpenDirectory/src/ODNode.m b/src/frameworks/OpenDirectory/src/ODNode.m
 index 24243f915..5731f9783 100644
 --- a/src/frameworks/OpenDirectory/src/ODNode.m
@@ -6997,6 +9091,216 @@ index aff236828..c9e628d43 100644
  - (NSMethodSignature *)methodSignatureForSelector:(SEL)aSelector
  {
      return [NSMethodSignature signatureWithObjCTypes: "v@:"];
+diff --git a/src/frameworks/OpenGL/CGLAsyncPresent.inc b/src/frameworks/OpenGL/CGLAsyncPresent.inc
+new file mode 100644
+index 000000000..353cdad35
+--- /dev/null
++++ b/src/frameworks/OpenGL/CGLAsyncPresent.inc
+@@ -0,0 +1,204 @@
++/* Bounded GPU-only staging: the producer never waits for display cadence.
++ * Three textures cover the currently displayed, pending, and writing frames.
++ * GPU fences order both the completed producer copy and subsequent reuse. */
++
++/* darling-lol: software refresh period for the paced paths, from RCLOL_REFRESH_HZ
++ * (1-1000 Hz). Unset or out of range keeps the previous 60 Hz period. */
++static uint64_t nativeRefreshIntervalNS(void){
++    static uint64_t interval;
++    if(!interval){
++        const char *hz=getenv("RCLOL_REFRESH_HZ");
++        long rate=hz?strtol(hz,NULL,10):0;
++        interval=(rate>0&&rate<=1000)?1000000000ull/(uint64_t)rate:16666667ull;
++    }
++    return interval;
++}
++
++struct DarlingAsyncPresent {
++    CGLContextObj owner;
++    pthread_mutex_t mutex;
++    pthread_t thread;
++    int started, running, failed, displayed;
++    unsigned width, height;
++    GLuint textures[3], copy_fbos[2];
++    int state[3]; /* 0 free, 1 pending, 2 display, 3 producer writing */
++    GLsync produced[3], consumed[3];
++    unsigned submissions, frames;
++    uint64_t serial[3];
++};
++static uint64_t nativeMonotonicNS(void) {
++    struct timespec now;
++    if(__lolsys_syscall(1,(long)&now,0,0,0,0,228))return 0;
++    return (uint64_t)now.tv_sec*1000000000ull+now.tv_nsec;
++}
++static void nativeWaitUntil(uint64_t deadline) {
++    struct timespec wake={deadline/1000000000ull,deadline%1000000000ull};
++    while(__lolsys_syscall(1,1,(long)&wake,0,0,0,230)==-4){}
++}
++static void *asyncPresentWorker(void *opaque) {
++    struct DarlingAsyncPresent *a=opaque;
++    CGLContextObj ctx=a->owner;
++    int valid=p_eglBindAPI(EGL_OPENGL_API) && p_eglMakeCurrent(ctx->egl_display,
++        ctx->native_present_surface,ctx->native_present_surface,ctx->native_present_context);
++    GLuint fbo=0;
++    if(getenv("RCLOL_GPU_DIRECT_TRACE"))fprintf(stderr,"GPU_ASYNC worker_context=%d\n",valid);
++    /* The async context can wait for native VSync without blocking the
++     * Chromium producer. Keep the monotonic limiter as a fallback/bound. */
++    int nativeVSync=0;
++    unsigned slowNativeSwaps=0;
++    if(valid){
++        const char *vsync=getenv("RCLOL_GPU_DIRECT_VSYNC");
++        nativeVSync=vsync && vsync[0]=='1' && p_eglSwapInterval(ctx->egl_display,1);
++        if(!nativeVSync)p_eglSwapInterval(ctx->egl_display,0);
++        glGenFramebuffers(1,&fbo);
++    }
++    uint64_t deadline=nativeMonotonicNS();
++    for(;;){
++        pthread_mutex_lock(&a->mutex);
++        int running=a->running,index=-1;
++        GLsync produced=NULL;
++        if(running && valid){
++            for(int n=0;n<3;++n)if(a->state[n]==1 && a->produced[n] && (a->displayed<0 || a->serial[n]>a->serial[a->displayed])){
++                GLenum ready=glClientWaitSync(a->produced[n],0,0);
++                if(ready==GL_WAIT_FAILED){valid=0;break;}
++                if((ready==GL_ALREADY_SIGNALED || ready==GL_CONDITION_SATISFIED) &&
++                   (index<0 || a->serial[n]>a->serial[index]))index=n;
++            }
++            if(valid && index>=0){
++                for(int n=0;n<3;++n)if(a->state[n]==1 && a->serial[n]<a->serial[index])a->state[n]=0;
++                a->state[index]=2;produced=a->produced[index];a->produced[index]=NULL;
++            }
++        }
++        pthread_mutex_unlock(&a->mutex);
++        if(!running || !valid)break;
++        DarlingNativePresentTarget *target=ctx->native_present_target;
++        if(!target || __atomic_load_n(&target->magic,__ATOMIC_ACQUIRE)!=DARLING_NATIVE_PRESENT_MAGIC || target->target!=ctx->native_present_window){if(produced)glDeleteSync(produced);valid=0;break;}
++        if(index>=0){
++            uint64_t workStarted=nativeMonotonicNS();
++            if(produced){glWaitSync(produced,0,GL_TIMEOUT_IGNORED);glDeleteSync(produced);}
++            glBindFramebuffer(GL_READ_FRAMEBUFFER,fbo);
++            glFramebufferTexture2D(GL_READ_FRAMEBUFFER,GL_COLOR_ATTACHMENT0,GL_TEXTURE_2D,a->textures[index],0);
++            glBindFramebuffer(GL_DRAW_FRAMEBUFFER,0);glDrawBuffer(GL_BACK);glReadBuffer(GL_COLOR_ATTACHMENT0);
++            glDisable(GL_SCISSOR_TEST);glDisable(GL_FRAMEBUFFER_SRGB);
++            if(glCheckFramebufferStatus(GL_READ_FRAMEBUFFER)!=GL_FRAMEBUFFER_COMPLETE){valid=0;break;}
++            glBlitFramebuffer(0,a->height,a->width,0,0,0,a->width,a->height,GL_COLOR_BUFFER_BIT,GL_NEAREST);
++            GLsync consumed=glFenceSync(GL_SYNC_GPU_COMMANDS_COMPLETE,0);glFlush();
++            int swapped=consumed && glGetError()==GL_NO_ERROR && p_eglSwapBuffers(ctx->egl_display,ctx->native_present_surface);
++            uint64_t workFinished=nativeMonotonicNS();
++            /* Xwayland may acknowledge interval 1 but throttle an occluded
++             * surface to one swap per second. Two consecutive long swaps
++             * select our existing bounded 60 Hz clock for this surface.
++             * Keep texture ownership and the producer independent of it. */
++            if(nativeVSync && swapped){
++                slowNativeSwaps=workFinished-workStarted>=100000000ull?slowNativeSwaps+1:0;
++                if(slowNativeSwaps>=2 && p_eglSwapInterval(ctx->egl_display,0)){
++                    nativeVSync=0;
++                    deadline=workFinished;
++                }
++            }
++            pthread_mutex_lock(&a->mutex);
++            a->consumed[index]=consumed;
++            if(a->displayed>=0)a->state[a->displayed]=0;
++            a->displayed=index;
++            if(swapped)++a->frames;
++            pthread_mutex_unlock(&a->mutex);
++            if(!swapped){valid=0;break;}
++            __atomic_store_n(&target->presenter,getpid(),__ATOMIC_RELEASE);
++            __atomic_fetch_add(&target->sequence,1,__ATOMIC_RELEASE);
++            __atomic_store_n(&target->ready,3,__ATOMIC_RELEASE);
++            __atomic_fetch_add(&target->reserved[3],(uint32_t)((workFinished-workStarted)/1000),__ATOMIC_RELAXED);
++            __atomic_store_n(&target->reserved[6],nativeVSync?0x544d4732u:0x544d4731u,__ATOMIC_RELEASE);
++        }
++        /* If the producer finishes just after our refresh deadline, wait for
++         * that frame in short increments instead of losing a whole refresh.
++         * Only a real swap advances the display clock. */
++        if(index<0){__atomic_fetch_add(&target->reserved[1],1,__ATOMIC_RELAXED);nativeWaitUntil(nativeMonotonicNS()+1000000ull);continue;}
++        /* Native VSync owns the refresh cadence; avoid a second clock that
++         * can miss the compositor's next refresh after a variable swap wait. */
++        if(nativeVSync)continue;
++        uint64_t refreshNS=nativeRefreshIntervalNS();
++        deadline += refreshNS;
++        uint64_t now=nativeMonotonicNS();
++        /* Preserve the refresh phase across small scheduling delays. Reset only
++         * after a full missed period, so lateness does not accumulate as drift. */
++        if(now>deadline && now-deadline>refreshNS){__atomic_fetch_add(&target->reserved[2],1,__ATOMIC_RELAXED);deadline=now;}
++        nativeWaitUntil(deadline);
++    }
++    if(fbo)glDeleteFramebuffers(1,&fbo);
++    p_eglMakeCurrent(ctx->egl_display,EGL_NO_SURFACE,EGL_NO_SURFACE,EGL_NO_CONTEXT);
++    pthread_mutex_lock(&a->mutex);a->failed=!valid;a->running=0;pthread_mutex_unlock(&a->mutex);
++    if(ctx->native_present_target)__atomic_store_n(&ctx->native_present_target->ready,0,__ATOMIC_RELEASE);
++    return NULL;
++}
++static void stopAsyncPresent(CGLContextObj ctx) {
++    struct DarlingAsyncPresent *a=ctx->native_async;
++    if(!a)return;
++    pthread_mutex_lock(&a->mutex);a->running=0;pthread_mutex_unlock(&a->mutex);
++    if(a->started)pthread_join(a->thread,NULL);
++    CGLContextObj previous=CGLGetCurrentContext();
++    if(p_eglMakeCurrent(ctx->egl_display,ctx->egl_surface,ctx->egl_surface,ctx->egl_context)){
++        for(int n=0;n<3;++n){if(a->produced[n])glDeleteSync(a->produced[n]);if(a->consumed[n])glDeleteSync(a->consumed[n]);}
++        glDeleteFramebuffers(2,a->copy_fbos);glDeleteTextures(3,a->textures);
++        if(previous && previous!=ctx)p_eglMakeCurrent(previous->egl_display,previous->egl_surface,previous->egl_surface,previous->egl_context);
++        else if(!previous)p_eglMakeCurrent(ctx->egl_display,EGL_NO_SURFACE,EGL_NO_SURFACE,EGL_NO_CONTEXT);
++    }
++    pthread_mutex_destroy(&a->mutex);free(a);ctx->native_async=NULL;
++}
++static int enqueueAsyncPresent(CGLContextObj ctx,GLuint texture,GLenum textureTarget,unsigned width,unsigned height) {
++    struct DarlingAsyncPresent *a=ctx->native_async;
++    if(a && (a->width!=width || a->height!=height)){stopAsyncPresent(ctx);a=NULL;}
++    if(!a){
++        a=calloc(1,sizeof(*a));if(!a)return 0;
++        a->owner=ctx;a->width=width;a->height=height;a->displayed=-1;
++        pthread_mutex_init(&a->mutex,NULL);
++        GLint oldTexture;glGetIntegerv(GL_TEXTURE_BINDING_2D,&oldTexture);
++        glGenFramebuffers(2,a->copy_fbos);glGenTextures(3,a->textures);
++        for(int n=0;n<3;++n){glBindTexture(GL_TEXTURE_2D,a->textures[n]);glTexImage2D(GL_TEXTURE_2D,0,GL_RGBA8,width,height,0,GL_RGBA,GL_UNSIGNED_BYTE,NULL);}
++        glBindTexture(GL_TEXTURE_2D,oldTexture);ctx->native_async=a;
++        GLenum allocationError=glGetError();if(allocationError!=GL_NO_ERROR){if(getenv("RCLOL_GPU_DIRECT_TRACE"))fprintf(stderr,"GPU_ASYNC allocation_error=%u\n",allocationError);stopAsyncPresent(ctx);return 0;}
++        a->running=1;
++        pthread_attr_t attr;pthread_attr_init(&attr);pthread_attr_setstacksize(&attr,1024*1024);
++        int status=pthread_create(&a->thread,&attr,asyncPresentWorker,a);pthread_attr_destroy(&attr);
++        if(getenv("RCLOL_GPU_DIRECT_TRACE"))fprintf(stderr,"GPU_ASYNC worker_create=%d\n",status);
++        if(status){stopAsyncPresent(ctx);return 0;}a->started=1;
++    }
++    pthread_mutex_lock(&a->mutex);
++    if(a->failed || !a->running){pthread_mutex_unlock(&a->mutex);return 0;}
++    int index=-1;
++    for(int n=0;n<3;++n)if(!a->state[n]){index=n;break;}
++    /* Keep an older pending frame available to finish while replacing the
++     * newest pending frame with fresh producer work. Never touch display slots. */
++    if(index<0)for(int n=0;n<3;++n)if(a->state[n]==1 &&
++        (index<0 || a->serial[n]>a->serial[index]))index=n;
++    if(index<0){pthread_mutex_unlock(&a->mutex);return 0;}
++    a->state[index]=3;
++    GLsync consumed=a->consumed[index],produced=a->produced[index];
++    a->consumed[index]=a->produced[index]=NULL;
++    pthread_mutex_unlock(&a->mutex);
++    if(consumed){glWaitSync(consumed,0,GL_TIMEOUT_IGNORED);glDeleteSync(consumed);}
++    if(produced)glDeleteSync(produced);
++    GLint oldRead,oldDraw;
++    glGetIntegerv(GL_READ_FRAMEBUFFER_BINDING,&oldRead);glGetIntegerv(GL_DRAW_FRAMEBUFFER_BINDING,&oldDraw);
++    GLboolean scissor=glIsEnabled(GL_SCISSOR_TEST),srgb=glIsEnabled(GL_FRAMEBUFFER_SRGB);
++    glDisable(GL_SCISSOR_TEST);glDisable(GL_FRAMEBUFFER_SRGB);
++    glBindFramebuffer(GL_READ_FRAMEBUFFER,a->copy_fbos[0]);
++    glFramebufferTexture2D(GL_READ_FRAMEBUFFER,GL_COLOR_ATTACHMENT0,textureTarget,texture,0);glReadBuffer(GL_COLOR_ATTACHMENT0);
++    glBindFramebuffer(GL_DRAW_FRAMEBUFFER,a->copy_fbos[1]);
++    glFramebufferTexture2D(GL_DRAW_FRAMEBUFFER,GL_COLOR_ATTACHMENT0,GL_TEXTURE_2D,a->textures[index],0);glDrawBuffer(GL_COLOR_ATTACHMENT0);
++    int complete=glCheckFramebufferStatus(GL_READ_FRAMEBUFFER)==GL_FRAMEBUFFER_COMPLETE && glCheckFramebufferStatus(GL_DRAW_FRAMEBUFFER)==GL_FRAMEBUFFER_COMPLETE;
++    if(complete)glBlitFramebuffer(0,0,width,height,0,0,width,height,GL_COLOR_BUFFER_BIT,GL_NEAREST);
++    glBindFramebuffer(GL_READ_FRAMEBUFFER,oldRead);glBindFramebuffer(GL_DRAW_FRAMEBUFFER,oldDraw);
++    if(scissor)glEnable(GL_SCISSOR_TEST);if(srgb)glEnable(GL_FRAMEBUFFER_SRGB);
++    produced=glFenceSync(GL_SYNC_GPU_COMMANDS_COMPLETE,0);glFlush();
++    GLenum copyError=glGetError();
++    if(!complete || !produced || copyError!=GL_NO_ERROR){if(getenv("RCLOL_GPU_DIRECT_TRACE"))fprintf(stderr,"GPU_ASYNC copy_error=%u fence=%d\n",copyError,produced!=NULL);if(produced)glDeleteSync(produced);pthread_mutex_lock(&a->mutex);a->state[index]=0;pthread_mutex_unlock(&a->mutex);return 0;}
++    pthread_mutex_lock(&a->mutex);
++    a->produced[index]=produced;a->state[index]=1;a->serial[index]=++a->submissions;
++    if(ctx->native_present_target)__atomic_fetch_add(&ctx->native_present_target->reserved[0],1,__ATOMIC_RELAXED);
++    if(ctx->native_present_target){
++        __atomic_store_n(&ctx->native_present_target->reserved[4],__atomic_load_n(&nativeUploadCount,__ATOMIC_RELAXED),__ATOMIC_RELAXED);
++        __atomic_store_n(&ctx->native_present_target->reserved[5],__atomic_load_n(&nativeUploadMicroseconds,__ATOMIC_RELAXED),__ATOMIC_RELAXED);
++    }
++    pthread_mutex_unlock(&a->mutex);
++    return 1;
++}
 diff --git a/src/frameworks/OpenGL/CMakeLists.txt b/src/frameworks/OpenGL/CMakeLists.txt
 index deca16b87..d75d5e22d 100644
 --- a/src/frameworks/OpenGL/CMakeLists.txt
@@ -7018,7 +9322,7 @@ index deca16b87..d75d5e22d 100644
  
  set_property(TARGET OpenGL APPEND_STRING PROPERTY LINK_FLAGS
 diff --git a/src/frameworks/OpenGL/OpenGL.c b/src/frameworks/OpenGL/OpenGL.c
-index ffd7fe054..b10588914 100644
+index ffd7fe054..7717ce300 100644
 --- a/src/frameworks/OpenGL/OpenGL.c
 +++ b/src/frameworks/OpenGL/OpenGL.c
 @@ -2,11 +2,22 @@
@@ -7171,7 +9475,7 @@ index ffd7fe054..b10588914 100644
  
  static EGLConfig config;
  static int num_config;
-@@ -48,10 +177,18 @@ struct _CGLContextObj {
+@@ -48,10 +186,18 @@ struct _CGLContextObj {
      GLuint retain_count;
      pthread_mutex_t lock;
      EGLContext egl_context;
@@ -7190,7 +9494,7 @@ index ffd7fe054..b10588914 100644
  };
  
  struct _CGLPixelFormatObj {
-@@ -59,6 +196,24 @@ struct _CGLPixelFormatObj {
+@@ -59,6 +205,24 @@ struct _CGLPixelFormatObj {
      CGLPixelFormatAttribute *attributes;
  };
  
@@ -7215,7 +9519,7 @@ index ffd7fe054..b10588914 100644
  static inline int attribute_has_argument(CGLPixelFormatAttribute attr) {
      switch (attr) {
      case kCGLPFAAuxBuffers:
-@@ -69,6 +224,9 @@ static inline int attribute_has_argument(CGLPixelFormatAttribute attr) {
+@@ -69,6 +233,9 @@ static inline int attribute_has_argument(CGLPixelFormatAttribute attr) {
      case kCGLPFAAccumSize:
      case kCGLPFARendererID:
      case kCGLPFADisplayMask:
@@ -7225,7 +9529,7 @@ index ffd7fe054..b10588914 100644
          return 1;
      default:
          return 0;
-@@ -78,6 +236,18 @@ static inline int attribute_has_argument(CGLPixelFormatAttribute attr) {
+@@ -78,6 +245,18 @@ static inline int attribute_has_argument(CGLPixelFormatAttribute attr) {
  __attribute__((constructor))
  static void _CGLInitialize(void)
  {
@@ -7244,7 +9548,7 @@ index ffd7fe054..b10588914 100644
      g_displays = CFDictionaryCreateMutable(NULL, 0, NULL, NULL);
  }
  
-@@ -93,41 +263,68 @@ static int attributes_count(const CGLPixelFormatAttribute *attrs) {
+@@ -93,41 +272,68 @@ static int attributes_count(const CGLPixelFormatAttribute *attrs) {
  
  CGLError CGLRegisterNativeDisplay(void *native_display) {
  
@@ -7321,7 +9625,7 @@ index ffd7fe054..b10588914 100644
  
          pthread_mutex_lock(&g_displaysMutex);
          CFDictionaryAddValue(g_displays, (const void*)(unsigned long) cid, rv);
-@@ -139,6 +336,8 @@ static struct _CGLDisplay* getCGLDisplay(CGSConnectionID cid)
+@@ -139,6 +345,8 @@ static struct _CGLDisplay* getCGLDisplay(CGSConnectionID cid)
  
  CGLError CGLSetSurface(CGLContextObj gl, CGSConnectionID cid, CGSWindowID wid, CGSSurfaceID sid)
  {
@@ -7330,7 +9634,7 @@ index ffd7fe054..b10588914 100644
      struct _CGLDisplay* disp = getCGLDisplay(cid);
      if (!disp)
          return kCGLBadConnection;
-@@ -152,7 +351,7 @@ CGLError CGLSetSurface(CGLContextObj gl, CGSConnectionID cid, CGSWindowID wid, C
+@@ -152,7 +360,7 @@ CGLError CGLSetSurface(CGLContextObj gl, CGSConnectionID cid, CGSWindowID wid, C
      if (!window)
          return kCGLBadWindow;
  
@@ -7339,7 +9643,7 @@ index ffd7fe054..b10588914 100644
      if (gl->egl_surface == EGL_NO_SURFACE)
          return kCGLBadState;
      return kCGLNoError;
-@@ -161,7 +360,7 @@ CGLError CGLSetSurface(CGLContextObj gl, CGSConnectionID cid, CGSWindowID wid, C
+@@ -161,7 +369,7 @@ CGLError CGLSetSurface(CGLContextObj gl, CGSConnectionID cid, CGSWindowID wid, C
  CGLWindowRef CGLGetWindow(void *native_window) {
  
      EGLNativeWindowType window = (EGLNativeWindowType) native_window;
@@ -7348,11 +9652,46 @@ index ffd7fe054..b10588914 100644
  
      if (surface == EGL_NO_SURFACE) {
          return NULL;
-@@ -171,14 +370,18 @@ CGLWindowRef CGLGetWindow(void *native_window) {
+@@ -170,15 +378,53 @@ CGLWindowRef CGLGetWindow(void *native_window) {
+     return (CGLWindowRef) surface;
  }
  
++/* The default config has no alpha, and NVIDIA rejects it on 32-bit windows (EGL_BAD_CONFIG).
++ * Translucent windows need an alpha config whose native visual is the window's. */
++CGLWindowRef CGLGetWindowWithAlpha(void *native_window, unsigned long visual_id) {
++    static EGLint const alpha_attribute_list[] = {
++        EGL_RED_SIZE, 1,
++        EGL_GREEN_SIZE, 1,
++        EGL_BLUE_SIZE, 1,
++        EGL_ALPHA_SIZE, 1,
++        EGL_SURFACE_TYPE, EGL_WINDOW_BIT,
++        EGL_RENDERABLE_TYPE, EGL_OPENGL_BIT,
++        EGL_NONE
++    };
++    EGLint count = 0;
++    if (!display || !p_eglGetConfigAttrib ||
++        !p_eglChooseConfig(display, alpha_attribute_list, NULL, 0, &count) || count <= 0)
++        return NULL;
++    EGLConfig *configs = malloc(count * sizeof(EGLConfig));
++    EGLSurface surface = EGL_NO_SURFACE;
++    if (configs && p_eglChooseConfig(display, alpha_attribute_list, configs, count, &count)) {
++        for (EGLint i = 0; i < count && surface == EGL_NO_SURFACE; i++) {
++            EGLint visual = 0;
++            if (p_eglGetConfigAttrib(display, configs[i], EGL_NATIVE_VISUAL_ID, &visual) &&
++                (unsigned long) visual == visual_id)
++                surface = p_eglCreateWindowSurface(display, configs[i],
++                                                   (EGLNativeWindowType) native_window, NULL);
++        }
++    }
++    free(configs);
++    return surface == EGL_NO_SURFACE ? NULL : (CGLWindowRef) surface;
++}
++
  CGL_EXPORT void CGLDestroyWindow(CGLWindowRef window) {
 -    eglDestroySurface(display, (EGLSurface) window);
++    /* CGLGetWindow returns NULL when eglCreateWindowSurface fails. */
++    if (window == NULL)
++        return;
 +    p_eglDestroySurface(display, (EGLSurface) window);
  }
  
@@ -7369,7 +9708,7 @@ index ffd7fe054..b10588914 100644
  }
  
  static pthread_key_t current_context_key;
-@@ -198,18 +401,42 @@ CGLContextObj CGLGetCurrentContext(void) {
+@@ -198,18 +444,42 @@ CGLContextObj CGLGetCurrentContext(void) {
      return pthread_getspecific(key);
  }
  
@@ -7417,7 +9756,7 @@ index ffd7fe054..b10588914 100644
  }
  
  CGLError CGLSetFullScreen(CGLContextObj ctx) {
-@@ -223,11 +450,13 @@ CGLError CGLChoosePixelFormat(
+@@ -223,11 +493,13 @@ CGLError CGLChoosePixelFormat(
      CGLPixelFormatObj *result,
      GLint *number_of_screens
  ) {
@@ -7432,7 +9771,7 @@ index ffd7fe054..b10588914 100644
      for (int i = 0; i < count; i++) {
          format->attributes[i] = attrs[i];
      }
-@@ -251,6 +480,10 @@ CGLError CGLDescribePixelFormat(
+@@ -251,6 +523,10 @@ CGLError CGLDescribePixelFormat(
      CGLPixelFormatAttribute attr,
      GLint *value
  ) {
@@ -7443,11 +9782,13 @@ index ffd7fe054..b10588914 100644
      for (int i = 0; format->attributes[i] != 0; i++) {
          int has_arg = attribute_has_argument(format->attributes[i]);
  
-@@ -304,24 +537,120 @@ GLuint CGLGetPixelFormatRetainCount(CGLPixelFormatObj pixelFormat) {
+@@ -303,37 +579,151 @@ GLuint CGLGetPixelFormatRetainCount(CGLPixelFormatObj pixelFormat) {
+     return pixelFormat->retain_count;
  }
  
- CGLError CGLCreateContext(CGLPixelFormatObj pixelFormat, CGLContextObj share, CGLContextObj *resultp) {
-+    /* Cocotron window compositing requests the default format with NULL. */
+-CGLError CGLCreateContext(CGLPixelFormatObj pixelFormat, CGLContextObj share, CGLContextObj *resultp) {
++static CGLError createContext(CGLPixelFormatObj pixelFormat, CGLContextObj share,
++                              EGLConfig windowConfig, CGLContextObj *resultp) {
 +    if (!resultp)
 +        return kCGLBadAddress;
 +    *resultp = NULL;
@@ -7458,7 +9799,7 @@ index ffd7fe054..b10588914 100644
  
      EGLContext egl_share = EGL_NO_CONTEXT;
 +    EGLDisplay contextDisplay = share ? share->egl_display : display;
-+    EGLConfig contextConfig = share ? share->egl_config : config;
++    EGLConfig contextConfig = share ? share->egl_config : windowConfig ? windowConfig : config;
      if (share != NULL) {
          egl_share = share->egl_context;
      }
@@ -7566,7 +9907,29 @@ index ffd7fe054..b10588914 100644
  
      *resultp = context;
  
-@@ -333,7 +662,7 @@ CGLContextObj CGLRetainContext(CGLContextObj context) {
+     return kCGLNoError;
+ }
+ 
++CGLError CGLCreateContext(CGLPixelFormatObj pixelFormat, CGLContextObj share, CGLContextObj *resultp) {
++    /* Cocotron window compositing requests the default format with NULL. */
++    return createContext(pixelFormat, share, NULL, resultp);
++}
++
++CGLError CGLCreateContextForWindow(CGLWindowRef window, CGLContextObj *resultp) {
++    EGLint id = 0, count = 0;
++    EGLConfig windowConfig = NULL;
++    ensureDefaultDisplay();
++    if (window && display && p_eglQuerySurface &&
++        p_eglQuerySurface(display, (EGLSurface) window, EGL_CONFIG_ID, &id)) {
++        EGLint const attributes[] = {EGL_CONFIG_ID, id, EGL_NONE};
++        if (!p_eglChooseConfig(display, attributes, &windowConfig, 1, &count))
++            count = 0;
++    }
++    return createContext(NULL, NULL, count == 1 ? windowConfig : NULL, resultp);
++}
++
+ CGLContextObj CGLRetainContext(CGLContextObj context) {
+     if (context == NULL) {
          return NULL;
      }
  
@@ -7575,7 +9938,7 @@ index ffd7fe054..b10588914 100644
      return context;
  }
  
-@@ -342,11 +671,17 @@ void CGLReleaseContext(CGLContextObj context) {
+@@ -342,11 +732,17 @@ void CGLReleaseContext(CGLContextObj context) {
          return;
      }
  
@@ -7596,7 +9959,7 @@ index ffd7fe054..b10588914 100644
  
      if (CGLGetCurrentContext() == context) {
          CGLSetCurrentContext(NULL);
-@@ -354,7 +689,11 @@ void CGLReleaseContext(CGLContextObj context) {
+@@ -354,7 +750,11 @@ void CGLReleaseContext(CGLContextObj context) {
  
      pthread_mutex_destroy(&(context->lock));
  
@@ -7609,7 +9972,7 @@ index ffd7fe054..b10588914 100644
  
      free(context);
  }
-@@ -383,9 +722,330 @@ CGLError CGLUnlockContext(CGLContextObj context) {
+@@ -383,9 +783,330 @@ CGLError CGLUnlockContext(CGLContextObj context) {
      return kCGLNoError;
  }
  
@@ -7942,7 +10305,7 @@ index ffd7fe054..b10588914 100644
  }
  
  CGLError CGLSetParameter(CGLContextObj context, CGLContextParameter parameter, const GLint *value) {
-@@ -394,8 +1054,9 @@ CGLError CGLSetParameter(CGLContextObj context, CGLContextParameter parameter, c
+@@ -394,8 +1115,9 @@ CGLError CGLSetParameter(CGLContextObj context, CGLContextParameter parameter, c
  
      if (parameter == kCGLCPSwapInterval)
      {
@@ -7953,7 +10316,7 @@ index ffd7fe054..b10588914 100644
          if (success)
              context->swap_interval = v;
          return success ? kCGLNoError : kCGLBadValue;
-@@ -417,14 +1078,19 @@ CGLError CGLGetParameter(CGLContextObj context, CGLContextParameter parameter, G
+@@ -417,14 +1139,19 @@ CGLError CGLGetParameter(CGLContextObj context, CGLContextParameter parameter, G
      return kCGLNoError;
  }
  
@@ -7979,6 +10342,23 @@ index ffd7fe054..b10588914 100644
 -}
 \ No newline at end of file
 +}
+diff --git a/src/frameworks/OpenGL/include/OpenGL/CGLInternal.h b/src/frameworks/OpenGL/include/OpenGL/CGLInternal.h
+index 1d0b10e65..5cdd9a89c 100644
+--- a/src/frameworks/OpenGL/include/OpenGL/CGLInternal.h
++++ b/src/frameworks/OpenGL/include/OpenGL/CGLInternal.h
+@@ -14,8 +14,12 @@ typedef void *CGLWindowRef;
+ CGL_EXPORT CGLError CGLRegisterNativeDisplay(void *native_display);
+ 
+ CGL_EXPORT CGLWindowRef CGLGetWindow(void *native_window);
++// A surface with an alpha channel, for a window created with the given 32-bit visual.
++CGL_EXPORT CGLWindowRef CGLGetWindowWithAlpha(void *native_window, unsigned long visual_id);
+ CGL_EXPORT void CGLDestroyWindow(CGLWindowRef window);
+ 
++// A context that can be made current on the window: one created from its surface's config.
++CGL_EXPORT CGLError CGLCreateContextForWindow(CGLWindowRef window, CGLContextObj *result);
+ CGL_EXPORT CGLError CGLContextMakeCurrentAndAttachToWindow(CGLContextObj context, CGLWindowRef window);
+ CGLError CGLSetSurface(CGLContextObj gl, CGSConnectionID cid, CGSWindowID wid, CGSSurfaceID sid);
+ CGLContextObj CGWindowContextCreate(CGSConnectionID cid, CGSWindowID wid, CFDictionaryRef options);
 diff --git a/src/frameworks/OpenGL/include/OpenGL/CGLTypes.h b/src/frameworks/OpenGL/include/OpenGL/CGLTypes.h
 index 7d5eda01a..803ac02d3 100644
 --- a/src/frameworks/OpenGL/include/OpenGL/CGLTypes.h
@@ -7991,6 +10371,23 @@ index 7d5eda01a..803ac02d3 100644
      kCGLPFAVirtualScreenCount = 128,
  };
  
+diff --git a/src/frameworks/OpenGL/include/OpenGL/DarlingNativePresent.h b/src/frameworks/OpenGL/include/OpenGL/DarlingNativePresent.h
+new file mode 100644
+index 000000000..20313c6fc
+--- /dev/null
++++ b/src/frameworks/OpenGL/include/OpenGL/DarlingNativePresent.h
+@@ -0,0 +1,11 @@
++#ifndef DARLING_NATIVE_PRESENT_H
++#define DARLING_NATIVE_PRESENT_H
++#include <stdint.h>
++#define DARLING_NATIVE_PRESENT_MAGIC 0x47505532u
++/* Host X11 target metadata only; no pixels, input, or account information. */
++typedef struct {
++ uint32_t magic,target,width,height;
++ uint32_t ready,presenter,sequence,visual;
++ uint32_t flags,reserved[7];
++} DarlingNativePresentTarget;
++#endif
 diff --git a/src/frameworks/OpenGL/include/OpenGL/OpenGL.h b/src/frameworks/OpenGL/include/OpenGL/OpenGL.h
 index a700038d7..7bb98bf4b 100644
 --- a/src/frameworks/OpenGL/include/OpenGL/OpenGL.h
@@ -8658,6 +11055,49 @@ index 6fa2d088c..655554284 100644
  int sandbox_issue_extension(const char *path, char **ext_token);
  int sandbox_issue_fs_extension(const char *path, uint64_t flags, char **ext_token);
  int sandbox_issue_fs_rw_extension(const char *path, char **ext_token);
+diff --git a/src/shellspawn/shellspawn-fds.h b/src/shellspawn/shellspawn-fds.h
+new file mode 100644
+index 000000000..1f3c473d5
+--- /dev/null
++++ b/src/shellspawn/shellspawn-fds.h
+@@ -0,0 +1,37 @@
++#ifndef SHELLSPAWN_FDS_H
++#define SHELLSPAWN_FDS_H
++#include <errno.h>
++#include <fcntl.h>
++#include <unistd.h>
++
++// Preserve every source before replacing any standard descriptor: sources can
++// themselves be 0, 1 or 2 when the daemon was launched with closed stdio.
++static int shellspawn_remap_stdio(const int streams[3])
++{
++    int saved[3] = { -1, -1, -1 };
++    for (int i = 0; i < 3; ++i) {
++        saved[i] = fcntl(streams[i], F_DUPFD_CLOEXEC, 3);
++        if (saved[i] < 0) goto failure;
++    }
++    for (int i = 0; i < 3; ++i)
++        if (dup2(saved[i], i) < 0) goto failure;
++    for (int i = 0; i < 3; ++i) close(saved[i]);
++    return 0;
++failure: {
++    int error = errno;
++    for (int i = 0; i < 3; ++i) if (saved[i] >= 0) close(saved[i]);
++    errno = error;
++    return -1;
++}}
++
++static void shellspawn_close_streams(int streams[3])
++{
++    for (int i = 0; i < 3; ++i) {
++        int fd = streams[i];
++        streams[i] = -1;
++        for (int j = i + 1; j < 3; ++j)
++            if (streams[j] == fd) streams[j] = -1;
++        if (fd > STDERR_FILENO) close(fd);
++    }
++}
++#endif
 diff --git a/src/shellspawn/shellspawn.c b/src/shellspawn/shellspawn.c
 index f5ba615bb..53d04ad3d 100644
 --- a/src/shellspawn/shellspawn.c
@@ -8809,6 +11249,53 @@ index f5ba615bb..53d04ad3d 100644
  
  	if (shell_pid != -1)
  		kill(shell_pid, SIGKILL);
+diff --git a/src/startup/mldr/commpage-cpu-caps.h b/src/startup/mldr/commpage-cpu-caps.h
+new file mode 100644
+index 000000000..3ce24adf9
+--- /dev/null
++++ b/src/startup/mldr/commpage-cpu-caps.h
+@@ -0,0 +1,41 @@
++#ifndef MLDR_COMMPAGE_CPU_CAPS_H
++#define MLDR_COMMPAGE_CPU_CAPS_H
++#include <stdint.h>
++
++/* CPUID leaf 1 uses EDX for legacy SIMD and ECX for newer SIMD. AVX
++ * also needs the operating system to save both XMM and YMM state. */
++static inline uint64_t commpage_decode_cpu_caps(uint32_t ecx1, uint32_t edx1,
++    uint32_t ebx7, uint64_t xcr0, int long_mode)
++{
++    uint64_t caps = long_mode ? k64Bit : 0;
++#define FEATURE(reg, bit, cap) do { if ((reg) & (UINT32_C(1) << (bit))) caps |= (cap); } while (0)
++    FEATURE(edx1, 23, kHasMMX);
++    FEATURE(edx1, 25, kHasSSE);
++    FEATURE(edx1, 26, kHasSSE2);
++    FEATURE(ecx1, 0, kHasSSE3);
++    FEATURE(ecx1, 9, kHasSupplementalSSE3);
++    FEATURE(ecx1, 19, kHasSSE4_1);
++    FEATURE(ecx1, 20, kHasSSE4_2);
++    FEATURE(ecx1, 25, kHasAES);
++    FEATURE(ecx1, 30, kHasRDRAND);
++    const uint32_t avx_requirements = (UINT32_C(1) << 26) | (UINT32_C(1) << 27) | (UINT32_C(1) << 28);
++    const int avx_usable = (ecx1 & avx_requirements) == avx_requirements && (xcr0 & 6) == 6;
++    if (avx_usable) {
++        caps |= kHasAVX1_0;
++        FEATURE(ecx1, 12, kHasFMA);
++        FEATURE(ecx1, 29, kHasF16C);
++        FEATURE(ebx7, 5, kHasAVX2_0);
++    }
++    FEATURE(ebx7, 9, kHasENFSTRG);
++    FEATURE(ebx7, 3, kHasBMI1);
++    FEATURE(ebx7, 8, kHasBMI2);
++    FEATURE(ebx7, 11, kHasRTM);
++    FEATURE(ebx7, 4, kHasHLE);
++    FEATURE(ebx7, 18, kHasRDSEED);
++    FEATURE(ebx7, 19, kHasADX);
++    FEATURE(ebx7, 14, kHasMPX);
++    FEATURE(ebx7, 2, kHasSGX);
++#undef FEATURE
++    return caps;
++}
++#endif
 diff --git a/src/startup/mldr/commpage.c b/src/startup/mldr/commpage.c
 index d9a7aea96..cc76f7a85 100644
 --- a/src/startup/mldr/commpage.c
@@ -8977,6 +11464,22 @@ index fee1bde87..bee86604b 100644
  
  #endif
 -
+diff --git a/src/startup/mldr/elfcalls/threads.c b/src/startup/mldr/elfcalls/threads.c
+index e789986ea..0d56b4eb7 100644
+--- a/src/startup/mldr/elfcalls/threads.c
++++ b/src/startup/mldr/elfcalls/threads.c
+@@ -387,8 +387,9 @@ int __darling_thread_rpc_socket(void) {
+ 			// this is the main thread
+ 			t_server_socket = __dserver_main_thread_socket_fd;
+ 		} else {
+-			// threads should already have a per-thread socket assigned when they're created
+-			abort();
++			// Native host-library threads do not have a Darling RPC connection.
++			// Let the caller report EPIPE, including the resize-signal bridge.
++			return -1;
+ 		}
+ 	}
+ 	return t_server_socket;
 diff --git a/src/startup/mldr/mldr.c b/src/startup/mldr/mldr.c
 index 6617ef82b..a227abee8 100644
 --- a/src/startup/mldr/mldr.c
@@ -9144,16 +11647,22 @@ index 126bd394c..f62c2e0e8 100644
  		filenames = [NSArray arrayWithObjects: urls count: count];
  		free(urls);
 diff --git a/tools/shutdown-user.sh b/tools/shutdown-user.sh
-index 072a6e244..c80410087 100755
+index 072a6e244..ba20bba4c 100755
 --- a/tools/shutdown-user.sh
 +++ b/tools/shutdown-user.sh
-@@ -1,26 +1,34 @@
+@@ -1,26 +1,40 @@
  #!/bin/sh
  
 -if [ "$(whoami)" != "root" ]
 -then
 -	echo "$0 must be run as root, invoking sudo"
 -	exec sudo su -c "$0" "$@"
++# Rootless installs own only this workspace/prefix, never all launchd users.
++if [ -n "${DARLING_WORKSPACE:-}" ]; then
++    : "${DPREFIX:?rootless install requires an explicit prefix}"
++    exec python3 "$DARLING_WORKSPACE/scripts/nix-idle.py"
++fi
++
 +if [ "$(whoami)" != "root" ]; then
 +    echo "$0 must be run as root, invoking sudo"
 +    exec sudo sh "$0" "$@"

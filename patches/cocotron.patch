@@ -1,5 +1,5 @@
 diff --git a/AppKit/CMakeLists.txt b/AppKit/CMakeLists.txt
-index 393a1eb3..6a47ac89 100644
+index 393a1eb3..347d070d 100644
 --- a/AppKit/CMakeLists.txt
 +++ b/AppKit/CMakeLists.txt
 @@ -1,5 +1,8 @@
@@ -11,7 +11,15 @@ index 393a1eb3..6a47ac89 100644
  include(darling_framework)
  
  remove_sdk_framework(AppKit)
-@@ -619,6 +622,7 @@ add_backend(X11
+@@ -551,6 +554,7 @@ add_framework(AppKit
+ 		CoreGraphics
+ 		ImageIO
+ 		# native libraries
++		X11
+ 		FreeType
+ 		fontconfig
+ 		jpeg png tiff
+@@ -619,6 +623,7 @@ add_backend(X11
                  X11
  		XRandR
  		Xcursor
@@ -126,7 +134,7 @@ index d543e329..e320a3af 100644
  {
      return [NSMethodSignature signatureWithObjCTypes: "v@:"];
 diff --git a/AppKit/NSApplication.m b/AppKit/NSApplication.m
-index 8e7508e2..c11d5dc1 100644
+index 8e7508e2..2a011d7d 100644
 --- a/AppKit/NSApplication.m
 +++ b/AppKit/NSApplication.m
 @@ -17,6 +17,9 @@ COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER
@@ -209,7 +217,7 @@ index 8e7508e2..c11d5dc1 100644
              [pool release];
  }
  
-@@ -643,16 +668,43 @@ NSApplication *NSApp = nil;
+@@ -643,16 +668,42 @@ NSApplication *NSApp = nil;
  
  - (void) _checkForTerminate {
      int count = [_windows count];
@@ -242,7 +250,6 @@ index 8e7508e2..c11d5dc1 100644
 +            }
 +        }
 +    }
-+
 +    // darling-lol: match AppKit and only terminate when the delegate opts
 +    // in via applicationShouldTerminateAfterLastWindowClosed:. The previous
 +    // unconditional terminate killed faceless/splash-screen apps (notably
@@ -255,7 +262,7 @@ index 8e7508e2..c11d5dc1 100644
  }
  
  - (void) _checkForAppActivation {
-@@ -666,17 +718,13 @@ NSApplication *NSApp = nil;
+@@ -666,17 +717,13 @@ NSApplication *NSApp = nil;
  }
  
  - (void) run {
@@ -276,7 +283,7 @@ index 8e7508e2..c11d5dc1 100644
  
      do {
          pool = [NSAutoreleasePool new];
-@@ -716,6 +764,12 @@ NSApplication *NSApp = nil;
+@@ -716,6 +763,12 @@ NSApplication *NSApp = nil;
  }
  
  - (void) sendEvent: (NSEvent *) event {
@@ -289,7 +296,7 @@ index 8e7508e2..c11d5dc1 100644
      if ([event type] == NSKeyDown) {
          unsigned modifierFlags = [event modifierFlags];
  
-@@ -742,6 +796,61 @@ NSApplication *NSApp = nil;
+@@ -742,6 +795,61 @@ NSApplication *NSApp = nil;
      do {
          NSAutoreleasePool *pool = [NSAutoreleasePool new];
  
@@ -870,37 +877,6 @@ index 2251b642..8b29725d 100644
  - (NSRect) boundingRectForFont {
      return CTFontGetBoundingBox(_ctFont);
  }
-diff --git a/AppKit/NSGeometryTrace.h b/AppKit/NSGeometryTrace.h
-new file mode 100644
-index 00000000..a51a9241
---- /dev/null
-+++ b/AppKit/NSGeometryTrace.h
-@@ -0,0 +1,25 @@
-+/* Opt-in runtime geometry diagnostics; never log view text or client data. */
-+#ifndef DARLING_NS_GEOMETRY_TRACE_H
-+#define DARLING_NS_GEOMETRY_TRACE_H
-+#include <stdarg.h>
-+#include <stdio.h>
-+#include <stdlib.h>
-+
-+static inline void DarlingGeometryTrace(const char *format, ...) {
-+    if (!getenv("DARLING_UI_GEOMETRY_TRACE"))
-+        return;
-+    va_list args, copy;
-+    va_start(args, format);
-+    va_copy(copy, args);
-+    vfprintf(stderr, format, args);
-+    va_end(args);
-+    /* Clients may redirect stderr to a non-log descriptor. Keep a copy in
-+     * the guest's temporary directory so their resize events remain visible. */
-+    FILE *file = fopen("/tmp/darling-ui-geometry.log", "a");
-+    if (file) {
-+        vfprintf(file, format, copy);
-+        fclose(file);
-+    }
-+    va_end(copy);
-+}
-+#endif
 diff --git a/AppKit/NSImage.m b/AppKit/NSImage.m
 index d2ac8e05..a4164f0a 100644
 --- a/AppKit/NSImage.m
@@ -2136,7 +2112,7 @@ index c3f5d056..dbd93174 100644
          @"NSTouchBarItemIdentifierCharacterPicker";
  
 diff --git a/AppKit/NSView.m b/AppKit/NSView.m
-index 8ac2bbdc..03b32e54 100644
+index 8ac2bbdc..595b9f43 100644
 --- a/AppKit/NSView.m
 +++ b/AppKit/NSView.m
 @@ -46,6 +46,12 @@ CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE. */
@@ -2360,8 +2336,36 @@ index 8ac2bbdc..03b32e54 100644
          }
  
          [_subviews
+@@ -2687,6 +2790,17 @@ static NSView *viewBeingPrinted = nil;
+          slideBack: (BOOL) slideBack
+ {
+     location = [self convertPoint: location toView: nil];
++    if ([NSDraggingManager draggingManager] == nil) {
++        // darling-lol: no drag manager on X11; NSWindow runs the drag in-process.
++        [[self window] dragImage: image
++                              at: location
++                          offset: offset
++                           event: event
++                      pasteboard: pasteboard
++                          source: source
++                       slideBack: slideBack];
++        return;
++    }
+     [[NSDraggingManager draggingManager] dragImage: image
+                                                 at: location
+                                             offset: offset
+@@ -2783,7 +2897,8 @@ static NSView *viewBeingPrinted = nil;
+ }
+ 
+ - (BOOL) prepareForDragOperation: (id<NSDraggingInfo>) sender {
+-    return NO;
++    // darling-lol: AppKit goes ahead when a destination doesn't implement this (Chromium).
++    return YES;
+ }
+ 
+ - (BOOL) performDragOperation: (id<NSDraggingInfo>) sender {
 diff --git a/AppKit/NSWindow.m b/AppKit/NSWindow.m
-index d545120a..02d6b69a 100644
+index d545120a..b1d73df2 100644
 --- a/AppKit/NSWindow.m
 +++ b/AppKit/NSWindow.m
 @@ -19,6 +19,7 @@ IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN
@@ -2372,7 +2376,15 @@ index d545120a..02d6b69a 100644
  #import <AppKit/NSColor.h>
  #import <AppKit/NSCursor.h>
  #import <AppKit/NSDisplay.h>
-@@ -45,6 +46,21 @@ CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE. */
+@@ -27,6 +28,7 @@ CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE. */
+ #import <AppKit/NSEvent_CoreGraphics.h>
+ #import <AppKit/NSGraphics.h>
+ #import <AppKit/NSImage.h>
++#import <AppKit/NSImageView.h>
+ #import <AppKit/NSMainMenuView.h>
+ #import <AppKit/NSMenu.h>
+ #import <AppKit/NSMenuItem.h>
+@@ -45,6 +47,21 @@ CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE. */
  #import <AppKit/NSWindowAnimationContext.h>
  #import <ApplicationServices/ApplicationServices.h>
  #import <CoreGraphics/CGWindow.h>
@@ -2394,7 +2406,7 @@ index d545120a..02d6b69a 100644
  
  const NSNotificationName NSWindowDidBecomeKeyNotification =
          @"NSWindowDidBecomeKeyNotification";
-@@ -204,6 +220,25 @@ NSInteger NSBitsPerPixelFromDepth(NSWindowDepth depth) {
+@@ -204,6 +221,122 @@ NSInteger NSBitsPerPixelFromDepth(NSWindowDepth depth) {
  
  @end
  
@@ -2417,10 +2429,107 @@ index d545120a..02d6b69a 100644
 +    return view;
 +}
 +
++/* darling-lol: the X11 backend has no NSDraggingManager, so drags run in-process
++ * (see -_localDragImage:...): this is the NSDraggingInfo handed to destinations. */
++@interface _NSLocalDraggingInfo : NSObject <NSDraggingInfo> {
++  @public
++    NSPasteboard *_pasteboard;
++    NSImage *_image;
++    id _source;
++    NSWindow *_destinationWindow;
++    NSPoint _screenPoint;
++    NSDragOperation _sourceMask;
++}
++@end
++
++@implementation _NSLocalDraggingInfo
++
++- (NSPasteboard *) draggingPasteboard {
++    return _pasteboard;
++}
++
++- (NSDragOperation) draggingSourceOperationMask {
++    return _sourceMask;
++}
++
++- (NSPoint) draggingLocation {
++    if (_destinationWindow == nil)
++        return _screenPoint;
++    return [_destinationWindow convertScreenToBase: _screenPoint];
++}
++
++- (NSImage *) draggedImage {
++    return _image;
++}
++
++- (NSPoint) draggedImageLocation {
++    return [self draggingLocation];
++}
++
++- (NSWindow *) draggingDestinationWindow {
++    return _destinationWindow;
++}
++
++- (id) draggingSource {
++    return _source;
++}
++
++- (void) slideDraggedImageTo: (NSPoint) point {
++}
++
++- (int) draggingSequenceNumber {
++    return 0;
++}
++
++- (NSArray *) namesOfPromisedFilesDroppedAtDestination: (NSURL *) destination {
++    return nil;
++}
++
++@end
++
++// Shows the drag image under the pointer. Can't become key, so X11 makes it
++// override-redirect and the window manager leaves it alone.
++@interface _NSDragImageWindow : NSWindow
++@end
++
++@implementation _NSDragImageWindow
++
++- (BOOL) canBecomeKeyWindow {
++    return NO;
++}
++
++- (BOOL) canBecomeMainWindow {
++    return NO;
++}
++
++@end
++
++/* One -nextEventMatchingMask: pass handles a single run loop source, and Chromium
++ * runs one task per pass: during a drag its drop-target replies fall behind.
++ * Run sources until idle (wait == 0) or until the deadline (wait > 0). */
++static void _NSLocalDragRunPending(NSTimeInterval budget, BOOL wait) {
++    CFAbsoluteTime deadline = CFAbsoluteTimeGetCurrent() + budget;
++    for (;;) {
++        CFTimeInterval left = deadline - CFAbsoluteTimeGetCurrent();
++        if (left <= 0)
++            break;
++        SInt32 result = CFRunLoopRunInMode(kCFRunLoopDefaultMode, wait ? MIN(left, 0.01) : 0, true);
++        if (!wait && result != kCFRunLoopRunHandledSource)
++            break;
++    }
++}
++
++static BOOL _NSLocalDragTrace(void) {
++    static int trace = -1;
++    if (trace < 0)
++        trace = getenv("DARLING_DRAG_TRACE") != NULL;
++    return trace;
++}
++
  @implementation NSWindow
  
  @synthesize identifier = _identifier;
-@@ -218,13 +253,18 @@ static BOOL _allowsAutomaticWindowTabbing;
+@@ -218,13 +351,18 @@ static BOOL _allowsAutomaticWindowTabbing;
  /* This method is Cococtron specific and can be override by subclasses, do not
   * change method name */
  + (BOOL) hasMainMenuForStyleMask: (NSWindowStyleMask) styleMask {
@@ -2441,7 +2550,7 @@ index d545120a..02d6b69a 100644
  }
  
  + (NSRect) frameRectForContentRect: (NSRect) contentRect
-@@ -318,6 +358,7 @@ static BOOL _allowsAutomaticWindowTabbing;
+@@ -318,6 +456,7 @@ static BOOL _allowsAutomaticWindowTabbing;
          [NSApplication sharedApplication];
      }
      _styleMask = styleMask;
@@ -2449,7 +2558,7 @@ index d545120a..02d6b69a 100644
      _backingType = backing;
      _isDeferred = defer;
  
-@@ -351,7 +392,7 @@ static BOOL _allowsAutomaticWindowTabbing;
+@@ -351,7 +490,7 @@ static BOOL _allowsAutomaticWindowTabbing;
      [_backgroundView _setWindow: self];
      [_backgroundView setNextResponder: self];
  
@@ -2458,7 +2567,7 @@ index d545120a..02d6b69a 100644
      _contentView = [[NSView alloc] initWithFrame: contentViewFrame];
      [_contentView setAutoresizesSubviews: YES];
      [_contentView
-@@ -399,6 +440,8 @@ static BOOL _allowsAutomaticWindowTabbing;
+@@ -399,6 +538,8 @@ static BOOL _allowsAutomaticWindowTabbing;
  }
  
  - (void) dealloc {
@@ -2467,7 +2576,7 @@ index d545120a..02d6b69a 100644
      [[NSNotificationCenter defaultCenter] removeObserver: self];
      [_childWindows release];
      [_title release];
-@@ -934,6 +977,22 @@ static BOOL _allowsAutomaticWindowTabbing;
+@@ -934,6 +1075,22 @@ static BOOL _allowsAutomaticWindowTabbing;
      return _animationContext;
  }
  
@@ -2490,7 +2599,7 @@ index d545120a..02d6b69a 100644
  - (void) setFrame: (NSRect) newFrame
            display: (BOOL) display
            animate: (BOOL) animate
-@@ -944,8 +1003,19 @@ static BOOL _allowsAutomaticWindowTabbing;
+@@ -944,8 +1101,19 @@ static BOOL _allowsAutomaticWindowTabbing;
      _frame = newFrame;
      _makeSureIsOnAScreen = YES;
  
@@ -2511,7 +2620,7 @@ index d545120a..02d6b69a 100644
  
      if (didSize) {
          [self resetCursorRects];
-@@ -1025,7 +1095,43 @@ static BOOL _allowsAutomaticWindowTabbing;
+@@ -1025,7 +1193,43 @@ static BOOL _allowsAutomaticWindowTabbing;
  }
  
  - (void) setMovable: (BOOL) movable {
@@ -2556,7 +2665,7 @@ index d545120a..02d6b69a 100644
  }
  
  - (void) setBackingType: (NSBackingStoreType) value {
-@@ -1234,6 +1340,7 @@ static BOOL _allowsAutomaticWindowTabbing;
+@@ -1234,6 +1438,7 @@ static BOOL _allowsAutomaticWindowTabbing;
  
  - (void) setIgnoresMouseEvents: (BOOL) value {
      _ignoresMouseEvents = value;
@@ -2564,7 +2673,7 @@ index d545120a..02d6b69a 100644
  }
  
  - (void) setAspectRatio: (NSSize) value {
-@@ -1413,8 +1520,34 @@ static BOOL _allowsAutomaticWindowTabbing;
+@@ -1413,8 +1618,34 @@ static BOOL _allowsAutomaticWindowTabbing;
  }
  
  - (NSButton *) standardWindowButton: (NSWindowButton) value {
@@ -2601,7 +2710,7 @@ index d545120a..02d6b69a 100644
  }
  
  - (NSButtonCell *) defaultButtonCell {
-@@ -1425,6 +1558,17 @@ static BOOL _allowsAutomaticWindowTabbing;
+@@ -1425,6 +1656,17 @@ static BOOL _allowsAutomaticWindowTabbing;
      return [_sheetContext sheet];
  }
  
@@ -2619,7 +2728,7 @@ index d545120a..02d6b69a 100644
  - (id) windowController {
      return _windowController;
  }
-@@ -1511,10 +1655,7 @@ static BOOL _allowsAutomaticWindowTabbing;
+@@ -1511,10 +1753,7 @@ static BOOL _allowsAutomaticWindowTabbing;
      return [_platformWindow isMiniaturized];
  }
  
@@ -2631,7 +2740,7 @@ index d545120a..02d6b69a 100644
  
  - (BOOL) inLiveResize {
      return _isInLiveResize;
-@@ -1561,6 +1702,127 @@ static BOOL _allowsAutomaticWindowTabbing;
+@@ -1561,6 +1800,127 @@ static BOOL _allowsAutomaticWindowTabbing;
      return point;
  }
  
@@ -2759,7 +2868,7 @@ index d545120a..02d6b69a 100644
  - (NSRect) frameRectForContentRect: (NSRect) contentRect {
      // hasMainMenu is an instance method so we can't just use the class method
      //  frameRectForContentRect:styleMask:
-@@ -1580,6 +1842,10 @@ static BOOL _allowsAutomaticWindowTabbing;
+@@ -1580,6 +1940,10 @@ static BOOL _allowsAutomaticWindowTabbing;
  }
  
  - (NSRect) contentRectForFrameRect: (NSRect) frameRect {
@@ -2770,7 +2879,7 @@ index d545120a..02d6b69a 100644
      NSRect result = [[NSDisplay currentDisplay] insetRect: frameRect
                             forNativeWindowBorderWithStyle: [self styleMask]];
  
-@@ -2155,6 +2421,7 @@ static BOOL _allowsAutomaticWindowTabbing;
+@@ -2155,6 +2519,7 @@ static BOOL _allowsAutomaticWindowTabbing;
  - (void) orderWindow: (NSWindowOrderingMode) place
            relativeTo: (NSInteger) relativeTo
  {
@@ -2778,7 +2887,7 @@ index d545120a..02d6b69a 100644
      // The move notifications are sent under unknown conditions around
      // orderFront: in the Apple AppKit, we do them all the time here until it's
      // figured out. I suspect it is a side effect of off-screen windows being at
-@@ -2208,6 +2475,8 @@ static BOOL _allowsAutomaticWindowTabbing;
+@@ -2208,6 +2573,8 @@ static BOOL _allowsAutomaticWindowTabbing;
          break;
      }
  
@@ -2787,7 +2896,7 @@ index d545120a..02d6b69a 100644
      [self postNotificationName: NSWindowDidMoveNotification];
  }
  
-@@ -2257,6 +2526,12 @@ static BOOL _allowsAutomaticWindowTabbing;
+@@ -2257,6 +2624,12 @@ static BOOL _allowsAutomaticWindowTabbing;
  }
  
  - (void) sendEvent: (NSEvent *) event {
@@ -2800,7 +2909,7 @@ index d545120a..02d6b69a 100644
      // Some events can cause our window to be destroyed
      // So make sure self lives at least through this current run loop...
      [[self retain] autorelease];
-@@ -2300,6 +2575,10 @@ static BOOL _allowsAutomaticWindowTabbing;
+@@ -2300,6 +2673,10 @@ static BOOL _allowsAutomaticWindowTabbing;
  
      case NSLeftMouseDown: {
          NSView *view = [_backgroundView hitTest: [event locationInWindow]];
@@ -2811,7 +2920,7 @@ index d545120a..02d6b69a 100644
  
          if ([view acceptsFirstResponder]) {
              if ([view needsPanelToBecomeKey]) {
-@@ -2307,6 +2586,27 @@ static BOOL _allowsAutomaticWindowTabbing;
+@@ -2307,6 +2684,27 @@ static BOOL _allowsAutomaticWindowTabbing;
              }
          }
  
@@ -2839,7 +2948,7 @@ index d545120a..02d6b69a 100644
          // Event goes to view, not first responder.
          [view mouseDown: event];
          _mouseDownLocationInWindow = [event locationInWindow];
-@@ -2330,6 +2630,31 @@ static BOOL _allowsAutomaticWindowTabbing;
+@@ -2330,6 +2728,31 @@ static BOOL _allowsAutomaticWindowTabbing;
          _mouseDownLocationInWindow = NSMakePoint(NAN, NAN);
          break;
  
@@ -2871,7 +2980,216 @@ index d545120a..02d6b69a 100644
      case NSMouseMoved: {
          NSView *hit = [_backgroundView hitTest: [event locationInWindow]];
  
-@@ -2536,6 +2861,7 @@ static BOOL _allowsAutomaticWindowTabbing;
+@@ -2478,6 +2901,197 @@ static BOOL _allowsAutomaticWindowTabbing;
+     _draggedTypes = nil;
+ }
+ 
++// The registered drag destination under screenPoint in this window, if any.
++- (NSView *) _localDragDestinationAt: (NSPoint) screenPoint types: (NSArray *) types {
++    NSView *root = [self contentView];
++    while ([root superview] != nil)
++        root = [root superview];
++    NSView *view = [root hitTest: [self convertScreenToBase: screenPoint]];
++    while (view != nil && [[view registeredDraggedTypes] firstObjectCommonWithArray: types] == nil)
++        view = [view superview];
++    return view;
++}
++
++/* darling-lol: drag loop for backends without an NSDraggingManager (X11). Covers drags
++ * between this app's own windows; nothing crosses to other X clients. Like AppKit's,
++ * it returns once the drag is over and always ends with -draggedImage:endedAt:operation:,
++ * which Chromium waits for before the page takes mouse input again. */
++- (void) _localDragImage: (NSImage *) image
++                      at: (NSPoint) imageLocation
++                   event: (NSEvent *) event
++              pasteboard: (NSPasteboard *) pasteboard
++                  source: (id) source
++{
++    _NSLocalDraggingInfo *info = [[_NSLocalDraggingInfo alloc] init];
++    info->_pasteboard = pasteboard;
++    info->_image = image;
++    info->_source = source;
++    info->_sourceMask = NSDragOperationEvery;
++    if ([source respondsToSelector: @selector(draggingSourceOperationMaskForLocal:)])
++        info->_sourceMask = [source draggingSourceOperationMaskForLocal: YES];
++
++    NSPoint screenPoint;
++    if (event != nil && [event window] != nil)
++        screenPoint = [[event window] convertBaseToScreen: [event locationInWindow]];
++    else
++        screenPoint = [self convertBaseToScreen: [self mouseLocationOutsideOfEventStream]];
++
++    // The image keeps its offset from the pointer, as on macOS.
++    _NSDragImageWindow *imageWindow = nil;
++    NSPoint imageOffset = NSZeroPoint;
++    NSSize imageSize = [image size];
++    if (imageSize.width >= 1 && imageSize.height >= 1) {
++        NSPoint imageOrigin = [self convertBaseToScreen: imageLocation];
++        imageOffset = NSMakePoint(screenPoint.x - imageOrigin.x, screenPoint.y - imageOrigin.y);
++        imageWindow = [[_NSDragImageWindow alloc]
++                initWithContentRect: NSMakeRect(imageOrigin.x, imageOrigin.y, imageSize.width, imageSize.height)
++                          styleMask: NSBorderlessWindowMask
++                            backing: NSBackingStoreBuffered
++                              defer: NO];
++        [imageWindow setReleasedWhenClosed: NO];
++        [imageWindow setIgnoresMouseEvents: YES];
++        [imageWindow setLevel: NSPopUpMenuWindowLevel];
++        [imageWindow setHasShadow: NO];
++        NSImageView *imageView = [[NSImageView alloc]
++                initWithFrame: NSMakeRect(0, 0, imageSize.width, imageSize.height)];
++        [imageView setImage: image];
++        [imageView setImageScaling: NSImageScaleNone];
++        [imageWindow setContentView: imageView];
++        [imageView release];
++        [imageWindow orderFront: nil];
++    }
++
++    NSArray *types = [pasteboard types];
++    id destination = nil;
++    NSDragOperation operation = NSDragOperationNone;
++    BOOL dropped = NO;
++    BOOL moved = YES;
++    const char *ending = "release";
++
++    if (_NSLocalDragTrace())
++        NSLog(@"DRAGTRACE start at %.0f,%.0f window=%@ image=%.0fx%.0f mask=0x%lx types=%@",
++              screenPoint.x, screenPoint.y, [self className], imageSize.width, imageSize.height,
++              (unsigned long) info->_sourceMask, types);
++
++    for (;;) {
++        if (moved) {
++            NSWindow *window = nil;
++            if (NSPointInRect(screenPoint, [self frame]))
++                window = self;
++            else {
++                for (NSWindow *candidate in [NSApp orderedWindows]) {
++                    if (candidate != imageWindow && [candidate isVisible] &&
++                        NSPointInRect(screenPoint, [candidate frame])) {
++                        window = candidate;
++                        break;
++                    }
++                }
++            }
++            info->_screenPoint = screenPoint;
++            if (info->_destinationWindow != window) {
++                [info->_destinationWindow release];
++                info->_destinationWindow = [window retain];
++            }
++            NSView *view = [window _localDragDestinationAt: screenPoint types: types];
++
++            if (view != destination) {
++                if ([destination respondsToSelector: @selector(draggingExited:)])
++                    [destination draggingExited: info];
++                [destination release];
++                destination = [view retain];
++                operation = NSDragOperationNone;
++                if ([destination respondsToSelector: @selector(draggingEntered:)])
++                    operation = [destination draggingEntered: info];
++                if (_NSLocalDragTrace())
++                    NSLog(@"DRAGTRACE destination %@ at %.0f,%.0f operation=0x%lx", [view className],
++                          screenPoint.x, screenPoint.y, (unsigned long) operation);
++            } else if ([destination respondsToSelector: @selector(draggingUpdated:)]) {
++                operation = [destination draggingUpdated: info];
++            }
++            [imageWindow setFrameOrigin: NSMakePoint(screenPoint.x - imageOffset.x,
++                                                     screenPoint.y - imageOffset.y)];
++            if ([source respondsToSelector: @selector(draggedImage:movedTo:)])
++                [source draggedImage: image movedTo: screenPoint];
++            _NSLocalDragRunPending(0.008, NO);
++        }
++        if (dropped)
++            break;
++
++        // Short timeout: the wait below doesn't wake for run loop sources, and
++        // a release delivered before the loop started never shows up as an event.
++        NSEvent *next = [NSApp nextEventMatchingMask: NSLeftMouseUpMask | NSLeftMouseDraggedMask |
++                                                      NSMouseMovedMask | NSKeyDownMask
++                                           untilDate: [NSDate dateWithTimeIntervalSinceNow: 0.05]
++                                              inMode: NSDefaultRunLoopMode
++                                             dequeue: YES];
++        moved = NO;
++        if (next == nil) {
++            NSUInteger buttons = [NSEvent pressedMouseButtons];
++            if ((buttons & 1) == 0) {
++                dropped = moved = YES;
++                ending = "button up, no event";
++            }
++            continue;
++        }
++        if ([next type] == NSKeyDown) {
++            if ([next keyCode] == 53 || [[next characters] isEqual: @"\033"]) {
++                ending = "escape";
++                break;
++            }
++            continue;
++        }
++        if ([next window] != nil)
++            screenPoint = [[next window] convertBaseToScreen: [next locationInWindow]];
++        else
++            screenPoint = [next locationInWindow];
++        moved = YES;
++        if (_NSLocalDragTrace())
++            NSLog(@"DRAGTRACE event type=%d window=%@ at %.0f,%.0f", (int) [next type],
++                  [[next window] className], screenPoint.x, screenPoint.y);
++        if ([next type] == NSLeftMouseUp)
++            dropped = YES;
++    }
++
++    [imageWindow orderOut: nil];
++    [imageWindow release];
++
++    // The operation for the release point arrives asynchronously (Chromium):
++    // let it come in, then ask again.
++    if (dropped && [destination respondsToSelector: @selector(draggingUpdated:)]) {
++        _NSLocalDragRunPending(0.1, YES);
++        operation = [destination draggingUpdated: info];
++        if (_NSLocalDragTrace())
++            NSLog(@"DRAGTRACE release operation=0x%lx", (unsigned long) operation);
++    }
++
++    BOOL performed = NO;
++    if (dropped && destination != nil && operation != NSDragOperationNone) {
++        performed = YES;
++        if ([destination respondsToSelector: @selector(prepareForDragOperation:)])
++            performed = [destination prepareForDragOperation: info];
++        if (performed)
++            performed = [destination respondsToSelector: @selector(performDragOperation:)] &&
++                        [destination performDragOperation: info];
++        if (performed && [destination respondsToSelector: @selector(concludeDragOperation:)])
++            [destination concludeDragOperation: info];
++    } else if ([destination respondsToSelector: @selector(draggingExited:)]) {
++        [destination draggingExited: info];
++    }
++    if (!performed)
++        operation = NSDragOperationNone;
++
++    if (_NSLocalDragTrace())
++        NSLog(@"DRAGTRACE end (%s) at %.0f,%.0f destination=%@ performed=%d operation=0x%lx", ending,
++              screenPoint.x, screenPoint.y, [destination className], performed, (unsigned long) operation);
++
++    if ([source respondsToSelector: @selector(draggedImage:endedAt:operation:)])
++        [source draggedImage: image endedAt: screenPoint operation: operation];
++    [destination release];
++    [info->_destinationWindow release];
++    info->_destinationWindow = nil;
++    [info release];
++}
++
+ - (void) dragImage: (NSImage *) image
+                 at: (NSPoint) location
+             offset: (NSSize) offset
+@@ -2486,6 +3100,10 @@ static BOOL _allowsAutomaticWindowTabbing;
+             source: (id) source
+          slideBack: (BOOL) slideBack
+ {
++    if ([NSDraggingManager draggingManager] == nil) {
++        [self _localDragImage: image at: location event: event pasteboard: pasteboard source: source];
++        return;
++    }
+     [[NSDraggingManager draggingManager] dragImage: image
+                                                 at: location
+                                             offset: offset
+@@ -2536,6 +3154,7 @@ static BOOL _allowsAutomaticWindowTabbing;
      } else {
          [[self platformWindow] hideWindow];
      }
@@ -2879,7 +3197,7 @@ index d545120a..02d6b69a 100644
  }
  
  - (void) orderFront: (id) sender {
-@@ -2577,6 +2903,10 @@ static BOOL _allowsAutomaticWindowTabbing;
+@@ -2577,6 +3196,10 @@ static BOOL _allowsAutomaticWindowTabbing;
              [NSApp abortModal];
          } else {
              [self close];
@@ -2890,7 +3208,7 @@ index d545120a..02d6b69a 100644
          }
      }
  }
-@@ -2655,10 +2985,12 @@ static BOOL _allowsAutomaticWindowTabbing;
+@@ -2655,10 +3278,12 @@ static BOOL _allowsAutomaticWindowTabbing;
  
  - (void) miniaturize: (id) sender {
      [[self platformWindow] miniaturize];
@@ -2903,7 +3221,7 @@ index d545120a..02d6b69a 100644
  }
  
  - (void) print: (id) sender {
-@@ -2990,6 +3322,7 @@ static BOOL _allowsAutomaticWindowTabbing;
+@@ -2990,6 +3615,7 @@ static BOOL _allowsAutomaticWindowTabbing;
                                  relativeTo: [self windowNumber]];
      }
      [self postNotificationName: NSWindowDidDeminiaturizeNotification];
@@ -2911,7 +3229,7 @@ index d545120a..02d6b69a 100644
      [NSApp updateWindows];
  }
  
-@@ -3002,6 +3335,7 @@ static BOOL _allowsAutomaticWindowTabbing;
+@@ -3002,6 +3628,7 @@ static BOOL _allowsAutomaticWindowTabbing;
      }
  
      [self postNotificationName: NSWindowDidMiniaturizeNotification];
@@ -2919,7 +3237,7 @@ index d545120a..02d6b69a 100644
  
      if ([self isKeyWindow]) {
          [self resignKeyWindow];
-@@ -3064,6 +3398,13 @@ static BOOL _allowsAutomaticWindowTabbing;
+@@ -3064,6 +3691,13 @@ static BOOL _allowsAutomaticWindowTabbing;
      if (didSize) {
          // Don't redraw everything unless we really have to.
          [_backgroundView setFrameSize: _frame.size];
@@ -2933,7 +3251,7 @@ index d545120a..02d6b69a 100644
          [_backgroundView setNeedsDisplay: YES];
          [self resetCursorRects];
          [self saveFrameUsingName: _autosaveFrameName];
-@@ -3260,8 +3601,7 @@ static BOOL _allowsAutomaticWindowTabbing;
+@@ -3260,8 +3894,7 @@ static BOOL _allowsAutomaticWindowTabbing;
                  mouseWasInside && !mouseIsInside) {
                  [exited addObject: area];
              }
@@ -2943,7 +3261,7 @@ index d545120a..02d6b69a 100644
                  [moved addObject: area];
              }
              if (options & NSTrackingCursorUpdate && !mouseWasInside &&
-@@ -3459,7 +3799,7 @@ static BOOL _allowsAutomaticWindowTabbing;
+@@ -3459,7 +4092,7 @@ static BOOL _allowsAutomaticWindowTabbing;
  }
  
  - (CGSubWindow *) _createSubWindowWithFrame: (CGRect) frame {
@@ -5125,7 +5443,7 @@ index 411903cc..4b196afd 100644
      NSMutableDictionary<NSPasteboardType, NSData *> *_typeToData;
      NSMutableDictionary<NSPasteboardType, id<NSPasteboardTypeOwner>>
 diff --git a/AppKit/X11.backend/X11Pasteboard.m b/AppKit/X11.backend/X11Pasteboard.m
-index 0e91a5d1..1e4cec1b 100644
+index 0e91a5d1..9feeffa1 100644
 --- a/AppKit/X11.backend/X11Pasteboard.m
 +++ b/AppKit/X11.backend/X11Pasteboard.m
 @@ -18,6 +18,8 @@ along with Darling.  If not, see <http://www.gnu.org/licenses/>.
@@ -5156,17 +5474,39 @@ index 0e91a5d1..1e4cec1b 100644
      if (_typeToData != nil) {
          // Already an owner.
          return;
-@@ -93,7 +94,8 @@ static NSMutableDictionary<NSPasteboardName, X11Pasteboard *> *nameToPboard;
+@@ -78,12 +79,19 @@ static NSMutableDictionary<NSPasteboardName, X11Pasteboard *> *nameToPboard;
+     _changeCount++;
+ }
+ 
++// pasteboardChangedOwner: is optional (Chromium's drag source lacks it); once per owner.
++- (void) notifyOwnersChanged {
++    NSArray *owners = [[NSSet setWithArray: [_typeToOwner allValues]] allObjects];
++    for (id owner in owners) {
++        if ([owner respondsToSelector: @selector(pasteboardChangedOwner:)])
++            [owner pasteboardChangedOwner: self];
++    }
++}
++
+ - (NSInteger) clearContents {
+     [self ensureSelectionOwner];
+ 
+-    for (id owner in [_typeToOwner allValues]) {
+-        [owner pasteboardChangedOwner: self];
+-    }
++    [self notifyOwnersChanged];
+     [_typeToOwner removeAllObjects];
+     [_typeToData removeAllObjects];
+ 
+@@ -93,7 +101,7 @@ static NSMutableDictionary<NSPasteboardName, X11Pasteboard *> *nameToPboard;
  - (void) giveUpSelectionOwner {
      _changeCount++;
  
 -    [self clearContents];
-+    for (id owner in [_typeToOwner allValues])
-+        [owner pasteboardChangedOwner: self];
++    [self notifyOwnersChanged];
  
      [_typeToOwner release];
      _typeToOwner = nil;
-@@ -115,12 +117,47 @@ static NSMutableDictionary<NSPasteboardName, X11Pasteboard *> *nameToPboard;
+@@ -115,12 +123,47 @@ static NSMutableDictionary<NSPasteboardName, X11Pasteboard *> *nameToPboard;
      [super dealloc];
  }
  
@@ -5215,7 +5555,7 @@ index 0e91a5d1..1e4cec1b 100644
  }
  
  + (NSArray<NSString *> *) targetsForType: (NSPasteboardType) type {
-@@ -177,7 +214,7 @@ static NSMutableDictionary<NSPasteboardName, X11Pasteboard *> *nameToPboard;
+@@ -177,7 +220,7 @@ static NSMutableDictionary<NSPasteboardName, X11Pasteboard *> *nameToPboard;
  }
  
  - (NSData *) dataForType: (NSPasteboardType) type {
@@ -5224,7 +5564,7 @@ index 0e91a5d1..1e4cec1b 100644
      if (_typeToOwner != nil) {
          // We're the owner; just fetch the data directly.
          id<NSPasteboardTypeOwner> owner = _typeToOwner[type];
-@@ -185,25 +222,26 @@ static NSMutableDictionary<NSPasteboardName, X11Pasteboard *> *nameToPboard;
+@@ -185,25 +228,26 @@ static NSMutableDictionary<NSPasteboardName, X11Pasteboard *> *nameToPboard;
          return _typeToData[type];
      }
  
@@ -5265,7 +5605,7 @@ index 0e91a5d1..1e4cec1b 100644
  
      NSStringEncoding encoding = NSUnicodeStringEncoding;
      if ([type isEqual: NSStringPboardType]) {
-@@ -252,8 +290,37 @@ static NSMutableDictionary<NSPasteboardName, X11Pasteboard *> *nameToPboard;
+@@ -252,8 +296,37 @@ static NSMutableDictionary<NSPasteboardName, X11Pasteboard *> *nameToPboard;
  }
  
  - (NSArray<NSPasteboardType> *) types {
@@ -5352,7 +5692,7 @@ index 738ab457..ed6991bf 100644
      XMapWindow(_display, _window);
  }
 diff --git a/AppKit/X11.backend/X11Window.h b/AppKit/X11.backend/X11Window.h
-index bfe3839a..467bb0b3 100644
+index bfe3839a..a3da37ce 100644
 --- a/AppKit/X11.backend/X11Window.h
 +++ b/AppKit/X11.backend/X11Window.h
 @@ -26,7 +26,7 @@
@@ -5364,13 +5704,15 @@ index bfe3839a..467bb0b3 100644
  
  @interface X11Window : CGWindow {
      int _level; // TODO: care about this value
-@@ -47,27 +47,56 @@
+@@ -47,27 +47,58 @@
      BOOL _mapped;
      CGPoint _lastMotionPos;
      BOOL _isModal;
 +    BOOL _overrideRedirect;
 +    BOOL _fullscreenRequested;
      BOOL _isOpaque;
++    BOOL _hasAlpha; // created with the 32-bit ARGB visual
++    BOOL _wasMapped; // the visual is settled at the first map
      BOOL _hasShadow;
 +    NSTimer *_remoteFrameTimer;
 +    Window _remoteFrameWindow;
@@ -5423,10 +5765,17 @@ index bfe3839a..467bb0b3 100644
  @end
  
 diff --git a/AppKit/X11.backend/X11Window.m b/AppKit/X11.backend/X11Window.m
-index f4925b66..ca78bb73 100644
+index f4925b66..1e30c70f 100644
 --- a/AppKit/X11.backend/X11Window.m
 +++ b/AppKit/X11.backend/X11Window.m
-@@ -23,6 +23,7 @@
+@@ -18,11 +18,14 @@
+  OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+  SOFTWARE. */
+ 
++#import <AppKit/NSColor.h>
++#import <AppKit/NSGraphics.h>
+ #import <AppKit/NSMenuWindow.h>
+ #import <AppKit/NSPanel.h>
  #import <AppKit/NSPopUpWindow.h>
  #import <AppKit/NSRaise.h>
  #import <AppKit/NSWindow.h>
@@ -5434,7 +5783,7 @@ index f4925b66..ca78bb73 100644
  #import <Foundation/NSBundle.h>
  #import <Foundation/NSException.h>
  #import <Foundation/NSMutableData.h>
-@@ -38,6 +39,34 @@
+@@ -38,6 +41,110 @@
  #import "X11Window.h"
  #import <X11/Xatom.h>
  #import <X11/Xutil.h>
@@ -5466,10 +5815,86 @@ index f4925b66..ca78bb73 100644
 +    uint32_t pixelFormat;
 +    uint64_t dataSize;
 +} DarlingCARemoteFrame;
++
++static XVisualInfo *X11OpaqueVisualInfo(Display *display) {
++    static XVisualInfo *visualInfo;
++    if (visualInfo != NULL)
++        return visualInfo;
++
++    // TODO: get rid of these glX calls
++    GLint att[] = {GLX_RGBA,
++                   GLX_DOUBLEBUFFER,
++                   GLX_RED_SIZE,
++                   4,
++                   GLX_GREEN_SIZE,
++                   4,
++                   GLX_BLUE_SIZE,
++                   4,
++                   GLX_DEPTH_SIZE,
++                   4,
++                   None};
++
++    int screen = DefaultScreen(display);
++
++    // Rendering goes through EGL. NVIDIA's glXChooseVisual can return a GLX-only visual that every
++    // eglCreateWindowSurface rejects (EGL_BAD_CONFIG), so prefer the default visual when usable.
++    XVisualInfo visualTemplate;
++    int visualCount = 0;
++    visualTemplate.visualid = XVisualIDFromVisual(DefaultVisual(display, screen));
++    visualTemplate.screen = screen;
++    visualInfo = XGetVisualInfo(display, VisualIDMask | VisualScreenMask, &visualTemplate, &visualCount);
++    if (visualInfo != NULL && (visualInfo->class != TrueColor || visualInfo->depth < 24)) {
++        XFree(visualInfo);
++        visualInfo = NULL;
++    }
++    if (visualInfo == NULL && (visualInfo = glXChooseVisual(display, screen, att)) == NULL) {
++        NSLog(@"glXChooseVisual failed at %s %d", __FILE__, __LINE__);
++    }
++    return visualInfo;
++}
++
++// 32-bit ARGB, for windows that let what is behind them show through.
++static XVisualInfo *X11AlphaVisualInfo(Display *display) {
++    static XVisualInfo visualInfo;
++    static BOOL checked;
++    if (!checked) {
++        checked = YES;
++        XVisualInfo visualTemplate = {.screen = DefaultScreen(display), .depth = 32, .class = TrueColor};
++        int count = 0;
++        XVisualInfo *visuals = XGetVisualInfo(display, VisualScreenMask | VisualDepthMask | VisualClassMask,
++                                              &visualTemplate, &count);
++        for (int i = 0; i < count && visualInfo.visual == NULL; i++) {
++            if (visuals[i].red_mask == 0xff0000 && visuals[i].green_mask == 0x00ff00 &&
++                visuals[i].blue_mask == 0x0000ff)
++                visualInfo = visuals[i];
++        }
++        if (visuals)
++            XFree(visuals);
++    }
++    return visualInfo.visual ? &visualInfo : NULL;
++}
++
++// Set when the driver has no alpha config for the ARGB visual: later windows stay opaque.
++static BOOL alphaSurfaceFailed;
++
++static BOOL windowPropertyHasAtom(Display *display, Window window, Atom property, Atom atom) {
++    Atom type;
++    int format;
++    unsigned long count, bytesAfter;
++    unsigned char *data = NULL;
++    BOOL found = NO;
++    if (XGetWindowProperty(display, window, property, 0, 64, False, XA_ATOM, &type, &format,
++                           &count, &bytesAfter, &data) == Success && data != NULL) {
++        for (unsigned long i = 0; i < count && !found; i++)
++            found = ((Atom *) data)[i] == atom;
++        XFree(data);
++    }
++    return found;
++}
  
  @implementation X11Window
  
-@@ -158,7 +187,7 @@ static NSData *makeWindowIcon() {
+@@ -158,53 +265,75 @@ static NSData *makeWindowIcon() {
      X11Display* x11disp = (X11Display *) [NSDisplay currentDisplay];
      _display = [x11disp display];
  
@@ -5478,32 +5903,63 @@ index f4925b66..ca78bb73 100644
      BOOL isPanel = [delegate isKindOfClass: [NSPanel class]];
      if (isPanel && _styleMask & NSDocModalWindowMask)
          _styleMask = NSBorderlessWindowMask;
-@@ -177,7 +206,18 @@ static NSData *makeWindowIcon() {
+-    // TODO: get rid of these glX calls
+-    GLint att[] = {GLX_RGBA,
+-                   GLX_DOUBLEBUFFER,
+-                   GLX_RED_SIZE,
+-                   4,
+-                   GLX_GREEN_SIZE,
+-                   4,
+-                   GLX_BLUE_SIZE,
+-                   4,
+-                   GLX_DEPTH_SIZE,
+-                   4,
+-                   None};
  
-     int screen = DefaultScreen(_display);
+-    int screen = DefaultScreen(_display);
++    _hasAlpha = [self wantsAlphaVisual];
++    [self createXWindow];
  
 -    if ((_visualInfo = glXChooseVisual(_display, screen, att)) == NULL) {
-+    // Rendering goes through EGL. NVIDIA's glXChooseVisual can return a GLX-only visual that every
-+    // eglCreateWindowSurface rejects (EGL_BAD_CONFIG), so prefer the default visual when usable.
-+    XVisualInfo visualTemplate;
-+    int visualCount = 0;
-+    visualTemplate.visualid = XVisualIDFromVisual(DefaultVisual(_display, screen));
-+    visualTemplate.screen = screen;
-+    _visualInfo = XGetVisualInfo(_display, VisualIDMask | VisualScreenMask, &visualTemplate, &visualCount);
-+    if (_visualInfo != NULL && (_visualInfo->class != TrueColor || _visualInfo->depth < 24)) {
-+        XFree(_visualInfo);
-+        _visualInfo = NULL;
-+    }
-+    if (_visualInfo == NULL && (_visualInfo = glXChooseVisual(_display, screen, att)) == NULL) {
-         NSLog(@"glXChooseVisual failed at %s %d", __FILE__, __LINE__);
-     }
+-        NSLog(@"glXChooseVisual failed at %s %d", __FILE__, __LINE__);
+-    }
++    /* Chromium windows consume cross-process CA frames. League's native Metal window owns its
++     * drawable; a same-size client surface must never be raised above that drawable. */
++    if (!X11IsLeagueGameWindow(_display, None, delegate))
++        _remoteFrameTimer = [[NSTimer scheduledTimerWithTimeInterval: 1.0 / 60.0
++            target: self selector: @selector(presentRemoteCAFrame:)
++            userInfo: nil repeats: YES] retain];
  
-@@ -193,8 +233,16 @@ static NSData *makeWindowIcon() {
+-    Colormap cmap =
+-            XCreateColormap(_display, RootWindow(_display, _visualInfo->screen),
+-                            _visualInfo->visual, AllocNone);
++    return self;
++}
+ 
+-    if (cmap < 0) {
+-        NSLog(@"XCreateColormap failed");
+-        [self release];
+-        return nil;
+-    }
++- (void) createXWindow {
++    NSWindow *delegate = _delegate;
++    X11Display* x11disp = (X11Display *) [NSDisplay currentDisplay];
++    BOOL isPanel = [delegate isKindOfClass: [NSPanel class]];
  
      XSetWindowAttributes xattr;
      unsigned long xattr_mask;
 -    xattr.override_redirect =
 -            _styleMask == NSBorderlessWindowMask ? True : False;
+-    xattr_mask = CWOverrideRedirect | CWColormap;
+-    xattr.colormap = cmap;
+-
+-    _window = XCreateWindow(
+-            _display, DefaultRootWindow(_display), _frame.origin.x,
+-            _frame.origin.y, _frame.size.width, _frame.size.height, 0,
+-            (_visualInfo == NULL) ? CopyFromParent : _visualInfo->depth,
+-            InputOutput,
+-            (_visualInfo == NULL) ? CopyFromParent : _visualInfo->visual,
+-            xattr_mask, &xattr);
 +    BOOL isGame = X11IsLeagueGameWindow(_display, None, delegate);
 +
 +    // A borderless game is still a focusable application window. Leaving it
@@ -5514,26 +5970,48 @@ index f4925b66..ca78bb73 100644
 +             [delegate isKindOfClass:[NSPopUpWindow class]] ||
 +             ![delegate canBecomeKeyWindow]) ? True : False;
 +    _overrideRedirect = xattr.override_redirect;
-     xattr_mask = CWOverrideRedirect | CWColormap;
-     xattr.colormap = cmap;
- 
-@@ -206,6 +254,12 @@ static NSData *makeWindowIcon() {
-             (_visualInfo == NULL) ? CopyFromParent : _visualInfo->visual,
-             xattr_mask, &xattr);
- 
++    xattr.border_pixel = 0;
++
++    for (;;) {
++        _visualInfo = _hasAlpha ? X11AlphaVisualInfo(_display) : X11OpaqueVisualInfo(_display);
++        xattr.colormap =
++                XCreateColormap(_display, RootWindow(_display, _visualInfo->screen),
++                                _visualInfo->visual, AllocNone);
++        // A depth other than the root's needs its own border pixel, or BadMatch.
++        xattr_mask = CWOverrideRedirect | CWColormap | (_hasAlpha ? CWBorderPixel : 0);
++
++        _window = XCreateWindow(
++                _display, DefaultRootWindow(_display), _frame.origin.x,
++                _frame.origin.y, _frame.size.width, _frame.size.height, 0,
++                (_visualInfo == NULL) ? CopyFromParent : _visualInfo->depth,
++                InputOutput,
++                (_visualInfo == NULL) ? CopyFromParent : _visualInfo->visual,
++                xattr_mask, &xattr);
++        if (!_hasAlpha)
++            break;
++        // Without an alpha EGL config for this visual, draw opaque rather than not at all.
++        _cglWindow = CGLGetWindowWithAlpha((void *) _window, _visualInfo->visualid);
++        if (_cglWindow != NULL)
++            break;
++        XDestroyWindow(_display, _window);
++        XFreeColormap(_display, xattr.colormap);
++        _hasAlpha = NO;
++        alphaSurfaceFailed = YES;
++    }
++
 +    /* Keep Cocoa's process identifier available to cross-process activation. */
 +    unsigned long windowPID = (unsigned long)getpid();
 +    XChangeProperty(_display, _window, XInternAtom(_display, "_NET_WM_PID", False),
 +                    XA_CARDINAL, 32, PropModeReplace,
 +                    (unsigned char *)&windowPID, 1);
-+
+ 
      [self syncDelegateProperties];
  
-     Atom atm = XInternAtom(_display, "WM_DELETE_WINDOW", False);
-@@ -217,6 +271,15 @@ static NSData *makeWindowIcon() {
+@@ -217,7 +346,20 @@ static NSData *makeWindowIcon() {
                              .res_class = (char *) name};
      XSetClassHint(_display, _window, &classHint);
  
+-    XSetWindowBackgroundPixmap(_display, _window, None);
 +    if (isGame && !(_styleMask & NSTitledWindowMask)) {
 +        /* darling-lol: never let the compositor scan out this parent window
 +         * directly (bypass=2): Metal/OpenGL draw into a child window, so direct
@@ -5543,10 +6021,21 @@ index f4925b66..ca78bb73 100644
 +                        XA_CARDINAL, 32, PropModeReplace, (unsigned char *)&bypass, 1);
 +    }
 +
-     XSetWindowBackgroundPixmap(_display, _window, None);
++    // A translucent window shows its background until the first frame: make it clear, not black.
++    if (_hasAlpha)
++        XSetWindowBackground(_display, _window, 0);
++    else
++        XSetWindowBackgroundPixmap(_display, _window, None);
  
      _isModal = [delegate isSheet] || [NSApp modalWindow] == delegate;
-@@ -258,14 +321,17 @@ static NSData *makeWindowIcon() {
+     // FIXME: There should be no need for this.
+@@ -254,19 +396,96 @@ static NSData *makeWindowIcon() {
+         XNFocusWindow, _window,
+         NULL);
+ 
+-    _cglWindow = CGLGetWindow((void *) _window);
++    if (!_hasAlpha)
++        _cglWindow = CGLGetWindow((void *) _window);
  
      [(X11Display *) [NSDisplay currentDisplay] setWindow: self forID: _window];
  
@@ -5557,18 +6046,93 @@ index f4925b66..ca78bb73 100644
      [self setStyleMaskInternal: _styleMask force: YES];
  
      [self setWindowIcon];
++}
  
-+    /* Chromium windows consume cross-process CA frames. League's native Metal window owns its
-+     * drawable; a same-size client surface must never be raised above that drawable. */
-+    if (!isGame)
-+        _remoteFrameTimer = [[NSTimer scheduledTimerWithTimeInterval: 1.0 / 60.0
-+            target: self selector: @selector(presentRemoteCAFrame:)
-+            userInfo: nil repeats: YES] retain];
+-    return self;
++// Only when the background can show through (a pattern image may): League's game window is
++// non-opaque on an opaque background, and a 32-bit parent costs Xwayland a copy of its GL child.
++- (BOOL) isTranslucent {
++    if ([_delegate isOpaque] ||
++        X11IsLeagueGameWindow(_display, None, _delegate))
++        return NO;
++    NSColor *background = [_delegate backgroundColor];
++    return background == nil || [background alphaComponent] < 1.0 ||
++           [[background colorSpaceName] isEqualToString: NSPatternColorSpace];
++}
 +
-     return self;
++- (BOOL) wantsAlphaVisual {
++    return !alphaSurfaceFailed && X11AlphaVisualInfo(_display) != NULL && [self isTranslucent];
++}
++
++// The visual is fixed at creation, which often comes before the app sets its opacity and
++// background: swap the window while it is unmapped, keeping its children.
++- (void) recreateXWindowWithAlpha: (BOOL) alpha {
++    Window oldWindow = _window;
++
++    [_caContext release];
++    _caContext = nil;
++    if (_cglContext != NULL) {
++        CGLReleaseContext(_cglContext);
++        _cglContext = NULL;
++    }
++    if (_cglWindow != NULL) {
++        CGLDestroyWindow(_cglWindow);
++        _cglWindow = NULL;
++    }
++    XDestroyIC(_xic);
++    [(X11Display *) [NSDisplay currentDisplay] setWindow: nil forID: oldWindow];
++
++    _hasAlpha = alpha;
++    [self createXWindow];
++
++    Window root, parent, *children = NULL;
++    unsigned int count = 0;
++    if (XQueryTree(_display, oldWindow, &root, &parent, &children, &count)) {
++        for (unsigned int i = 0; i < count; i++) {
++            XWindowAttributes attributes;
++            if (XGetWindowAttributes(_display, children[i], &attributes))
++                XReparentWindow(_display, children[i], _window, attributes.x, attributes.y);
++        }
++        if (children)
++            XFree(children);
++    }
++    XDestroyWindow(_display, oldWindow);
++
++    NSString *title = [_delegate title];
++    if (title != nil)
++        [self setTitle: title];
++}
++
++// Opacity and background are set by the time the window gets content or is first shown.
++- (void) settleVisual {
++    if (_wasMapped || _window == 0 || _delegate == nil)
++        return;
++    BOOL alpha = [self wantsAlphaVisual];
++    if (alpha != _hasAlpha && _remoteFrameWindow == 0)
++        [self recreateXWindowWithAlpha: alpha];
++}
++
++// Translucent windows above the normal level (splashes, overlays) float over the others on macOS,
++// without a frame. Window managers float splash windows and leave them undecorated.
++- (void) markFloatingBeforeMap {
++    Atom typeProperty = XInternAtom(_display, "_NET_WM_WINDOW_TYPE", False);
++    if (windowPropertyHasAtom(_display, _window, typeProperty,
++                              XInternAtom(_display, "_NET_WM_WINDOW_TYPE_NORMAL", False))) {
++        long splash = (long) XInternAtom(_display, "_NET_WM_WINDOW_TYPE_SPLASH", False);
++        XChangeProperty(_display, _window, typeProperty, XA_ATOM, 32, PropModeReplace,
++                        (const unsigned char *) &splash, 1);
++    }
++    Atom stateProperty = XInternAtom(_display, "_NET_WM_STATE", False);
++    Atom above = XInternAtom(_display, "_NET_WM_STATE_ABOVE", False);
++    if (!windowPropertyHasAtom(_display, _window, stateProperty, above)) {
++        long state = (long) above;
++        XChangeProperty(_display, _window, stateProperty, XA_ATOM, 32, PropModeAppend,
++                        (const unsigned char *) &state, 1);
++    }
  }
  
-@@ -279,24 +345,30 @@ static NSData *makeWindowIcon() {
+ - (void) dealloc {
+@@ -279,24 +498,30 @@ static NSData *makeWindowIcon() {
      return _styleMask;
  }
  
@@ -5615,7 +6179,7 @@ index f4925b66..ca78bb73 100644
      if (!_mapped) {
          long states[2];
          int states_cnt = 0;
-@@ -304,7 +376,7 @@ static NSData *makeWindowIcon() {
+@@ -304,7 +529,7 @@ static NSData *makeWindowIcon() {
              states[states_cnt++] =
                      (long) XInternAtom(_display, "_NET_WM_STATE_MODAL", False);
          }
@@ -5624,7 +6188,7 @@ index f4925b66..ca78bb73 100644
              states[states_cnt++] = (long) XInternAtom(
                      _display, "_NET_WM_STATE_FULLSCREEN", False);
          }
-@@ -312,14 +384,13 @@ static NSData *makeWindowIcon() {
+@@ -312,14 +537,13 @@ static NSData *makeWindowIcon() {
                          XInternAtom(_display, "_NET_WM_STATE", False), XA_ATOM,
                          32, PropModeReplace, (const unsigned char *) states,
                          states_cnt);
@@ -5641,7 +6205,7 @@ index f4925b66..ca78bb73 100644
          event.data.l[1] =
                  (long) XInternAtom(_display, "_NET_WM_STATE_FULLSCREEN", False);
          event.data.l[3] = 1;
-@@ -327,6 +398,144 @@ static NSData *makeWindowIcon() {
+@@ -327,6 +551,144 @@ static NSData *makeWindowIcon() {
                     SubstructureNotifyMask | SubstructureRedirectMask,
                     (XEvent *) &event);
      }
@@ -5786,7 +6350,7 @@ index f4925b66..ca78bb73 100644
  }
  
  - (void) setStyleMask: (NSUInteger) mask {
-@@ -337,27 +546,35 @@ static NSData *makeWindowIcon() {
+@@ -337,27 +699,40 @@ static NSData *makeWindowIcon() {
      _styleMask = mask;
  }
  
@@ -5830,13 +6394,18 @@ index f4925b66..ca78bb73 100644
  
  - (void) ensureMapped {
      if (!_mapped) {
++        [self settleVisual];
++        if (!_wasMapped && _delegate != nil && [_delegate level] > NSNormalWindowLevel &&
++            [self isTranslucent])
++            [self markFloatingBeforeMap];
          XMapWindow(_display, _window);
++        _wasMapped = YES;
          _mapped = YES;
 +        _remoteFrameTargetRefresh = 0;
      }
  }
  
-@@ -377,15 +594,27 @@ static NSData *makeWindowIcon() {
+@@ -377,15 +752,27 @@ static NSData *makeWindowIcon() {
  - (void) syncDelegateProperties {
      long mask = KeyPressMask | KeyReleaseMask | ExposureMask |
                  StructureNotifyMask | EnterWindowMask | LeaveWindowMask |
@@ -5869,7 +6438,7 @@ index f4925b66..ca78bb73 100644
      // TODO: background color
  }
  
-@@ -393,6 +622,28 @@ static NSData *makeWindowIcon() {
+@@ -393,6 +780,28 @@ static NSData *makeWindowIcon() {
      // This is essentially dealloc; we release our contexts
      // and windows, but unlike dealloc, this method can be called
      // several times, so set everything to nil/NULL/0.
@@ -5898,7 +6467,7 @@ index f4925b66..ca78bb73 100644
      [_context release];
      _context = nil;
  
-@@ -421,6 +672,384 @@ static NSData *makeWindowIcon() {
+@@ -421,6 +830,404 @@ static NSData *makeWindowIcon() {
      }
  }
  
@@ -5994,6 +6563,7 @@ index f4925b66..ca78bb73 100644
 +    bestPath[0] = bestBlackPath[0] = '\0';
 +    uint64_t bestMtime = 0, bestBlackMtime = 0;
 +    BOOL bestIsRoot = NO, bestBlackIsRoot = NO;
++    BOOL bestSoftware = NO;
 +
 +    char prefix[32];
 +    snprintf(prefix, sizeof(prefix), "darling-ca-frame-%u-", getuid());
@@ -6057,12 +6627,12 @@ index f4925b66..ca78bb73 100644
 +            }
 +
 +            if (hasPixels) {
-+                /* Prioritize whole-window root frames over subwindow/popup slots.
-+                 * Within the same tier, choose the most recently updated slot. */
++                BOOL software = (head.pixelFormat & 0x80000000u) != 0;
 +                if (!bestPath[0] ||
 +                    (matchesRoot && !bestIsRoot) ||
-+                    (matchesRoot == bestIsRoot && updateTime > bestMtime)) {
++                    (matchesRoot == bestIsRoot && ((software && !bestSoftware) || (software == bestSoftware && updateTime > bestMtime)))) {
 +                    bestIsRoot = matchesRoot;
++                    bestSoftware = software;
 +                    bestMtime = updateTime;
 +                    snprintf(bestPath, sizeof(bestPath), "%s", candidate);
 +                }
@@ -6079,6 +6649,25 @@ index f4925b66..ca78bb73 100644
 +        closedir(dir);
 +    }
 +
++    /* Keep a software owner across popup updates while the presented size
++     * still belongs to this window. After a real resize, retaining that owner
++     * can strand us on its popup slot even though a matching readback frame
++     * is ready from another publisher. Let normal candidate selection make
++     * that handoff when the old presentation no longer matches a target. */
++    BOOL presentationMatchesTarget = NO;
++    for (unsigned i = 0; i < frameTargetCount; ++i)
++        if (_remoteFrameWidth == (unsigned)frameTargets[i].width &&
++            _remoteFrameHeight == (unsigned)frameTargets[i].height)
++            presentationMatchesTarget = YES;
++    if (_remoteFrameSoftwarePublisher && _remoteFrameMapping && !bestSoftware &&
++        presentationMatchesTarget) {
++        const char *pidText = strrchr(_remoteFrameMappingPath, '-');
++        int publisher = pidText ? atoi(pidText + 1) : 0;
++        if (publisher > 0 && (kill(publisher, 0) == 0 || errno != ESRCH)) {
++            snprintf(path, sizeof(path), "%s", _remoteFrameMappingPath);
++            goto selectedFrame;
++        }
++    }
 +    if (bestPath[0] != '\0')
 +        snprintf(path, sizeof(path), "%s", bestPath);
 +    else if (bestBlackPath[0] != '\0')
@@ -6283,7 +6872,7 @@ index f4925b66..ca78bb73 100644
  - (Window) windowHandle {
      return _window;
  }
-@@ -470,14 +1099,32 @@ static NSData *makeWindowIcon() {
+@@ -470,14 +1277,32 @@ static NSData *makeWindowIcon() {
      const char *text = [title cString];
      XStringListToTextProperty((char **) &text, 1, &prop);
      XSetWMName(_display, _window, &prop);
@@ -6317,7 +6906,7 @@ index f4925b66..ca78bb73 100644
  }
  
  - (void) setHasShadow: (BOOL) value {
-@@ -488,6 +1135,25 @@ static NSData *makeWindowIcon() {
+@@ -488,6 +1313,25 @@ static NSData *makeWindowIcon() {
      _level = value;
  }
  
@@ -6343,7 +6932,7 @@ index f4925b66..ca78bb73 100644
  - (void) setOpaque: (BOOL) value {
      _isOpaque = value;
  }
-@@ -543,6 +1209,21 @@ static NSData *makeWindowIcon() {
+@@ -543,6 +1387,21 @@ static NSData *makeWindowIcon() {
  - (void) makeKey {
      [self ensureMapped];
      XRaiseWindow(_display, _window);
@@ -6365,7 +6954,7 @@ index f4925b66..ca78bb73 100644
  }
  
  - (void) makeMain {
-@@ -551,15 +1232,72 @@ static NSData *makeWindowIcon() {
+@@ -551,15 +1410,72 @@ static NSData *makeWindowIcon() {
  - (void) captureEvents {
  }
  
@@ -6439,11 +7028,17 @@ index f4925b66..ca78bb73 100644
      Atom wmState = XInternAtom(_display, "_NET_WM_STATE", FALSE);
      Atom hiddenState = XInternAtom(_display, "_NET_WM_STATE_HIDDEN", FALSE);
  
-@@ -595,12 +1333,9 @@ static NSData *makeWindowIcon() {
+@@ -593,14 +1509,13 @@ static NSData *makeWindowIcon() {
+     if (_cglContext == NULL) {
+         CGLError error;
  
-         if ((error = CGLCreateContext(NULL, NULL, &_cglContext)) !=
-             kCGLNoError) {
+-        if ((error = CGLCreateContext(NULL, NULL, &_cglContext)) !=
+-            kCGLNoError) {
 -            NSLog(@"CGLCreateContext failed at %s %d with error %d", __FILE__,
++        // An alpha surface needs a context from its own config.
++        error = _hasAlpha ? CGLCreateContextForWindow(_cglWindow, &_cglContext)
++                          : CGLCreateContext(NULL, NULL, &_cglContext);
++        if (error != kCGLNoError) {
 +            NSLog(@"CGLCreateContext failed at %s %d with error %d (non-fatal)", __FILE__,
                    __LINE__, error);
 -
@@ -6454,7 +7049,7 @@ index f4925b66..ca78bb73 100644
          }
          if ((error = CGLContextMakeCurrentAndAttachToWindow(
                       _cglContext, _cglWindow)) != kCGLNoError)
-@@ -615,6 +1350,12 @@ static NSData *makeWindowIcon() {
+@@ -615,6 +1530,12 @@ static NSData *makeWindowIcon() {
  }
  
  - (void) openGLFlushBuffer {
@@ -6467,7 +7062,7 @@ index f4925b66..ca78bb73 100644
      CGLError error;
  
      CGLContextObj prevContext = CGLGetCurrentContext();
-@@ -652,7 +1393,7 @@ static NSData *makeWindowIcon() {
+@@ -652,7 +1573,7 @@ static NSData *makeWindowIcon() {
  }
  
  - (O2Rect) frame {
@@ -6476,7 +7071,7 @@ index f4925b66..ca78bb73 100644
  }
  
  static int ignoreBadWindow(Display *display, XErrorEvent *errorEvent) {
-@@ -666,6 +1407,7 @@ static int ignoreBadWindow(Display *display, XErrorEvent *errorEvent) {
+@@ -666,6 +1587,7 @@ static int ignoreBadWindow(Display *display, XErrorEvent *errorEvent) {
  }
  
  - (void) frameChanged {
@@ -6484,7 +7079,7 @@ index f4925b66..ca78bb73 100644
      XErrorHandler previousHandler = XSetErrorHandler(ignoreBadWindow);
      @try {
          Window root, parent;
-@@ -710,14 +1452,6 @@ static int ignoreBadWindow(Display *display, XErrorEvent *errorEvent) {
+@@ -710,19 +1632,13 @@ static int ignoreBadWindow(Display *display, XErrorEvent *errorEvent) {
      [_deviceDictionary addEntriesFromDictionary: entries];
  }
  
@@ -6498,6 +7093,13 @@ index f4925b66..ca78bb73 100644
 -
  - (NSPoint) transformPoint: (NSPoint) pos; {
      return NSMakePoint(pos.x, _frame.size.height - pos.y);
+ }
+ 
+ - (X11SubWindow *) createSubWindowWithFrame: (CGRect) frame {
++    // Subwindows take the parent's visual: settle it before they exist.
++    [self settleVisual];
+     return [[[X11SubWindow alloc] initWithParentWindow: self
+                                                  frame: frame] autorelease];
  }
 diff --git a/AppKit/include/AppKit/NSAccessibilityConstants.h b/AppKit/include/AppKit/NSAccessibilityConstants.h
 index 282312de..03c75b2b 100644
@@ -7666,6 +8268,46 @@ index 008ccd74..4bb12dbb 100644
  - (void) show {
      O2InvalidAbstractInvocation();
  }
+diff --git a/CoreGraphics/CGWindowLevel.m b/CoreGraphics/CGWindowLevel.m
+index e03fbf80..f386f253 100644
+--- a/CoreGraphics/CGWindowLevel.m
++++ b/CoreGraphics/CGWindowLevel.m
+@@ -1,6 +1,34 @@
+ #import <CoreGraphics/CGWindowLevel.h>
+ 
++// The levels macOS returns: SDK headers turn NSFloatingWindowLevel and friends into calls to this
++// function, so returning the normal level for every key hid alwaysOnTop and panel levels.
+ CGWindowLevel CGWindowLevelForKey(CGWindowLevelKey key)
+ {
+-    return kCGNormalWindowLevel;
++    static const int32_t levels[kCGNumberOfWindowLevelKeys] = {
++        [kCGBaseWindowLevelKey] = INT32_MIN,
++        [kCGMinimumWindowLevelKey] = INT32_MIN + 1,
++        [kCGDesktopWindowLevelKey] = INT32_MIN + 1 + 20,
++        [kCGBackstopMenuLevelKey] = -20,
++        [kCGNormalWindowLevelKey] = 0,
++        [kCGFloatingWindowLevelKey] = 3,
++        [kCGTornOffMenuWindowLevelKey] = 3,
++        [kCGDockWindowLevelKey] = 20,
++        [kCGMainMenuWindowLevelKey] = 24,
++        [kCGStatusWindowLevelKey] = 25,
++        [kCGModalPanelWindowLevelKey] = 8,
++        [kCGPopUpMenuWindowLevelKey] = 101,
++        [kCGDraggingWindowLevelKey] = 500,
++        [kCGScreenSaverWindowLevelKey] = 1000,
++        [kCGMaximumWindowLevelKey] = INT32_MAX - 16,
++        [kCGOverlayWindowLevelKey] = 102,
++        [kCGHelpWindowLevelKey] = 200,
++        [kCGUtilityWindowLevelKey] = 19,
++        [kCGDesktopIconWindowLevelKey] = INT32_MIN + 1 + 20 + 20,
++        [kCGCursorWindowLevelKey] = INT32_MAX - 17,
++        [kCGAssistiveTechHighWindowLevelKey] = 1500,
++    };
++    if ((int) key < 0 || key >= kCGNumberOfWindowLevelKeys)
++        return 0;
++    return levels[key];
+ }
++
 diff --git a/CoreGraphics/X11.backend/CGSConnectionX11.h b/CoreGraphics/X11.backend/CGSConnectionX11.h
 index 5437acb5..07f7eb4f 100644
 --- a/CoreGraphics/X11.backend/CGSConnectionX11.h
@@ -7947,7 +8589,7 @@ index 1ec11620..af21f5b3 100644
 +		fontconfig
  )
 diff --git a/CoreText/CTFont.m b/CoreText/CTFont.m
-index 94ddabf9..fa018d3d 100644
+index 94ddabf9..00c4a7c9 100644
 --- a/CoreText/CTFont.m
 +++ b/CoreText/CTFont.m
 @@ -20,6 +20,18 @@ CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE. */
@@ -8106,7 +8748,7 @@ index 94ddabf9..fa018d3d 100644
      printf("STUB %s\n", __PRETTY_FUNCTION__);
      return nil;
  }
-@@ -128,157 +206,275 @@ CTFontRef CTFontCreateForString(CTFontRef currentFont, CFStringRef string, CFRan
+@@ -128,157 +206,276 @@ CTFontRef CTFontCreateForString(CTFontRef currentFont, CFStringRef string, CFRan
  CTFontRef CTFontCreateForStringWithLanguage(CTFontRef currentFont, CFStringRef string,
                                              CFRange range, CFStringRef language)
  {
@@ -8297,9 +8939,12 @@ index 94ddabf9..fa018d3d 100644
  CFStringRef CTFontCopyLocalizedName(CTFontRef font, CFStringRef nameKey,
                                      CFStringRef  _Nullable *actualLanguage)
  {
-+    font = normalizedFont(font);
-     printf("STUB %s\n", __PRETTY_FUNCTION__);
-     return nil;
+-    printf("STUB %s\n", __PRETTY_FUNCTION__);
+-    return nil;
++    /* Fall back to the canonical name. Chromium pre-fills the language output with a
++     * sentinel and reads it whenever it is non-NULL, so it must always be written. */
++    if (actualLanguage) *actualLanguage = NULL;
++    return CTFontCopyName(font, nameKey);
  }
  
  CFCharacterSetRef CTFontCopyCharacterSet(CTFontRef font)
@@ -8399,7 +9044,7 @@ index 94ddabf9..fa018d3d 100644
      printf("STUB %s\n", __PRETTY_FUNCTION__);
      return CGNullGlyph;
  }
-@@ -287,20 +483,44 @@ CGRect CTFontGetBoundingRectsForGlyphs(CTFontRef font, CTFontOrientation orienta
+@@ -287,20 +484,44 @@ CGRect CTFontGetBoundingRectsForGlyphs(CTFontRef font, CTFontOrientation orienta
                                         const CGGlyph *glyphs, CGRect *boundingRects,
                                         CFIndex count)
  {
@@ -8452,7 +9097,7 @@ index 94ddabf9..fa018d3d 100644
      }
  
      return sum;
-@@ -310,6 +530,7 @@ CGRect CTFontGetOpticalBoundsForGlyphs(CTFontRef font, const CGGlyph *glyphs,
+@@ -310,6 +531,7 @@ CGRect CTFontGetOpticalBoundsForGlyphs(CTFontRef font, const CGGlyph *glyphs,
                                         CGRect *boundingRects, CFIndex count,
                                         CFOptionFlags options)
  {
@@ -8460,7 +9105,7 @@ index 94ddabf9..fa018d3d 100644
      printf("STUB %s\n", __PRETTY_FUNCTION__);
      return CGRectMake(0, 0, 0, 0);
  }
-@@ -317,29 +538,34 @@ CGRect CTFontGetOpticalBoundsForGlyphs(CTFontRef font, const CGGlyph *glyphs,
+@@ -317,29 +539,34 @@ CGRect CTFontGetOpticalBoundsForGlyphs(CTFontRef font, const CGGlyph *glyphs,
  void CTFontGetVerticalTranslationsForGlyphs(CTFontRef font, const CGGlyph *glyphs,
                                              CGSize *translations, CFIndex count)
  {
@@ -8495,7 +9140,7 @@ index 94ddabf9..fa018d3d 100644
      printf("STUB %s\n", __PRETTY_FUNCTION__);
      return nil;
  }
-@@ -347,6 +573,7 @@ CFArrayRef CTFontCopyFeatureSettings(CTFontRef font)
+@@ -347,6 +574,7 @@ CFArrayRef CTFontCopyFeatureSettings(CTFontRef font)
  bool CTFontGetGlyphsForCharacters(CTFontRef font, const UniChar *characters,
                                    CGGlyph *glyphs, CFIndex count)
  {
@@ -8503,7 +9148,7 @@ index 94ddabf9..fa018d3d 100644
      [font getGlyphs: glyphs forCharacters: characters length: count];
      // FIXME: change getGlyphs: to return a BOOL
      return YES;
-@@ -355,20 +582,36 @@ bool CTFontGetGlyphsForCharacters(CTFontRef font, const UniChar *characters,
+@@ -355,20 +583,36 @@ bool CTFontGetGlyphsForCharacters(CTFontRef font, const UniChar *characters,
  void CTFontDrawGlyphs(CTFontRef font, const CGGlyph *glyphs, const CGPoint *positions,
                        size_t count, CGContextRef context)
  {
@@ -8543,7 +9188,7 @@ index 94ddabf9..fa018d3d 100644
  }
  
  CTFontRef
-@@ -381,6 +624,7 @@ CTFontCreateWithGraphicsFont(CGFontRef cgFont, CGFloat size,
+@@ -381,6 +625,7 @@ CTFontCreateWithGraphicsFont(CGFontRef cgFont, CGFloat size,
  
  ATSFontRef CTFontGetPlatformFont(CTFontRef font, CTFontDescriptorRef  _Nullable *attributes)
  {
@@ -8551,7 +9196,7 @@ index 94ddabf9..fa018d3d 100644
      printf("STUB %s\n", __PRETTY_FUNCTION__);
      return 0;
  }
-@@ -402,14 +646,27 @@ CTFontRef CTFontCreateWithQuickdrawInstance(ConstStr255Param name, int16_t ident
+@@ -402,14 +647,27 @@ CTFontRef CTFontCreateWithQuickdrawInstance(ConstStr255Param name, int16_t ident
  
  CFArrayRef CTFontCopyAvailableTables(CTFontRef font, CTFontTableOptions options)
  {
@@ -10008,10 +10653,10 @@ index 5dcac115..ea5d8421 100644
 +
  @end
 diff --git a/QuartzCore/CALayerContext.m b/QuartzCore/CALayerContext.m
-index 5dce8c56..a6087f14 100644
+index 5dce8c56..f3699378 100644
 --- a/QuartzCore/CALayerContext.m
 +++ b/QuartzCore/CALayerContext.m
-@@ -1,47 +1,159 @@
+@@ -1,47 +1,168 @@
  #import <Foundation/NSString.h>
 +#import <Foundation/NSMutableArray.h>
  #import <QuartzCore/CALayer.h>
@@ -10031,9 +10676,9 @@ index 5dce8c56..a6087f14 100644
  
 -@implementation CALayerContext
 +/* A flattened IOSurface only replaces local rendering for trees without
-+ * Metal content. Pure Vulkan presentation handles CAMetalLayer trees directly. */
++ * Metal content. Skipping a mixed tree also skips prepareRender, exhausting
++ * its drawable pool even though presentation callbacks continue to run. */
 +static BOOL hasMetalLayer(CALayer *layer) {
-+    if (!layer) return NO;
 +    if ([[layer class] isSubclassOfClass: [CAMetalLayerInternal class]])
 +        return YES;
 +    for (CALayer *child in layer.sublayers)
@@ -10102,7 +10747,11 @@ index 5dce8c56..a6087f14 100644
 +        setenv("__VK_LAYER_NV_optimus", "NVIDIA_only", 1);
 +    }
 +}
-+
+ 
+-    CGLPixelFormatAttribute attributes[1] = {
+-            0,
+-    };
+-    GLint numberOfVirtualScreens;
 +/* The X11 transport presents Chromium's flattened full-window surface.
 + * Avoid uploading and compositing that same window again into a covered GL
 + * child. Restrict this to the explicitly configured native presentation path. */
@@ -10119,23 +10768,31 @@ index 5dce8c56..a6087f14 100644
 +        if(hasFullWindowSurface(child,size))return YES;
 +    return NO;
 +}
-+@implementation CALayerContext
- 
--    CGLPixelFormatAttribute attributes[1] = {
--            0,
--    };
--    GLint numberOfVirtualScreens;
-+@synthesize subwindow = _subwindow;
  
 -    CGLChoosePixelFormat(attributes, &_pixelFormat, &numberOfVirtualScreens);
-+- (CGRect) frame {
-+    return _frame;
++/* CPU readback already presents non-Metal trees remotely. Locally
++ * compositing their cached textures can leave a frozen child over the client.
++ * Metal trees must always prepare their drawables, including mixed trees. */
++static BOOL skipLocalRender(CALayer *layer, CGSize size) {
++    return layer && getenv("DARLING_CA_SKIP_LOCAL_IOSURFACE_RENDER") &&
++           !hasMetalLayer(layer) &&
++           (!getenv("RCLOL_GPU_DIRECT_PRESENT") || hasFullWindowSurface(layer, size));
 +}
++@implementation CALayerContext
  
 -    if ((error = CGLCreateContext(_pixelFormat, NULL, &_glContext)) !=
 -        kCGLNoError)
 -        NSLog(@"CGLCreateContext failed with %d in %s %d", error, __FILE__,
 -              __LINE__);
++@synthesize subwindow = _subwindow;
+ 
+-    _frame = rect;
++- (CGRect) frame {
++    return _frame;
++}
+ 
+-    _renderer = [[CARenderer rendererWithCGLContext: _glContext
+-                                            options: nil] retain];
 +- (CGLContextObj) glContext {
 +    if (_glContext == NULL) {
 +        configureGPUFromMetalSelector();
@@ -10160,15 +10817,12 @@ index 5dce8c56..a6087f14 100644
 +    }
 +    return _glContext;
 +}
- 
--    _frame = rect;
++
 +- initWithFrame: (CGRect) rect {
 +    self = [super init];
 +    if (self == nil)
 +        return nil;
- 
--    _renderer = [[CARenderer rendererWithCGLContext: _glContext
--                                            options: nil] retain];
++
 +    _deleteTextureIds = [[NSMutableArray alloc] init];
 +    _frame = rect;
 +    /* Views can acquire a backing layer before joining a window. Defer
@@ -10191,7 +10845,7 @@ index 5dce8c56..a6087f14 100644
      [super dealloc];
  }
  
-@@ -51,12 +163,30 @@
+@@ -51,12 +172,30 @@
  }
  
  - (void) setLayer: (CALayer *) layer {
@@ -10222,7 +10876,7 @@ index 5dce8c56..a6087f14 100644
  }
  
  - (void) setSubwindow: (CGSubWindow*) subwindow
-@@ -68,16 +198,37 @@
+@@ -68,16 +207,37 @@
      }
  
      _subwindow = [subwindow retain];
@@ -10261,7 +10915,7 @@ index 5dce8c56..a6087f14 100644
  }
  
  - (void) assignTextureIdsToLayerTree: (CALayer *) layer {
-@@ -93,8 +244,27 @@
+@@ -93,8 +253,27 @@
          [self assignTextureIdsToLayerTree: child];
  }
  
@@ -10289,7 +10943,7 @@ index 5dce8c56..a6087f14 100644
  
      glEnable(GL_DEPTH_TEST);
      glShadeModel(GL_SMOOTH);
-@@ -118,27 +288,70 @@
+@@ -118,27 +297,69 @@
  
      [_deleteTextureIds removeAllObjects];
  
@@ -10320,8 +10974,7 @@ index 5dce8c56..a6087f14 100644
 +    }
 +    if (_cglWindow == NULL)
 +        return;
-+    if(getenv("DARLING_CA_SKIP_LOCAL_IOSURFACE_RENDER") &&
-+       !hasOtherVisibleContent(_layer) && hasFullWindowSurface(_layer,_frame.size))return;
++    if(skipLocalRender(_layer, _frame.size))return;
      [self renderLayer: _layer];
  }
  
@@ -10365,7 +11018,7 @@ index 5dce8c56..a6087f14 100644
  }
  
  - (void) startTimerIfNeeded {
-@@ -147,7 +360,7 @@
+@@ -147,7 +368,7 @@
                                                     target: self
                                                   selector: @selector(timer:)
                                                   userInfo: nil
@@ -10374,15 +11027,14 @@ index 5dce8c56..a6087f14 100644
  }
  
  - (void) deleteTextureId: (NSNumber *) textureId {
-@@ -155,7 +368,12 @@
+@@ -155,7 +376,11 @@
  }
  
  - (void) flush {
 -    CGLFlushDrawable(_glContext);
 +    if (hasMetalLayer(_layer))
 +        return;
-+    if(getenv("DARLING_CA_SKIP_LOCAL_IOSURFACE_RENDER") && _layer &&
-+       !hasOtherVisibleContent(_layer) && hasFullWindowSurface(_layer,_frame.size))return;
++    if(skipLocalRender(_layer, _frame.size))return;
 +    if (_glContext != NULL && _cglWindow != NULL)
 +        CGLFlushDrawable(_glContext);
  }
@@ -11353,10 +12005,10 @@ index 757dd8c9..cbc313d5 100644
  	CFTimeInterval presentedTime() const;
  
 diff --git a/QuartzCore/CAMetalLayer.mm b/QuartzCore/CAMetalLayer.mm
-index b81e2e14..b52dcb0d 100644
+index b81e2e14..fd4137f1 100644
 --- a/QuartzCore/CAMetalLayer.mm
 +++ b/QuartzCore/CAMetalLayer.mm
-@@ -17,38 +17,333 @@
+@@ -17,38 +17,332 @@
   * along with Darling.  If not, see <http://www.gnu.org/licenses/>.
   */
  
@@ -11592,7 +12244,6 @@ index b81e2e14..b52dcb0d 100644
 +
 +	return topLevelWin;
 +}
-+
 +static bool darlingMetalDebug()
 +{
 +	static const bool enabled = access("/tmp/metal-debug-trace", F_OK) == 0;
@@ -11705,7 +12356,7 @@ index b81e2e14..b52dcb0d 100644
  + (instancetype)allocWithZone: (NSZone*)zone
  {
  	if (self == [CAMetalLayer class]) {
-@@ -205,63 +500,89 @@ static void reportGLErrors(void) {
+@@ -205,63 +499,89 @@ static void reportGLErrors(void) {
  
  @end
  
@@ -11827,7 +12478,7 @@ index b81e2e14..b52dcb0d 100644
  }
  
  - (void)setDevice: (id<MTLDevice>)device
-@@ -290,7 +611,6 @@ static void reportGLErrors(void) {
+@@ -290,7 +610,6 @@ static void reportGLErrors(void) {
  
  - (CGColorSpaceRef)colorspace
  {
@@ -11835,7 +12486,7 @@ index b81e2e14..b52dcb0d 100644
  	return _colorspace;
  }
  
-@@ -321,6 +641,7 @@ static void reportGLErrors(void) {
+@@ -321,6 +640,7 @@ static void reportGLErrors(void) {
  
  - (void)setDrawableSize: (CGSize)drawableSize
  {
@@ -11843,7 +12494,7 @@ index b81e2e14..b52dcb0d 100644
  	_drawableSize = drawableSize;
  	[self recreateDrawables];
  }
-@@ -339,36 +660,45 @@ static void reportGLErrors(void) {
+@@ -339,36 +659,45 @@ static void reportGLErrors(void) {
  	[self recreateDrawables];
  }
  
@@ -11904,7 +12555,7 @@ index b81e2e14..b52dcb0d 100644
  		if (_allowsNextDrawableTimeout) {
  			if (![_drawableCondition waitUntilDate: endTime]) {
  				break;
-@@ -378,8 +708,15 @@ static void reportGLErrors(void) {
+@@ -378,8 +707,15 @@ static void reportGLErrors(void) {
  		}
  	}
  
@@ -11921,7 +12572,7 @@ index b81e2e14..b52dcb0d 100644
  		[_drawableCondition unlock];
  		return nil;
  	}
-@@ -394,12 +731,13 @@ static void reportGLErrors(void) {
+@@ -394,12 +730,13 @@ static void reportGLErrors(void) {
  	}
  
  	if (drawableID == UINT8_MAX) {
@@ -11936,7 +12587,7 @@ index b81e2e14..b52dcb0d 100644
  
  	drawable = _drawables[drawableID];
  
-@@ -410,20 +748,28 @@ static void reportGLErrors(void) {
+@@ -410,20 +747,28 @@ static void reportGLErrors(void) {
  
  - (void)queuePresent: (NSUInteger)drawableID
  {
@@ -11973,7 +12624,7 @@ index b81e2e14..b52dcb0d 100644
  	[_drawableCondition lock];
  	_usableDrawablesBitmap |= 1u << drawableID;
  	[_drawableCondition signal];
-@@ -437,16 +783,14 @@ static void reportGLErrors(void) {
+@@ -437,16 +782,14 @@ static void reportGLErrors(void) {
  	// drop all queued presentations
  	for (NSUInteger i = 0; i < _queuedDrawableCount; ++i) {
  		auto& drawable = _drawables[_queuedDrawables[i]];
@@ -11995,7 +12646,7 @@ index b81e2e14..b52dcb0d 100644
  	for (auto& drawable: _drawables) {
  		if (drawable) {
  			drawable->disown();
-@@ -455,14 +799,443 @@ static void reportGLErrors(void) {
+@@ -455,14 +798,443 @@ static void reportGLErrors(void) {
  	}
  	_usableDrawablesBitmap = 0;
  
@@ -12048,7 +12699,7 @@ index b81e2e14..b52dcb0d 100644
 +		subwinObj = [[self.superlayer _context] subwindow];
 +		nativeWin = [subwinObj nativeWindow];
 +	}
-+
+ 
 +	// Resolve X11 Display
 +	void* nativeDpy = nullptr;
 +	const char* dpySource = "none";
@@ -12203,7 +12854,7 @@ index b81e2e14..b52dcb0d 100644
 +				_vkSurface = VK_NULL_HANDLE;
 +				continue;
 +			}
- 
++
 +			// 2. vkGetPhysicalDeviceSurfaceSupportKHR
 +			uint32_t qFam = dev->graphicsQueueFamilyIndex() ? *dev->graphicsQueueFamilyIndex() : 0;
 +			VkBool32 supported = VK_FALSE;
@@ -12442,7 +13093,7 @@ index b81e2e14..b52dcb0d 100644
  	switch (_pixelFormat) {
  		case MTLPixelFormatBGRA8Unorm:      pixelFormat = Indium::PixelFormat::BGRA8Unorm;      break;
  		case MTLPixelFormatBGRA8Unorm_sRGB: pixelFormat = Indium::PixelFormat::BGRA8Unorm_sRGB; break;
-@@ -476,123 +1249,239 @@ static void reportGLErrors(void) {
+@@ -476,123 +1248,239 @@ static void reportGLErrors(void) {
  		default:                            pixelFormat = Indium::PixelFormat::Invalid;         break;
  	}
  
@@ -13449,37 +14100,3 @@ index 985f77f3..db64f55d 100644
  + (BOOL) disableActions;
  + (CFTimeInterval) animationDuration;
  + (CAMediaTimingFunction *) animationTimingFunction;
-diff --git a/QuartzCore/include/QuartzCore/CATransformLayer.h b/QuartzCore/include/QuartzCore/CATransformLayer.h
-new file mode 100644
-index 00000000..19cd9ea9
---- /dev/null
-+++ b/QuartzCore/include/QuartzCore/CATransformLayer.h
-@@ -0,0 +1,28 @@
-+/*
-+ * This file is part of Darling.
-+ *
-+ * Copyright (C) 2022 Darling developers
-+ *
-+ * Darling is free software: you can redistribute it and/or modify
-+ * it under the terms of the GNU General Public License as published by
-+ * the Free Software Foundation, either version 3 of the License, or
-+ * (at your option) any later version.
-+ *
-+ * Darling is distributed in the hope that it will be useful,
-+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
-+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-+ * GNU General Public License for more details.
-+ *
-+ * You should have received a copy of the GNU General Public License
-+ * along with Darling.  If not, see <http://www.gnu.org/licenses/>.
-+ */
-+
-+#import <QuartzCore/CALayer.h>
-+
-+/* darling-lol M58F35: CATransformLayer is a CALayer that renders its sublayers
-+ * in 3D (it adds no surface API of its own). */
-+@interface CATransformLayer : CALayer
-+
-+- (instancetype) init;
-+
-+@end
