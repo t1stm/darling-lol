@@ -12003,7 +12003,7 @@ index 757dd8c9..cbc313d5 100644
  	CFTimeInterval presentedTime() const;
  
 diff --git a/QuartzCore/CAMetalLayer.mm b/QuartzCore/CAMetalLayer.mm
-index b81e2e14..13fb0d18 100644
+index b81e2e14..d0b95fc3 100644
 --- a/QuartzCore/CAMetalLayer.mm
 +++ b/QuartzCore/CAMetalLayer.mm
 @@ -17,38 +17,354 @@
@@ -12666,7 +12666,7 @@ index b81e2e14..13fb0d18 100644
  	for (auto& drawable: _drawables) {
  		if (drawable) {
  			drawable->disown();
-@@ -455,14 +820,460 @@ static void reportGLErrors(void) {
+@@ -455,14 +820,475 @@ static void reportGLErrors(void) {
  	}
  	_usableDrawablesBitmap = 0;
  
@@ -12956,6 +12956,13 @@ index b81e2e14..13fb0d18 100644
 +				}
 +			} else if (pmEnv && strcmp(pmEnv, "fifo") == 0) {
 +				chosenPresentMode = VK_PRESENT_MODE_FIFO_KHR;
++			} else if (pmEnv && (strcmp(pmEnv, "latest") == 0 || strcmp(pmEnv, "fifo_latest") == 0)) {
++				for (auto m : modes) {
++					if (m == (VkPresentModeKHR)1000361000) {
++						chosenPresentMode = (VkPresentModeKHR)1000361000;
++						break;
++					}
++				}
 +			} else if (!syncEnabled) {
 +				for (auto m : modes) {
 +					if (m == VK_PRESENT_MODE_IMMEDIATE_KHR) {
@@ -12973,12 +12980,20 @@ index b81e2e14..13fb0d18 100644
 +				}
 +			} else {
 +				for (auto m : modes) {
-+					if (m == VK_PRESENT_MODE_MAILBOX_KHR) {
-+						chosenPresentMode = VK_PRESENT_MODE_MAILBOX_KHR;
++					if (m == VK_PRESENT_MODE_FIFO_KHR) {
++						chosenPresentMode = VK_PRESENT_MODE_FIFO_KHR;
 +						break;
 +					}
 +				}
-+				if (chosenPresentMode != VK_PRESENT_MODE_MAILBOX_KHR) {
++				if (chosenPresentMode != VK_PRESENT_MODE_FIFO_KHR) {
++					for (auto m : modes) {
++						if (m == VK_PRESENT_MODE_FIFO_RELAXED_KHR) {
++							chosenPresentMode = VK_PRESENT_MODE_FIFO_RELAXED_KHR;
++							break;
++						}
++					}
++				}
++				if (chosenPresentMode != VK_PRESENT_MODE_FIFO_KHR && chosenPresentMode != VK_PRESENT_MODE_FIFO_RELAXED_KHR) {
 +					for (auto m : modes) {
 +						if (m == (VkPresentModeKHR)1000361000) {
 +							chosenPresentMode = (VkPresentModeKHR)1000361000;
@@ -12986,10 +13001,10 @@ index b81e2e14..13fb0d18 100644
 +						}
 +					}
 +				}
-+				if (chosenPresentMode != VK_PRESENT_MODE_MAILBOX_KHR && chosenPresentMode != (VkPresentModeKHR)1000361000) {
++				if (chosenPresentMode != VK_PRESENT_MODE_FIFO_KHR && chosenPresentMode != VK_PRESENT_MODE_FIFO_RELAXED_KHR && chosenPresentMode != (VkPresentModeKHR)1000361000) {
 +					for (auto m : modes) {
-+						if (m == VK_PRESENT_MODE_FIFO_KHR) {
-+							chosenPresentMode = VK_PRESENT_MODE_FIFO_KHR;
++						if (m == VK_PRESENT_MODE_MAILBOX_KHR) {
++							chosenPresentMode = VK_PRESENT_MODE_MAILBOX_KHR;
 +							break;
 +						}
 +					}
@@ -13130,7 +13145,7 @@ index b81e2e14..13fb0d18 100644
  	switch (_pixelFormat) {
  		case MTLPixelFormatBGRA8Unorm:      pixelFormat = Indium::PixelFormat::BGRA8Unorm;      break;
  		case MTLPixelFormatBGRA8Unorm_sRGB: pixelFormat = Indium::PixelFormat::BGRA8Unorm_sRGB; break;
-@@ -476,123 +1287,239 @@ static void reportGLErrors(void) {
+@@ -476,123 +1302,239 @@ static void reportGLErrors(void) {
  		default:                            pixelFormat = Indium::PixelFormat::Invalid;         break;
  	}
  
