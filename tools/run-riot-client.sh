@@ -169,14 +169,11 @@ cache_root=${XDG_CACHE_HOME:-${HOME:-$prefix_dir}/.cache}/darling-lol
 MESA_SHADER_CACHE_DIR="${MESA_SHADER_CACHE_DIR:=$cache_root}"
 export MESA_SHADER_CACHE_DIR
 mkdir -p "$MESA_SHADER_CACHE_DIR" 2>/dev/null || true
-# Disable VSync / Sync to VBlank by default across driver stacks to allow uncapped presentation
-export __GL_SYNC_TO_VBLANK="${__GL_SYNC_TO_VBLANK:-0}"
-export vblank_mode="${vblank_mode:-0}"
-export MESA_VK_WSI_PRESENT_MODE="${MESA_VK_WSI_PRESENT_MODE:-immediate}"
-# NVIDIA proprietary driver: limit pre-rendered frames (default 0 lets driver buffer dynamically)
-export __GL_MaxFramesAllowed="${__GL_MaxFramesAllowed:-0}"
-export __GL_THREADED_OPTIMIZATIONS="${__GL_THREADED_OPTIMIZATIONS:-0}"
-export __GL_YIELD="${__GL_YIELD:-NOTHING}"
+# NVIDIA proprietary driver: smooth 1-frame buffering, threaded optimizations and scheduler yielding
+export __GL_MaxFramesAllowed="${__GL_MaxFramesAllowed:-1}"
+export __GL_THREADED_OPTIMIZATIONS="${__GL_THREADED_OPTIMIZATIONS:-1}"
+export __GL_YIELD="${__GL_YIELD:-USLEEP}"
+export DARLING_VULKAN_PRESENT_TARGET="${DARLING_VULKAN_PRESENT_TARGET:-toplevel}"
 # Reduce timer slack for tighter scheduling in the game process tree.
 if [ -w /proc/self/timerslack_ns ]; then
   echo 1 > /proc/self/timerslack_ns 2>/dev/null || true

@@ -12005,7 +12005,7 @@ index 757dd8c9..cbc313d5 100644
  	CFTimeInterval presentedTime() const;
  
 diff --git a/QuartzCore/CAMetalLayer.mm b/QuartzCore/CAMetalLayer.mm
-index b81e2e14..470decb2 100644
+index b81e2e14..9146c222 100644
 --- a/QuartzCore/CAMetalLayer.mm
 +++ b/QuartzCore/CAMetalLayer.mm
 @@ -17,38 +17,354 @@
@@ -12594,7 +12594,7 @@ index b81e2e14..470decb2 100644
  		[_drawableCondition unlock];
  		return nil;
  	}
-@@ -394,36 +752,78 @@ static void reportGLErrors(void) {
+@@ -394,12 +752,13 @@ static void reportGLErrors(void) {
  	}
  
  	if (drawableID == UINT8_MAX) {
@@ -12609,43 +12609,7 @@ index b81e2e14..470decb2 100644
  
  	drawable = _drawables[drawableID];
  
- 	[_drawableCondition unlock];
- 
-+	if (_displaySyncEnabled) {
-+		static uint64_t s_targetDeadlineNs = 0;
-+		uint32_t rate = getMetalRefreshRate();
-+		uint64_t intervalNs = 1000000000ULL / (uint64_t)rate;
-+
-+		struct timespec tsNow;
-+		clock_gettime(CLOCK_MONOTONIC, &tsNow);
-+		uint64_t nowNs = (uint64_t)tsNow.tv_sec * 1000000000ULL + tsNow.tv_nsec;
-+
-+		if (s_targetDeadlineNs == 0 || nowNs > s_targetDeadlineNs + intervalNs) {
-+			s_targetDeadlineNs = nowNs + intervalNs;
-+		} else {
-+			if (nowNs < s_targetDeadlineNs) {
-+				uint64_t waitNs = s_targetDeadlineNs - nowNs;
-+				if (waitNs > 1500000ULL) {
-+					struct timespec sleepTs;
-+					uint64_t coarseWaitNs = waitNs - 1000000ULL;
-+					sleepTs.tv_sec = coarseWaitNs / 1000000000ULL;
-+					sleepTs.tv_nsec = coarseWaitNs % 1000000000ULL;
-+					nanosleep(&sleepTs, nullptr);
-+				}
-+				do {
-+					#if defined(__x86_64__) || defined(_M_X64)
-+					__builtin_ia32_pause();
-+					#endif
-+					clock_gettime(CLOCK_MONOTONIC, &tsNow);
-+					nowNs = (uint64_t)tsNow.tv_sec * 1000000000ULL + tsNow.tv_nsec;
-+				} while (nowNs < s_targetDeadlineNs);
-+			}
-+			s_targetDeadlineNs += intervalNs;
-+		}
-+	}
-+
- 	return [[[CAMetalDrawableInternal alloc] initWithLayer: self drawable: drawable] autorelease];
- }
+@@ -410,20 +769,28 @@ static void reportGLErrors(void) {
  
  - (void)queuePresent: (NSUInteger)drawableID
  {
@@ -12682,7 +12646,7 @@ index b81e2e14..470decb2 100644
  	[_drawableCondition lock];
  	_usableDrawablesBitmap |= 1u << drawableID;
  	[_drawableCondition signal];
-@@ -437,16 +837,14 @@ static void reportGLErrors(void) {
+@@ -437,16 +804,14 @@ static void reportGLErrors(void) {
  	// drop all queued presentations
  	for (NSUInteger i = 0; i < _queuedDrawableCount; ++i) {
  		auto& drawable = _drawables[_queuedDrawables[i]];
@@ -12704,7 +12668,7 @@ index b81e2e14..470decb2 100644
  	for (auto& drawable: _drawables) {
  		if (drawable) {
  			drawable->disown();
-@@ -455,14 +853,451 @@ static void reportGLErrors(void) {
+@@ -455,14 +820,448 @@ static void reportGLErrors(void) {
  	}
  	_usableDrawablesBitmap = 0;
  
@@ -12849,17 +12813,14 @@ index b81e2e14..470decb2 100644
 +		// Determine presentation window candidate list
 +		const char* targetEnv = getenv("DARLING_VULKAN_PRESENT_TARGET");
 +		std::vector<void*> candidateWins;
-+		if (targetEnv && strcmp(targetEnv, "toplevel") == 0) {
-+			candidateWins.push_back(topLevelWin ? topLevelWin : subWin);
-+			if (subWin && subWin != candidateWins[0]) candidateWins.push_back(subWin);
-+		} else if (targetEnv && strcmp(targetEnv, "subwin") == 0) {
++		if (targetEnv && strcmp(targetEnv, "subwin") == 0) {
 +			candidateWins.push_back(subWin);
 +			if (topLevelWin && topLevelWin != subWin) candidateWins.push_back(topLevelWin);
 +		} else {
-+			// Auto: try subWin first (child window WSI DRI3/Present);
-+			// if that fails, automatically fall back to topLevelWin.
-+			candidateWins.push_back(subWin);
-+			if (topLevelWin && topLevelWin != subWin) candidateWins.push_back(topLevelWin);
++			// Default to topLevelWin for direct XWayland wl_surface integration and 165Hz VSync;
++			// fall back to subWin if topLevelWin is not available.
++			if (topLevelWin) candidateWins.push_back(topLevelWin);
++			if (subWin && subWin != topLevelWin) candidateWins.push_back(subWin);
 +		}
 +
 +		for (void* targetWin : candidateWins) {
@@ -12938,7 +12899,7 @@ index b81e2e14..470decb2 100644
 +			if (formatCount > 0) {
 +				DynamicVK::vkGetPhysicalDeviceSurfaceFormatsKHR(dev->physicalDevice(), _vkSurface, &formatCount, formats.data());
 +			}
- 
++
 +			VkFormat chosenFormat = VK_FORMAT_B8G8R8A8_UNORM;
 +			VkColorSpaceKHR chosenColorSpace = VK_COLOR_SPACE_SRGB_NONLINEAR_KHR;
 +			if (!formats.empty()) {
@@ -13021,14 +12982,14 @@ index b81e2e14..470decb2 100644
 +				}
 +				if (chosenPresentMode != VK_PRESENT_MODE_MAILBOX_KHR) {
 +					for (auto m : modes) {
-+						if (m == VK_PRESENT_MODE_IMMEDIATE_KHR) {
-+							chosenPresentMode = VK_PRESENT_MODE_IMMEDIATE_KHR;
++						if (m == VK_PRESENT_MODE_FIFO_KHR) {
++							chosenPresentMode = VK_PRESENT_MODE_FIFO_KHR;
 +							break;
 +						}
 +					}
 +				}
 +			}
-+
+ 
 +			uint32_t imageCount = caps.minImageCount + 1;
 +			if (caps.maxImageCount > 0 && imageCount > caps.maxImageCount) {
 +				imageCount = caps.maxImageCount;
@@ -13159,7 +13120,7 @@ index b81e2e14..470decb2 100644
  	switch (_pixelFormat) {
  		case MTLPixelFormatBGRA8Unorm:      pixelFormat = Indium::PixelFormat::BGRA8Unorm;      break;
  		case MTLPixelFormatBGRA8Unorm_sRGB: pixelFormat = Indium::PixelFormat::BGRA8Unorm_sRGB; break;
-@@ -476,123 +1311,239 @@ static void reportGLErrors(void) {
+@@ -476,123 +1275,239 @@ static void reportGLErrors(void) {
  		default:                            pixelFormat = Indium::PixelFormat::Invalid;         break;
  	}
  
