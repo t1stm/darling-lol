@@ -15,7 +15,7 @@ obj = root / 'build/riot-client-resize-check.o'
 subprocess.run(['clang', *flags['C_DEFINES'], *flags['C_INCLUDES'], *flags['C_FLAGS'],
                 '-O2', '-Wno-macro-redefined', '-c', str(root / 'tools/riot-client-resize-check.m'),
                 '-o', str(obj)], check=True)
-subprocess.run(['clang', '-target', 'x86_64-apple-macosx11.0', '-fuse-ld=lld', '-L@DARLING_SDK@/usr/lib/swift', '-nostdlib',
+subprocess.run(['clang', '-target', 'x86_64-apple-macosx11.0', '-fuse-ld=lld', '-nostdlib',
                 '-isysroot', '@DARLING_SDK@', str(obj), '-lSystem', '-lobjc',
                 '-framework', 'AppKit', '-framework', 'QuartzCore', '-framework', 'OpenGL',
                 '-framework', 'IOSurface', '-framework', 'CoreFoundation', '-framework', 'Foundation',

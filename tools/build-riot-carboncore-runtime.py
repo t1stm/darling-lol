@@ -24,6 +24,6 @@ probe = root / 'build/riot-gestalt-version-check.o'
 subprocess.run(['clang++', *flags['CXX_DEFINES'], *flags['CXX_INCLUDES'], *flags['CXX_FLAGS'],
                 '-O2', '-Wno-macro-redefined', '-c', str(root / 'tools/riot-gestalt-version-check.cpp'),
                 '-o', str(probe)], check=True)
-subprocess.run(['clang++', '-target', 'x86_64-apple-macosx11.0', '-fuse-ld=lld', '-L@DARLING_SDK@/usr/lib/swift', '-nostdlib',
+subprocess.run(['clang++', '-target', 'x86_64-apple-macosx11.0', '-fuse-ld=lld', '-nostdlib',
                 '-isysroot', '@DARLING_SDK@', str(probe), str(root / 'build/riot-CarbonCore'),
                 '-lSystem', '-lc++', '-o', str(root / 'build/riot-gestalt-version-check')], check=True)

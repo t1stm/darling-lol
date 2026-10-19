@@ -1,8 +1,8 @@
 diff --git a/src/connection.m b/src/connection.m
-index 67f3d76..05b86c2 100644
+index 366f985..b7b979a 100644
 --- a/src/connection.m
 +++ b/src/connection.m
-@@ -975,6 +975,14 @@ invalid_out:
+@@ -964,6 +964,14 @@ error_out:
  	XPC_CLASS(dictionary)* result = nil;
  	mach_msg_header_t* header = NULL;
  
@@ -148,10 +148,10 @@ index 0870a6c..e2d4bd6 100644
  
  XPC_EXPORT
 diff --git a/src/pipe.m b/src/pipe.m
-index 954e8f4..2c3dcea 100644
+index d04fb98..f60e6ac 100644
 --- a/src/pipe.m
 +++ b/src/pipe.m
-@@ -218,7 +218,9 @@ out:
+@@ -209,7 +209,9 @@ out:
  				goto out;
  			}
  
@@ -162,7 +162,7 @@ index 954e8f4..2c3dcea 100644
  
  			status = 0;
  		} else {
-@@ -261,7 +263,7 @@ out:
+@@ -249,7 +251,7 @@ out:
  				goto out;
  			}
  
@@ -171,7 +171,7 @@ index 954e8f4..2c3dcea 100644
  			*replyPort = header->msgh_local_port;
  
  			status = 0;
-@@ -600,7 +602,7 @@ retry:
+@@ -581,7 +583,7 @@ retry:
  					goto out;
  				}
  

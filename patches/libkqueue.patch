@@ -1,9 +1,9 @@
 diff --git a/CMakeLists.txt b/CMakeLists.txt
-index 312a81f..c5adc15 100644
+index b9cf3f8..62e11d0 100644
 --- a/CMakeLists.txt
 +++ b/CMakeLists.txt
 @@ -31,7 +31,12 @@ if (DARLING)
- 	set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -nostdinc -DHAVE_SYS_EVENTFD_H -DHAVE_SYS_SIGNALFD_H -DHAVE_SYS_TIMERFD_H -ggdb -O0 -fno-stack-protector")
+ 	set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -nostdinc -DHAVE_SYS_EVENTFD_H -DHAVE_SYS_SIGNALFD_H -DHAVE_SYS_TIMERFD_H -ggdb -O0")
  
  	#add_definitions(-DKERNEL_PRIVATE)
 -	#add_definitions(-Dkqueue=kqueue_impl -Dkevent=kevent_impl -Dkevent64=kevent64_impl)
@@ -40,7 +40,7 @@ index a9a6512..f324b41 100644
          if (kqops.filter_free != NULL)
              kqops.filter_free(kq, &kq->kq_filt[i]);
 diff --git a/src/common/kevent.c b/src/common/kevent.c
-index f978f30..e8a8e1d 100644
+index f5d53a2..ca91b33 100644
 --- a/src/common/kevent.c
 +++ b/src/common/kevent.c
 @@ -27,6 +27,8 @@
@@ -80,7 +80,7 @@ index f978f30..e8a8e1d 100644
      if ((src->flags & EV_DELETE) || ((kn->kn_flags & KNFL_DEFER_DELETE) && (src->flags & EV_ENABLE))) {
          rv = knote_delete(filt, kn);
          dbg_printf("knote_delete returned %d", rv);
-@@ -374,6 +388,7 @@ kevent64_impl(int kqfd, const struct kevent64_s *changelist, int nchanges,
+@@ -349,6 +363,7 @@ kevent64_impl(int kqfd, const struct kevent64_s *changelist, int nchanges,
      kqueue_addref(kq);
  
      pthread_mutex_unlock(&kq_mtx);
@@ -88,19 +88,19 @@ index f978f30..e8a8e1d 100644
  
  #ifndef NDEBUG
      if (DEBUG_KQUEUE) {
-@@ -424,6 +439,11 @@ extern void KQ_DLOG(const char* format, ...);
+@@ -386,6 +401,11 @@ kevent64_impl(int kqfd, const struct kevent64_s *changelist, int nchanges,
+     if ((flags & KEVENT_FLAG_ERROR_EVENTS) == 0 && nevents > 0) {
          const struct timespec* ts = (flags & KEVENT_FLAG_IMMEDIATE) ? (&timeout_zero) : timeout;
  again:
-         KQ_DLOG("libkqueue: calling kqops.kevent_wait kq=%p nevents=%d\n", (void*)kq, nevents);
 +        /* epoll snapshots contain raw knote pointers. Keep retired notes alive
 +         * until every waiter that could have observed them has copied out. */
 +        kqueue_lock(kq);
 +        kq->kq_waiters++;
 +        kqueue_unlock(kq);
          rv = kqops.kevent_wait(kq, nevents, ts);
-         KQ_DLOG("libkqueue: kqops.kevent_wait returned %d\n", rv);
          dbg_printf("kqops.kevent_wait returned %d", rv);
-@@ -436,6 +456,7 @@ again:
+ 
+@@ -395,6 +415,7 @@ again:
              ret += rv;
          }
  
@@ -109,7 +109,7 @@ index f978f30..e8a8e1d 100644
          kqueue_unlock(kq);
  
 diff --git a/src/common/knote.c b/src/common/knote.c
-index 8194674..87a59c8 100644
+index a328f80..d0141aa 100644
 --- a/src/common/knote.c
 +++ b/src/common/knote.c
 @@ -33,7 +33,17 @@ knote_init(void)
@@ -131,7 +131,7 @@ index 8194674..87a59c8 100644
  }
  
  RB_GENERATE(knt, knote, kn_entries, knote_cmp)
-@@ -101,7 +111,7 @@ knote_delete(struct filter *filt, struct knote *kn)
+@@ -94,7 +104,7 @@ knote_delete(struct filter *filt, struct knote *kn)
       * Verify that the knote wasn't removed by another
       * thread before we acquired the knotelist lock.
       */
@@ -140,7 +140,7 @@ index 8194674..87a59c8 100644
      pthread_rwlock_wrlock(&filt->kf_knote_mtx);
      tmp = RB_FIND(knt, &filt->kf_knote, &query);
      if (tmp == kn) {
-@@ -121,10 +131,11 @@ knote_delete(struct filter *filt, struct knote *kn)
+@@ -114,10 +124,11 @@ knote_delete(struct filter *filt, struct knote *kn)
  struct knote *
  knote_lookup(struct filter *filt, uintptr_t ident)
  {
@@ -153,7 +153,7 @@ index 8194674..87a59c8 100644
  
      pthread_rwlock_rdlock(&filt->kf_knote_mtx);
      ent = RB_FIND(knt, &filt->kf_knote, &query);
-@@ -167,3 +178,14 @@ knote_disable(struct filter *filt, struct knote *kn)
+@@ -160,3 +171,14 @@ knote_disable(struct filter *filt, struct knote *kn)
  
  //TODO: knote_enable()
  
@@ -169,7 +169,7 @@ index 8194674..87a59c8 100644
 +    return result;
 +}
 diff --git a/src/common/kqueue.c b/src/common/kqueue.c
-index 4bdab21..035c7f3 100644
+index 61cc9dc..f05576d 100644
 --- a/src/common/kqueue.c
 +++ b/src/common/kqueue.c
 @@ -23,6 +23,8 @@
@@ -181,7 +181,7 @@ index 4bdab21..035c7f3 100644
  
  #ifdef DARLING
  #include "../darling/listenregistry.h"
-@@ -115,6 +117,7 @@ kqueue_cmp(struct kqueue *a, struct kqueue *b)
+@@ -113,6 +115,7 @@ kqueue_cmp(struct kqueue *a, struct kqueue *b)
  void kqueue_cleanup(struct kqueue* kq)
  {
      struct knote *next, *tmp;
@@ -189,7 +189,7 @@ index 4bdab21..035c7f3 100644
      for (next = kq->kq_tofree.lh_first; next != NULL; next = tmp)
      {
          tmp = next->kn_entries2free.le_next;
-@@ -137,6 +140,7 @@ kqueue_free(struct kqueue *kq)
+@@ -135,6 +138,7 @@ kqueue_free(struct kqueue *kq)
  	// XXX: we should be doing this more efficiently (i.e. without walking through all open kqueues)
  	map_foreach(kqmap, kqueue_free_cb, kq);
      filter_unregister_all(kq);
@@ -197,7 +197,7 @@ index 4bdab21..035c7f3 100644
      kqops.kqueue_free(kq);
      free(kq);
  }
-@@ -334,6 +338,7 @@ void kqueue_delref(struct kqueue *kq)
+@@ -329,6 +333,7 @@ void kqueue_delref(struct kqueue *kq)
  int VISIBLE
  kqueue_impl(void)
  {
@@ -206,7 +206,7 @@ index 4bdab21..035c7f3 100644
      struct kqueue *tmp;
  
 diff --git a/src/common/map.c b/src/common/map.c
-index 9c6a170..90d3107 100644
+index cc254dd..ed0f21c 100644
 --- a/src/common/map.c
 +++ b/src/common/map.c
 @@ -18,6 +18,7 @@
@@ -215,10 +215,10 @@ index 9c6a170..90d3107 100644
      size_t len;
 +    int high_water;
      void **data;
-     size_t count;
-     int max_idx;
-@@ -69,12 +70,23 @@ map_free(struct map *m)
-     free(m);
+ };
+ 
+@@ -51,12 +52,23 @@ map_new(size_t len)
+     return (dst);
  }
  
 +/* Iteration is used on every descriptor close. Do not scan the entire
@@ -234,36 +234,63 @@ index 9c6a170..90d3107 100644
  int
  map_insert(struct map *m, int idx, void *ptr)
  {
-     if (slowpath(idx < 0 || idx >= (int)m->len))
+-    if (slowpath(idx < 0 || idx > (int)m->len))
++    if (slowpath(idx < 0 || idx >= (int)m->len))
             return (-1);
  
 +    map_note_index(m, idx);
      if (atomic_ptr_cas(&(m->data[idx]), 0, ptr) == NULL) {
          dbg_printf("inserted %p in location %d", ptr, idx);
-         m->count++;
-@@ -124,6 +136,7 @@ map_replace(struct map *m, int idx, void *oldp, void *newp)
-     if (slowpath(idx < 0 || idx >= (int)m->len))
+         return (0);
+@@ -71,7 +83,7 @@ map_insert(struct map *m, int idx, void *ptr)
+ int
+ map_remove(struct map *m, int idx, void *ptr)
+ {
+-    if (slowpath(idx < 0 || idx > (int)m->len))
++    if (slowpath(idx < 0 || idx >= (int)m->len))
+            return (-1);
+ 
+     if (atomic_ptr_cas(&(m->data[idx]), ptr, 0) == NULL) {
+@@ -88,9 +100,10 @@ map_replace(struct map *m, int idx, void *oldp, void *newp)
+ {
+     void *tmp;
+ 
+-    if (slowpath(idx < 0 || idx > (int)m->len))
++    if (slowpath(idx < 0 || idx >= (int)m->len))
             return (-1);
  
 +    map_note_index(m, idx);
      tmp = atomic_ptr_cas(&(m->data[idx]), oldp, newp);
      if (tmp == oldp) {
          dbg_printf("replaced value %p in location %d with value %p",
-@@ -148,11 +161,9 @@ map_lookup(struct map *m, int idx)
- void
+@@ -106,7 +119,7 @@ map_replace(struct map *m, int idx, void *oldp, void *newp)
+ void *
+ map_lookup(struct map *m, int idx)
+ {
+-    if (slowpath(idx < 0 || idx > (int)m->len))
++    if (slowpath(idx < 0 || idx >= (int)m->len))
+         return (NULL);
+ 
+     return m->data[idx];
+@@ -116,7 +129,8 @@ void
  map_foreach(struct map *m, void(*cb)(int, void*, void*), void* private)
  {
--    if (m->count == 0 || m->max_idx < 0)
--        return;
--
--    int max = m->max_idx;
--    for (int i = 0; i <= max && i < (int)m->len; i++) {
-+    int i;
+     int i;
+-    for (i = 0; i < (int)m->len; i++) {
 +    int end = __atomic_load_n(&m->high_water, __ATOMIC_ACQUIRE);
 +    for (i = 0; i < end; i++) {
          if (m->data[i])
              cb(i, m->data[i], private);
      }
+@@ -128,7 +142,7 @@ map_delete(struct map *m, int idx)
+     void *oval;
+     void *nval;
+ 
+-    if (slowpath(idx < 0 || idx > (int)m->len))
++    if (slowpath(idx < 0 || idx >= (int)m->len))
+            return ((void *)-1);
+ 
+     /* Hopefully we aren't racing with another thread, but you never know.. */
 diff --git a/src/common/private.h b/src/common/private.h
 index 5c0718e..e7a0841 100644
 --- a/src/common/private.h
@@ -285,12 +312,12 @@ index 5c0718e..e7a0841 100644
  struct knote * knote_new(void);
  #define knote_retain(kn) atomic_inc(&kn->kn_ref)
 diff --git a/src/linux/machport.c b/src/linux/machport.c
-index f952299..14363c4 100644
+index 074958e..1e99023 100644
 --- a/src/linux/machport.c
 +++ b/src/linux/machport.c
-@@ -114,6 +114,9 @@ static long raw_getsockname(int fd, void* addr, void* addrlen) {
-     return raw_syscall6(RAW_NR_getsockname, fd, (long)addr, (long)addrlen, 0, 0, 0);
- }
+@@ -34,6 +34,9 @@
+ 
+ #include "private.h"
  
 +/* Keep the Mach-port path free of per-event diagnostic I/O. */
 +#define M58MP(...) do { } while (0)
@@ -298,17 +325,14 @@ index f952299..14363c4 100644
  int
  evfilt_machport_copyout(struct kevent64_s *dst, struct knote *src, void *ptr)
  {
-@@ -125,6 +128,7 @@ evfilt_machport_copyout(struct kevent64_s *dst, struct knote *src, void *ptr)
+@@ -45,13 +48,16 @@ evfilt_machport_copyout(struct kevent64_s *dst, struct knote *src, void *ptr)
  
- 	KQ_DLOG("machport_copyout: ENTER src=%p dst=%p dupfd=%d ev=%p\n", (void*)src, (void*)dst, src->kdata.kn_dupfd, (void*)ev);
+     epoll_event_dump(ev);
      kevent_int_to_64(&src->kev, dst);
 +    M58MP("copyout fd=%d\n", src->kdata.kn_dupfd);
  
- 	// Validate that kn_dupfd is actually a socket before reading it. The
- 	// kqueue/epoll machinery can occasionally hand us a knote whose kn_dupfd is
-@@ -145,9 +149,11 @@ evfilt_machport_copyout(struct kevent64_s *dst, struct knote *src, void *ptr)
- 	rv = (int)raw_recvfrom(src->kdata.kn_dupfd, &notification, sizeof(notification));
- 	KQ_DLOG("machport_copyout: RAW recvfrom rv=%d errno=%d\n", rv, errno);
+ 	// first, read the notification
+ 	rv = recv(src->kdata.kn_dupfd, &notification, sizeof(notification), 0);
  	if (rv < 0) {
 +		M58MP("copyout notif-recv FAILED fd=%d errno=%d\n", src->kdata.kn_dupfd, errno);
  		dbg_printf("evfilt_machport_copyout() reading notification failed: %d (%s)", errno, strerror(errno));
@@ -318,7 +342,7 @@ index f952299..14363c4 100644
  
  	if (notification.header.number != dserver_kqchan_msgnum_notification) {
  		dbg_puts("evfilt_machport_copyout() read invalid notification");
-@@ -220,9 +226,11 @@ evfilt_machport_knote_create(struct filter *filt, struct knote *kn)
+@@ -124,18 +130,24 @@ evfilt_machport_knote_create(struct filter *filt, struct knote *kn)
  
  	int status = _dserver_rpc_kqchan_mach_port_open_4libkqueue(port, (void*)kn->kev.ext[0], kn->kev.ext[1], kn->kev.fflags, &kn->kdata.kn_dupfd);
  	if (status < 0) {
@@ -329,8 +353,7 @@ index f952299..14363c4 100644
 +	M58MP("create open port=%d fd=%d events=0x%x\n", port, kn->kdata.kn_dupfd, ev.events);
  
  	dbg_printf("evfilt_machport_open: listening to FD %d for events %d", kn->kdata.kn_dupfd, ev.events);
- 	{
-@@ -234,9 +242,13 @@ evfilt_machport_knote_create(struct filter *filt, struct knote *kn)
+ 
      fcntl(kn->kdata.kn_dupfd, F_SETFD, FD_CLOEXEC);
  
      if (epoll_ctl(kn->kn_epollfd, EPOLL_CTL_ADD, kn->kdata.kn_dupfd, &ev) < 0) {
@@ -344,7 +367,7 @@ index f952299..14363c4 100644
      return 0;
  }
  
-@@ -287,7 +299,8 @@ evfilt_machport_knote_delete(struct filter *filt, struct knote *kn)
+@@ -186,7 +198,8 @@ evfilt_machport_knote_delete(struct filter *filt, struct knote *kn)
      if ((kn->kev.flags & EV_DISABLE) == 0) {
          if (epoll_ctl(kn->kn_epollfd, EPOLL_CTL_DEL, kn->kdata.kn_dupfd, NULL) < 0) {
              dbg_perror("epoll_ctl(2)");
@@ -355,7 +378,7 @@ index f952299..14363c4 100644
      }
  
 diff --git a/src/linux/platform.c b/src/linux/platform.c
-index c8dd519..4968f6e 100644
+index 482ffb2..dd750a4 100644
 --- a/src/linux/platform.c
 +++ b/src/linux/platform.c
 @@ -16,6 +16,8 @@
@@ -367,7 +390,7 @@ index c8dd519..4968f6e 100644
  #include <pthread.h>
  #include "../common/private.h"
  
-@@ -186,6 +188,7 @@ linux_kevent_wait(
+@@ -179,6 +181,7 @@ linux_kevent_wait(
      dbg_puts("waiting for events");
  restart:
      nret = epoll_wait(kqueue_epfd(kq), &epevt[0], nevents, timeout);
@@ -375,10 +398,10 @@ index c8dd519..4968f6e 100644
      if (nret < 0) {
          if (errno == EINTR) // only happens when ptrace() is called
             goto restart;
-@@ -230,6 +233,13 @@ linux_kevent_copyout(struct kqueue *kq, int nready,
-                 (void*)__builtin_return_address(0), (void*)__builtin_return_address(1),
-                 (void*)__builtin_return_address(2), (void*)__builtin_return_address(3));
-         }
+@@ -204,6 +207,13 @@ linux_kevent_copyout(struct kqueue *kq, int nready,
+         ev = &epevt_get()[i];
+         kn = (struct knote *) ev->data.ptr;
+         event = eventlist;
 +        /* Another waiter or changelist may have consumed/removed this note
 +         * after epoll_wait took its snapshot. Never deliver its userdata. */
 +        if ((kn->kn_flags & KNFL_KNOTE_DELETED) ||
@@ -389,7 +412,7 @@ index c8dd519..4968f6e 100644
          if (kn->kev.filter == 0) {
              dbg_puts("kevent copyout for zero filter, discarding!");
              nret--;
-@@ -391,8 +401,11 @@ linux_get_descriptor_type(struct knote *kn)
+@@ -352,8 +362,11 @@ linux_get_descriptor_type(struct knote *kn)
       */
      if (fstat(kn->kev.ident, &sb) < 0) {
          dbg_perror("fstat(2)");
@@ -401,7 +424,7 @@ index c8dd519..4968f6e 100644
      if (S_ISREG(sb.st_mode)) {
          kn->kn_flags |= KNFL_REGULAR_FILE;
          dbg_printf("fd %d is a regular file\n", (int)kn->kev.ident);
-@@ -421,6 +434,8 @@ linux_get_descriptor_type(struct knote *kn)
+@@ -382,6 +395,8 @@ linux_get_descriptor_type(struct knote *kn)
  #endif
              default:
                  dbg_perror("getsockopt(3)");
@@ -410,7 +433,7 @@ index c8dd519..4968f6e 100644
                  return (-1);
          }
      }
-@@ -480,12 +495,35 @@ epoll_update(int op, struct filter *filt, struct knote *kn, struct epoll_event *
+@@ -436,12 +451,35 @@ epoll_update(int op, struct filter *filt, struct knote *kn, struct epoll_event *
  int
  linux_fd_to_path(char *buf, size_t bufsz, int fd)
  {
@@ -449,10 +472,10 @@ index c8dd519..4968f6e 100644
  }
 -
 diff --git a/src/linux/proc.c b/src/linux/proc.c
-index b33278b..1a7bc84 100644
+index 433a9b3..9a70d77 100644
 --- a/src/linux/proc.c
 +++ b/src/linux/proc.c
-@@ -274,7 +274,7 @@ evfilt_proc_knote_delete(struct filter *filt, struct knote *kn)
+@@ -256,7 +256,7 @@ evfilt_proc_knote_delete(struct filter *filt, struct knote *kn)
      if ((kn->kev.flags & EV_DISABLE) == 0) {
          if (epoll_ctl(kn->kn_epollfd, EPOLL_CTL_DEL, kn->kdata.kn_dupfd, NULL) < 0) {
              dbg_perror("epoll_ctl(2)");
@@ -461,13 +484,13 @@ index b33278b..1a7bc84 100644
          }
      }
  
-@@ -320,4 +320,3 @@ const struct filter evfilt_proc = {
+@@ -302,4 +302,3 @@ const struct filter evfilt_proc = {
      evfilt_proc_knote_enable,
      evfilt_proc_knote_disable,         
  };
 -
 diff --git a/src/linux/read.c b/src/linux/read.c
-index f9de5b0..59a013c 100644
+index b6d2b73..8c7e97d 100644
 --- a/src/linux/read.c
 +++ b/src/linux/read.c
 @@ -15,6 +15,11 @@
@@ -490,7 +513,7 @@ index f9de5b0..59a013c 100644
      struct epoll_event * const ev = (struct epoll_event *) ptr;
  
      /* Special case: for regular files, return the offset from current position to end of file */
-@@ -146,8 +152,10 @@ evfilt_read_knote_create(struct filter *filt, struct knote *kn)
+@@ -144,8 +150,10 @@ evfilt_read_knote_create(struct filter *filt, struct knote *kn)
  {
      struct epoll_event ev;
  
@@ -502,9 +525,15 @@ index f9de5b0..59a013c 100644
  
      /* Convert the kevent into an epoll_event */
  #if defined(HAVE_EPOLLRDHUP)
-@@ -198,6 +206,7 @@ evfilt_read_knote_create(struct filter *filt, struct knote *kn)
-                 return (-1);
-             }
+@@ -189,10 +197,13 @@ evfilt_read_knote_create(struct filter *filt, struct knote *kn)
+     else {
+         kn->kdata.kn_dupfd = _dup_4libkqueue(kn->kev.ident);
+         fcntl(kn->kdata.kn_dupfd, F_SETFD, FD_CLOEXEC);
++        LOLKQ("knote-create ident=%d dupfd=%d events=0x%x\n", (int)kn->kev.ident, (int)kn->kdata.kn_dupfd, ev.events);
+         if (epoll_ctl(kn->kn_epollfd, EPOLL_CTL_ADD, kn->kdata.kn_dupfd, &ev) < 0) {
+             dbg_printf("epoll_ctl(2): %s", strerror(errno));
++            LOLKQ("knote-create FAILED dupfd=%d errno=%d\n", (int)kn->kdata.kn_dupfd, (int)errno);
+             return (-1);
          }
 +        LOLKQ("knote-create OK ident=%d dupfd=%d\n", (int)kn->kev.ident, (int)kn->kdata.kn_dupfd);
      }

@@ -15,7 +15,7 @@ for line in config.read_text().splitlines():
 generated = build / "src/external/xnu/darling/src/libsystem_kernel/emulation/src/other/signal"
 subprocess.run([
     "clang", *flags["C_DEFINES"], *flags["C_INCLUDES"], *flags["C_FLAGS"],
-    "-I" + str(generated), "-fno-omit-frame-pointer", "-fuse-ld=lld", "-L@DARLING_SDK@/usr/lib/swift", "-nostdlib",
+    "-I" + str(generated), "-fno-omit-frame-pointer", "-fuse-ld=lld", "-nostdlib",
     "-isysroot", "@DARLING_SDK@",
     str(root / "tools/riot-mach-exception-state-check.c"),
     str(generated / "mach_excServer.c"), "-lSystem",

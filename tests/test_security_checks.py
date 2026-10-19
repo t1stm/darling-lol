@@ -172,14 +172,7 @@ class SecuritySyscallChecks(compatibility.CompatibilityChecks):
         ops = ['STATUS','MARKINVALID','MARKHARD','MARKKILL','PIDPATH','CDHASH','PIDOFFSET',
                'ENTITLEMENTS_BLOB','MARKRESTRICT','SET_STATUS','BLOB','IDENTITY','CLEARINSTALLER',
                'CLEARPLATFORM','TEAMID','CLEAR_LV']
-        flags_def = '\n'.join([
-            '#define CS_VALID 0x00000001',
-            '#define CS_HARD 0x00000100',
-            '#define CS_KILL 0x00000200',
-            '#define CS_RESTRICT 0x00000800',
-            '#define CS_RUNTIME 0x00010000',
-        ])
-        constants = '\n'.join(f'#define CS_OPS_{name} {i}' for i,name in enumerate(ops)) + '\n' + flags_def
+        constants = '\n'.join(f'#define CS_OPS_{name} {i}' for i,name in enumerate(ops))
         self.run_c('''
 #include <assert.h>
 #include <errno.h>
@@ -202,8 +195,7 @@ static int sys_kill(int pid, int sig, int posix) { return pid == 999999 ? -ESRCH
 int main(void) {
     unsigned char flags[6]; memset(flags,0xa5,sizeof(flags));
     assert(sys_csops(0,CS_OPS_STATUS,flags+1,4)==0);
-    uint32_t expected = CS_VALID | CS_HARD | CS_KILL | CS_RESTRICT | CS_RUNTIME;
-    assert(flags[0]==0xa5 && flags[5]==0xa5 && *(uint32_t*)(flags+1)==expected);
+    assert(flags[0]==0xa5 && flags[5]==0xa5 && flags[1]==0 && flags[4]==0);
     assert(sys_csops(0,CS_OPS_STATUS,NULL,4)==-EFAULT);
     assert(sys_csops(0,CS_OPS_STATUS,(void*)1,4)==-EFAULT);
     flags[1]=0xa5; assert(sys_csops(0,CS_OPS_STATUS,flags+1,3)==-ERANGE && flags[1]==0xa5);

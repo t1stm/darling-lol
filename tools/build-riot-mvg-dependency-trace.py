@@ -14,7 +14,7 @@ for line in flags_file.read_text().splitlines():
 obj = root / 'build/riot-mvg-dependency-trace.o'
 subprocess.run(['clang', *flags['C_DEFINES'], *flags['C_INCLUDES'], *flags['C_FLAGS'],
                 '-c', str(root / 'tools/riot-mvg-dependency-trace.c'), '-o', str(obj)], check=True)
-subprocess.run(['clang', '-target', 'x86_64-apple-macosx11.0', '-fuse-ld=lld', '-L@DARLING_SDK@/usr/lib/swift', '-nostdlib',
+subprocess.run(['clang', '-target', 'x86_64-apple-macosx11.0', '-fuse-ld=lld', '-nostdlib',
                 '-dynamiclib', '-isysroot', '@DARLING_SDK@', str(obj), '-lSystem',
                 '-framework', 'Security', '-framework', 'CoreFoundation',
                 '-framework', 'IOKit', '-o', str(root / 'build/libRiotMvgDependencyTrace.dylib')], check=True)

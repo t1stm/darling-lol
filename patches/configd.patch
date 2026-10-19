@@ -1,11 +1,9 @@
 diff --git a/darling/src/SystemConfiguration.fproj/stubs.c b/darling/src/SystemConfiguration.fproj/stubs.c
-index 8966af2..d786914 100644
+index 1f31c08..3299e6a 100644
 --- a/darling/src/SystemConfiguration.fproj/stubs.c
 +++ b/darling/src/SystemConfiguration.fproj/stubs.c
-@@ -1,6 +1,15 @@
+@@ -1,4 +1,13 @@
  #include <SystemConfiguration/SystemConfiguration.h>
- #include <SystemConfiguration/SCNetworkConfiguration.h>
- #include <SystemConfiguration/SCNetworkConnection.h>
 +#include <CoreFoundation/CoreFoundation.h>
 +#include <CoreFoundation/CFRuntime.h>
 +#include <sys/socket.h>
@@ -16,9 +14,9 @@ index 8966af2..d786914 100644
 +#include <arpa/inet.h>
 +#include <unistd.h>
  
- #ifdef DEBUG
  #define STUB() printf("STUB %s\n", __func__)
-@@ -58,95 +67,348 @@ SCNetworkConnectionRef SCNetworkConnectionCreateWithServiceID(CFAllocatorRef all
+ 
+@@ -50,95 +59,348 @@ SCNetworkConnectionRef SCNetworkConnectionCreateWithServiceID(CFAllocatorRef all
  	return NULL;
  }
  
@@ -374,8 +372,8 @@ index 8966af2..d786914 100644
 +	s->notificationPatterns = patterns ? (CFArrayRef) CFRetain(patterns) : NULL;
 +	/* Accepted: we simply never fire callbacks (no configd to watch). */
 +	return TRUE;
-+}
-+
+ }
+ 
 +CFRunLoopSourceRef SCDynamicStoreCreateRunLoopSource(CFAllocatorRef allocator, SCDynamicStoreRef store, CFIndex order) {
 +	if (store == NULL)
 +		return NULL;
@@ -391,16 +389,16 @@ index 8966af2..d786914 100644
 +	memset(&ctx, 0, sizeof(ctx));
 +	ctx.info = (void*) store;
 +	return CFRunLoopSourceCreate(allocator, order, &ctx);
- }
- 
++}
++
 +
  CFStringRef SCDynamicStoreKeyCreateComputerName(CFAllocatorRef allocator) {
  	STUB();
  	return NULL;
-@@ -260,3 +522,36 @@ SCNetworkConnectionStatus SCNetworkConnectionGetStatus(SCNetworkConnectionRef co
+@@ -163,3 +425,36 @@ CFStringRef SCDynamicStoreKeyCreateNetworkInterfaceEntity(CFAllocatorRef allocat
  	STUB();
- 	return 0; // kSCNetworkConnectionInvalid
- }
+ 	return NULL;
+ };
 +
 +const char* SCErrorString(int status) {
 +	/* Minimal Apple-compatible mapping (full table lives in SCD.c,

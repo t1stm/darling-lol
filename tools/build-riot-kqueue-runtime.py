@@ -50,7 +50,7 @@ repairs += [('src/xnu_syscall/bsd/impl/'+name,repair_flags,
                  'psynch/psynch_cvbroad.c','psynch/psynch_cvclrprepost.c','psynch/psynch_cvsignal.c',
                  'psynch/psynch_rw_rdlock.c','psynch/psynch_rw_unlock.c','psynch/psynch_rw_wrlock.c','psynch/ulock_wake.c',
                  # select busy-loop trace (opt-in) and the network flag conversions
-                 'select/select.c','network/recvfrom.c','network/recvmsg.c','network/sendto.c','network/sendmsg.c','unistd/read.c','unistd/close.c','process/fork.c','process/execve.c',
+                 'select/select.c','network/recvfrom.c','network/recvmsg.c','network/sendto.c','network/sendmsg.c','unistd/read.c','unistd/close.c','process/fork.c',
                  # the allocator's reclamation hint
                  'mman/madvise.c')]
 # RPC guards use the full native signal mask. Rebuild both users of the
@@ -125,6 +125,6 @@ for probe in ('riot-task-info-check','riot-kqueue-lifetime-check','riot-kqueue-s
     obj = project / f'build/{probe}.o'
     subprocess.run(['clang', *flags['C_DEFINES'], *flags['C_INCLUDES'], *flags['C_FLAGS'],
                     '-O2', '-c', str(project / f'tools/{probe}.c'), '-o', str(obj)], check=True)
-    subprocess.run(['clang', '-target', 'x86_64-apple-macosx11.0', '-fuse-ld=lld', '-L@DARLING_SDK@/usr/lib/swift', '-nostdlib',
+    subprocess.run(['clang', '-target', 'x86_64-apple-macosx11.0', '-fuse-ld=lld', '-nostdlib',
                     '-isysroot', '@DARLING_SDK@', str(obj), '-lSystem', '-o',
                     str(project / f'build/{probe}')], check=True)

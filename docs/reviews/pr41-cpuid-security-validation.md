@@ -3,7 +3,7 @@
 Candidate: `e948b4cff0424e0937396fca6602a820b7b42811`. The original CPUID
 implementation remains excluded. The new security work verifies file signatures
 and corrects unsupported syscall responses. It does **not** implement full SIP,
-AMFI policy, protected running-code pages, or an authenticated Darwin trust cache.
+AMFI policy, protected running-code pages, or an Apple-authenticated trust cache.
 
 ## CPUID results
 
@@ -65,12 +65,12 @@ x86_64 Mach-O images. Unsupported formats fail closed. It checks:
 - Every sealed code page and available special slot, including the sealing of
   embedded requirements/entitlements; missing nonzero special slots fail.
 - Primary and alternate CodeDirectory integrity. CMS verifies the primary
-  directory using [OpenSSL CMS verification](https://docs.openssl.org/3.5/man1/openssl-cms/); Darwin hash-agility attributes are not interpreted as additional
+  directory using [OpenSSL CMS verification](https://docs.openssl.org/3.5/man1/openssl-cms/); Apple hash-agility attributes are not interpreted as additional
   authorization for alternate identities.
 - Real detached CMS mathematics with OpenSSL. An explicit `--ca-file` additionally
   validates the certificate chain against only the supplied anchors.
 - Explicit local trust membership by exact full-image SHA256, independent of
-  platform trust-cache membership.
+  Apple trust-cache membership.
 
 Examples:
 
@@ -81,7 +81,7 @@ python3 tools/verify-darling-code-signature.py /path/to/thin-executable --local-
 ```
 
 A local cache uses `{"schema":1,"image_sha256":["64-lowercase-hex-digits"]}`.
-It is an explicit operator-supplied pin list, not an authentic Darwin signed trust cache.
+It is an explicit operator-supplied pin list, not Apple's signed trust cache.
 The command never populates it automatically. Exit zero means the requested
 file check accepted the snapshot; it does not launch the image or change policy.
 
@@ -89,7 +89,7 @@ No anchor means `cms_verified` can be true while `anchor_verified` stays false.
 Ad-hoc verification establishes integrity only and is accepted without trust
 only when `--allow-adhoc` is explicit. Identifier and team strings are declared
 CodeDirectory metadata, not independently certified developer account identities.
-The verifier does not apply Darwin certificate OID/EKU/designated-requirement,
+The verifier does not apply Apple's certificate OID/EKU/designated-requirement,
 notarization, revocation, timestamp or resource-envelope policies. Legacy SHA1
 CodeDirectories are supported for integrity compatibility, not recommended as
 new trust anchors. `--info-plist` and `--resources-plist` check their exact seals;
@@ -147,9 +147,9 @@ page-integrity enforcement on mappings and writes, validated entitlement policy,
 and authorized state transitions. Reading `/proc/PID/exe` authenticates the Linux
 loader, not necessarily the loaded Mach-O. Rechecking a path also races replacement.
 
-A successful Darwin trust-cache query needs actual authenticated entries and the
+A successful Apple trust-cache query needs actual authenticated entries and the
 right CDHash algorithm/cache generation, not a local pin list renamed to AMFI.
-Darwin documentation describes [trust caches](https://support.apple.com/guide/security-pdf/trust-caches-sec7d38fbf97/web)
+Apple describes [trust caches](https://support.apple.com/guide/security-pdf/trust-caches-sec7d38fbf97/web)
 as part of its platform security chain. None of these protections can honestly
 be supplied by the old fixed responses or by this standalone file verifier.
 

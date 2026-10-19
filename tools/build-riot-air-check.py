@@ -31,7 +31,7 @@ for line in (folder / 'CMakeFiles/Metal.dir/flags.make').read_text().splitlines(
 obj = root / 'build/riot-air-corpus-check.o'
 subprocess.run(['clang++', *flags['CXX_DEFINES'], *flags['CXX_INCLUDES'], *flags['CXX_FLAGS'],
                 '-c', str(root / 'tools/riot-air-corpus-check.mm'), '-o', str(obj)], check=True)
-subprocess.run(['clang++', '-target', 'x86_64-apple-macosx11.0', '-fuse-ld=lld', '-L@DARLING_SDK@/usr/lib/swift', '-nostdlib',
+subprocess.run(['clang++', '-target', 'x86_64-apple-macosx11.0', '-fuse-ld=lld', '-nostdlib',
                 '-isysroot', '@DARLING_SDK@', str(obj), '-lSystem', '-lc++', '-lobjc',
                 '-framework', 'Foundation', str(root / 'build/riot-Metal'), '-o',
                 str(root / 'build/riot-air-corpus-check')], check=True)
@@ -39,7 +39,7 @@ subprocess.run(['clang++', '-target', 'x86_64-apple-macosx11.0', '-fuse-ld=lld',
 obj = root / 'build/riot-air-translate-check.o'
 subprocess.run(['clang++', *flags['CXX_DEFINES'], *flags['CXX_INCLUDES'], *flags['CXX_FLAGS'],
                 '-c', str(root / 'tools/riot-air-translate-check.cpp'), '-o', str(obj)], check=True)
-subprocess.run(['clang++', '-target', 'x86_64-apple-macosx11.0', '-fuse-ld=lld', '-L@DARLING_SDK@/usr/lib/swift', '-nostdlib',
+subprocess.run(['clang++', '-target', 'x86_64-apple-macosx11.0', '-fuse-ld=lld', '-nostdlib',
                 '-isysroot', '@DARLING_SDK@', str(obj), '-lSystem', '-lc++',
                 str(root / 'build/riot-libiridium.dylib'), '-o',
                 str(root / 'build/riot-air-translate-check')], check=True)

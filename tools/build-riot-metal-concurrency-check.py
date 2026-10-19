@@ -12,4 +12,4 @@ resource_include = subprocess.check_output(['clang++', '-print-resource-dir'], t
 flags['CXX_INCLUDES'] = [resource_include if value.startswith('/usr/lib/clang/') and value.endswith('/include') else value for value in flags['CXX_INCLUDES']]
 obj = root / 'build/riot-metal-concurrency-check.o'
 subprocess.run(['clang++', *flags['CXX_DEFINES'], *flags['CXX_INCLUDES'], *flags['CXX_FLAGS'], '-O2', '-c', str(root / 'tools/riot-metal-concurrency-check.mm'), '-o', str(obj)], check=True)
-subprocess.run(['clang++', '-target', 'x86_64-apple-macosx11.0', '-fuse-ld=lld', '-L@DARLING_SDK@/usr/lib/swift', '-nostdlib', '-isysroot', '@DARLING_SDK@', str(obj), '-lSystem', '-lc++', '-lobjc', '-framework', 'Foundation', str(root / 'build/riot-Metal'), '-o', str(root / 'build/riot-metal-concurrency-check')], check=True)
+subprocess.run(['clang++', '-target', 'x86_64-apple-macosx11.0', '-fuse-ld=lld', '-nostdlib', '-isysroot', '@DARLING_SDK@', str(obj), '-lSystem', '-lc++', '-lobjc', '-framework', 'Foundation', str(root / 'build/riot-Metal'), '-o', str(root / 'build/riot-metal-concurrency-check')], check=True)

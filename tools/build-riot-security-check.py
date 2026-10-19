@@ -48,6 +48,6 @@ options = flags(root/'build/darling-src/build/src/frameworks/CoreVideo/CMakeFile
 obj = root/'build/riot-security-state-check.o'
 compile(root/'tools/riot-security-state-check.c',obj,options)
 sdk = json.loads((root/'build/config.json').read_text())['sdk']
-subprocess.run(['clang','-target','x86_64-apple-macosx11.0','-fuse-ld=lld', '-L@DARLING_SDK@/usr/lib/swift','-nostdlib',
+subprocess.run(['clang','-target','x86_64-apple-macosx11.0','-fuse-ld=lld','-nostdlib',
                 '-isysroot',sdk,str(obj),'-lSystem','-o',str(root/'build/riot-security-state-check')],check=True)
 print('Built isolated kernel and security state probe; no installation performed')

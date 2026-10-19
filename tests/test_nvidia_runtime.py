@@ -66,11 +66,10 @@ int main(void) {
 #include <assert.h>
 #include <stdlib.h>
 typedef int BOOL;
-typedef struct { int metal, full, other; } CALayer;
+typedef struct { int metal, full; } CALayer;
 typedef struct { int width, height; } CGSize;
 static BOOL hasMetalLayer(CALayer* layer) { return layer->metal; }
 static BOOL hasFullWindowSurface(CALayer* layer, CGSize size) { return layer->full; }
-static BOOL hasOtherVisibleContent(CALayer* layer) { return layer->other; }
 ''' + sources.function(source, 'skipLocalRender') + '''
 int main(void) {
     CGSize size={16,16};
@@ -78,14 +77,13 @@ int main(void) {
     for(int shortcut=0;shortcut<=1;++shortcut)
     for(int direct=0;direct<=1;++direct)
     for(int metal=0;metal<=1;++metal)
-    for(int full=0;full<=1;++full)
-    for(int other=0;other<=1;++other) {
-        CALayer layer={metal,full,other};
+    for(int full=0;full<=1;++full) {
+        CALayer layer={metal,full};
         if(shortcut) setenv("DARLING_CA_SKIP_LOCAL_IOSURFACE_RENDER","1",1);
         else unsetenv("DARLING_CA_SKIP_LOCAL_IOSURFACE_RENDER");
         if(direct) setenv("RCLOL_GPU_DIRECT_PRESENT","1",1);
         else unsetenv("RCLOL_GPU_DIRECT_PRESENT");
-        assert(!!skipLocalRender(&layer,size)==(shortcut && !metal && !other && (!direct || full)));
+        assert(!!skipLocalRender(&layer,size)==(shortcut && !metal && (!direct || full)));
     }
 }
 ''')

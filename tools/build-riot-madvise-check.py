@@ -19,6 +19,6 @@ subprocess.run(["clang", *flags["C_DEFINES"], *flags["C_INCLUDES"], *flags["C_FL
                 "-O2", "-Wno-macro-redefined", "-c", str(project / "tools/riot-madvise-check.c"),
                 "-o", str(object_file)], check=True)
 sdk = json.loads((project / "build/config.json").read_text())["sdk"]
-subprocess.run(["clang", "-target", "x86_64-apple-macosx11.0", "-fuse-ld=lld", "-L@DARLING_SDK@/usr/lib/swift", "-nostdlib",
+subprocess.run(["clang", "-target", "x86_64-apple-macosx11.0", "-fuse-ld=lld", "-nostdlib",
                 "-isysroot", sdk, str(object_file), "-lSystem", "-o", str(folder / "riot-madvise-check")], check=True)
 print("Built", folder / "riot-madvise-check")

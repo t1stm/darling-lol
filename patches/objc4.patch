@@ -1,8 +1,8 @@
 diff --git a/runtime/objc-private.h b/runtime/objc-private.h
-index 5a74221..6d234fe 100644
+index ff2d703..cd887c9 100644
 --- a/runtime/objc-private.h
 +++ b/runtime/objc-private.h
-@@ -887,6 +887,9 @@ inline void* operator new(std::size_t size, const std::nothrow_t&) noexcept(true
+@@ -886,6 +886,9 @@ inline void* operator new(std::size_t size, const std::nothrow_t&) noexcept(true
  inline void* operator new[](std::size_t size, const std::nothrow_t&) noexcept(true) { return malloc(size); }
  inline void operator delete(void* p) noexcept(true) { free(p); }
  inline void operator delete[](void* p) noexcept(true) { free(p); }

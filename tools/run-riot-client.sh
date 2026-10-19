@@ -1,5 +1,6 @@
 #!/bin/sh
-# Native presentation via direct X11 and Vulkan swapchain.
+# Launch Riot Client using the Darling runtime, without library injection.
+# Darling supplies Xlib Display pointers to EGL, so select X11 explicitly.
 set -eu
 # Native guest crashes created large system core files and exhausted this disk.
 # Address-only diagnostics suffice; bound this runner and its new namespace.
@@ -119,74 +120,19 @@ export __GL_YIELD="${__GL_YIELD:-NOTHING}"
 if [ -w /proc/self/timerslack_ns ]; then
   echo 1 > /proc/self/timerslack_ns 2>/dev/null || true
 fi
-# --- darling-lol GPU alignment (hybrid NVIDIA / integrated graphics) ---
-# Ensure OpenGL (GLX/EGL) and Vulkan (Indium/Metal) run on the exact same GPU,
-# preventing opaque-FD / DMABUF cross-GPU import failures.
-gpu_selector=""
-if [ -f /tmp/metal-gpu ]; then
-  gpu_selector=$(head -n 1 /tmp/metal-gpu 2>/dev/null | tr -d ' \t\r\n' | tr '[:upper:]' '[:lower:]')
-elif [ -n "${METAL_INDIUM_GPU:-}" ]; then
-  gpu_selector=$(echo "$METAL_INDIUM_GPU" | tr -d ' \t\r\n' | tr '[:upper:]' '[:lower:]')
-elif [ -n "${RCLOL_GPU:-}" ]; then
-  gpu_selector=$(echo "$RCLOL_GPU" | tr -d ' \t\r\n' | tr '[:upper:]' '[:lower:]')
-fi
-
-has_nvidia=0
-if [ -c /dev/nvidia0 ] || [ -d /proc/driver/nvidia ]; then
-  has_nvidia=1
-fi
-
-case "$gpu_selector" in
-  intel*|integrated*|mesa*|llvmpipe*|cpu*|0)
-    unset __NV_PRIME_RENDER_OFFLOAD __GLX_VENDOR_LIBRARY_NAME __VK_LAYER_NV_optimus __EGL_VENDOR_LIBRARY_FILENAMES VK_DRIVER_FILES VK_ICD_FILENAMES
-    if [ -f /usr/share/vulkan/icd.d/intel_icd.x86_64.json ]; then
-      export VK_DRIVER_FILES=/usr/share/vulkan/icd.d/intel_icd.x86_64.json
-      export VK_ICD_FILENAMES=/usr/share/vulkan/icd.d/intel_icd.x86_64.json
-    fi
-    ;;
-  amd*|radeon*|radv*)
-    export DRI_PRIME=1
-    ;;
-  *)
-    if [ "$has_nvidia" = 1 ]; then
-      export __NV_PRIME_RENDER_OFFLOAD=1
-      export __GLX_VENDOR_LIBRARY_NAME=nvidia
-      export __VK_LAYER_NV_optimus=NVIDIA_only
-      if [ -f /usr/share/vulkan/icd.d/nvidia_icd.x86_64.json ]; then
-        export VK_DRIVER_FILES=/usr/share/vulkan/icd.d/nvidia_icd.x86_64.json
-        export VK_ICD_FILENAMES=/usr/share/vulkan/icd.d/nvidia_icd.x86_64.json
-      elif [ -f /usr/share/vulkan/icd.d/nvidia_icd.json ]; then
-        export VK_DRIVER_FILES=/usr/share/vulkan/icd.d/nvidia_icd.json
-        export VK_ICD_FILENAMES=/usr/share/vulkan/icd.d/nvidia_icd.json
-      fi
-    fi
-    ;;
-esac
-
-# Auto-detect active DISPLAY if not set or empty
-if [ -z "${DISPLAY:-}" ]; then
-  for s in /tmp/.X11-unix/X*; do
-    if [ -S "$s" ]; then
-      DISPLAY=":${s##*/X}"
-      break
-    fi
-  done
-  DISPLAY="${DISPLAY:-:0}"
-fi
-
 # On affected setups Chromium's default temp directory is unusable. Electron
 # can copy app.asar entries to temporary files for async reads and report a
 # failed copy as "not found". Use a writable guest directory by default.
 # exec-guest.py closes host file descriptors above stderr before starting the guest. A shell
 # loop cannot: dash only accepts single-digit descriptors in redirections.
-exec python3 "$runner_dir/exec-guest.py" env -u ELECTRON_RUN_AS_NODE -u DYLD_INSERT_LIBRARIES \
+exec python3 "$runner_dir/exec-guest.py" env -u ELECTRON_RUN_AS_NODE -u DYLD_INSERT_LIBRARIES EGL_PLATFORM=x11 \
   MAC_CHROMIUM_TMPDIR="${MAC_CHROMIUM_TMPDIR:-/private/tmp}" \
   LANG="${RCLOL_GUEST_LOCALE:-en_US.UTF-8}" LC_ALL="${RCLOL_GUEST_LOCALE:-en_US.UTF-8}" \
   mesa_glthread="${RCLOL_MESA_GLTHREAD-${mesa_glthread-false}}" \
-  XMODIFIERS="${RCLOL_XMODIFIERS:-@im=none}" DISPLAY="${DISPLAY}" \
+  XMODIFIERS="${RCLOL_XMODIFIERS:-@im=none}" DISPLAY="${DISPLAY:-:1}" \
   DYLD_LIBRARY_PATH="${DYLD_LIBRARY_PATH:-$guest_path/RuntimeLibraries}" \
   DYLD_FRAMEWORK_PATH="${DYLD_FRAMEWORK_PATH:-$guest_path/RuntimeFrameworks}" \
   DARLING_XSHM_LIBRARY="${DARLING_XSHM_LIBRARY:-$guest_path/libDarlingXShm.dylib}" \
-  python3 "$runner_dir/riot-lifecycle-supervisor.py" darling "$A" --region="${RCLOL_REGION:-EUW}" --locale="${RCLOL_LOCALE:-en_GB}" \
+  darling "$A" --region="${RCLOL_REGION:-EUW}" --locale="${RCLOL_LOCALE:-en_GB}" \
     "$@" \
     --log-dir="$guest_path/Library/Logs/Riot Games/Riot Client"

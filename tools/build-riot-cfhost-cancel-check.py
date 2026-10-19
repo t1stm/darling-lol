@@ -16,7 +16,7 @@ obj = project / ('build/' + name + '.o')
 subprocess.run(['clang', *flags['C_DEFINES'], *flags['C_INCLUDES'], *flags['C_FLAGS'],
                 '-O2', '-Wno-macro-redefined', '-c', str(project / ('tools/' + name + '.c')),
                 '-o', str(obj)], check=True)
-subprocess.run(['clang', '-target', 'x86_64-apple-macosx11.0', '-fuse-ld=lld', '-L@DARLING_SDK@/usr/lib/swift', '-nostdlib',
+subprocess.run(['clang', '-target', 'x86_64-apple-macosx11.0', '-fuse-ld=lld', '-nostdlib',
                 '-isysroot', '@DARLING_SDK@', str(obj), '-lSystem', '-framework', 'CFNetwork',
                 '-framework', 'CoreFoundation', '-framework', 'Foundation',
                 '-o', str(project / ('build/' + name))], check=True)

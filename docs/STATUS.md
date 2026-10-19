@@ -1,12 +1,6 @@
 # Snapshot status — 2026-10-14
 
-> [!NOTE]
-> For the latest architectural status, unpushed commits, and Pure Vulkan presentation updates, see:
-> - [Technical Architecture Summary of Unpushed Work](UNPUSHED_WORK_AND_ARCHITECTURE_SUMMARY.md)
-> - [Pure Vulkan Pipeline, Xwayland Presentation, and Render Diagnostics](VULKAN_XWAYLAND_PRESENTATION_DIAGNOSIS.md)
-> - [Upstream Pull Request Batching Plan](UPSTREAM_PR_BATCHING_PLAN.md)
-
-This repository preserves a development runtime, including historical experiments. All 30 component patches apply to their pinned revisions and the exported source matches the development tree for the patched files. A fresh checkout/build/install has not been validated end to end on another machine. The normal workflow uses manual client installation and play, without debugger attachment, client API calls or input automation.
+This repository preserves a development runtime, including historical experiments. All 29 patches apply to their pinned revisions and the exported source matches the development tree for the patched files. A fresh checkout/build/install has not been validated end to end on another machine. The normal workflow uses manual client installation and play, without debugger attachment, client API calls or input automation.
 
 ## Game FPS, 2026-10-13/14
 

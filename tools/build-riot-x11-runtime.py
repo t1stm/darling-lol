@@ -14,7 +14,7 @@ for line in (framework / 'CMakeFiles/X11_backend.dir/flags.make').read_text().sp
         key, value = line.split(' = ', 1)
         flags[key] = shlex.split(value)
 link = shlex.split((framework / 'CMakeFiles/X11_backend.dir/link.txt').read_text())
-for name in ('X11Display', 'X11Window', 'X11SubWindow'):
+for name in ('X11Display', 'X11Window'):
     obj = project / f'build/riot-{name}.o'
     subprocess.run(['clang', *flags['C_DEFINES'], *flags['C_INCLUDES'], *flags['C_FLAGS'], '-O3', '-march=native', '-mtune=generic', '-Wno-macro-redefined', '-c', str(project / f'build/darling-src/src/external/cocotron/AppKit/X11.backend/{name}.m'), '-o', str(obj)], check=True)
     link[link.index(f'CMakeFiles/X11_backend.dir/X11.backend/{name}.m.o')] = str(obj)
@@ -27,7 +27,7 @@ probe = project / 'build/riot-modifier-check.o'
 subprocess.run(['clang', *flags['C_DEFINES'], *flags['C_INCLUDES'], *flags['C_FLAGS'],
     '-O3', '-march=native', '-mtune=generic', '-Wno-macro-redefined', '-c', str(project / 'tools/riot-modifier-check.m'),
     '-o', str(probe)], check=True)
-subprocess.run(['clang', '-target', 'x86_64-apple-macosx11.0', '-fuse-ld=lld', '-L@DARLING_SDK@/usr/lib/swift',
+subprocess.run(['clang', '-target', 'x86_64-apple-macosx11.0', '-fuse-ld=lld',
     '-nostdlib', '-isysroot', sdk, str(probe),
     '-lSystem', '-framework', 'AppKit', '-framework', 'Foundation', '-lobjc',
     '-o', str(project / 'build/riot-modifier-check')], check=True)
@@ -37,7 +37,7 @@ probe = project / 'build/riot-remote-frame-ownership-check.o'
 subprocess.run(['clang', *flags['C_DEFINES'], *flags['C_INCLUDES'], *flags['C_FLAGS'],
     '-O3', '-march=native', '-mtune=generic', '-UNDEBUG', '-Wno-macro-redefined', '-c',
     str(project / 'tools/riot-remote-frame-ownership-check.m'), '-o', str(probe)], check=True)
-subprocess.run(['clang', '-target', 'x86_64-apple-macosx11.0', '-fuse-ld=lld', '-L@DARLING_SDK@/usr/lib/swift',
+subprocess.run(['clang', '-target', 'x86_64-apple-macosx11.0', '-fuse-ld=lld',
     '-nostdlib', '-isysroot', sdk, str(probe), '-lSystem', '-lobjc',
     '-framework', 'Foundation', '-framework', 'CoreFoundation',
     '-o', str(project / 'build/riot-remote-frame-ownership-check')], check=True)
@@ -46,6 +46,6 @@ probe = project / 'build/riot-fullscreen-geometry-check.o'
 subprocess.run(['clang', *flags['C_DEFINES'], *flags['C_INCLUDES'], *flags['C_FLAGS'],
     '-O3', '-march=native', '-mtune=generic', '-UNDEBUG', '-Wno-macro-redefined', '-c',
     str(project / 'tools/riot-fullscreen-geometry-check.m'), '-o', str(probe)], check=True)
-subprocess.run(['clang', '-target', 'x86_64-apple-macosx11.0', '-fuse-ld=lld', '-L@DARLING_SDK@/usr/lib/swift',
+subprocess.run(['clang', '-target', 'x86_64-apple-macosx11.0', '-fuse-ld=lld',
     '-nostdlib', '-isysroot', sdk, str(probe), '-lSystem', '-lobjc', '-framework', 'Foundation',
     '-o', str(project / 'build/riot-fullscreen-geometry-check')], check=True)

@@ -17,9 +17,9 @@ link[link.index('-o')+1]=str(project/'build/m333-IOSurface')
 subprocess.run(link,cwd=framework,check=True)
 probe=project/'build/m333-lifetime.o'
 subprocess.run(['clang',*flags['C_DEFINES'],*flags['C_INCLUDES'],*flags['C_FLAGS'],'-Wno-macro-redefined','-c',str(project/'tools/m58f333-iosurface-lifetime-check.c'),'-o',str(probe)],check=True)
-subprocess.run(['clang','-target','x86_64-apple-macosx11.0','-fuse-ld=lld', '-L@DARLING_SDK@/usr/lib/swift','-nostdlib','-isysroot','@DARLING_SDK@',str(probe),'-lSystem','-framework','CoreFoundation','-framework','IOSurface','-o',str(project/'build/m333-lifetime-check')],check=True)
+subprocess.run(['clang','-target','x86_64-apple-macosx11.0','-fuse-ld=lld','-nostdlib','-isysroot','@DARLING_SDK@',str(probe),'-lSystem','-framework','CoreFoundation','-framework','IOSurface','-o',str(project/'build/m333-lifetime-check')],check=True)
 print('Built isolated IOSurface candidate and lifetime probe')
 
 probe=project/'build/riot-import-cache-check.o'
 subprocess.run(['clang',*flags['C_DEFINES'],*flags['C_INCLUDES'],*flags['C_FLAGS'],'-O2','-c',str(project/'tools/riot-iosurface-import-cache-check.c'),'-o',str(probe)],check=True)
-subprocess.run(['clang','-target','x86_64-apple-macosx11.0','-fuse-ld=lld', '-L@DARLING_SDK@/usr/lib/swift','-nostdlib','-isysroot','@DARLING_SDK@',str(probe),'-lSystem','-framework','CoreFoundation','-framework','IOSurface','-o',str(project/'build/riot-import-cache-check')],check=True)
+subprocess.run(['clang','-target','x86_64-apple-macosx11.0','-fuse-ld=lld','-nostdlib','-isysroot','@DARLING_SDK@',str(probe),'-lSystem','-framework','CoreFoundation','-framework','IOSurface','-o',str(project/'build/riot-import-cache-check')],check=True)

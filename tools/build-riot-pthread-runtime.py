@@ -44,6 +44,6 @@ obj = root / "build/riot-pthread-integrity-check.o"
 subprocess.run(["clang", *probe_flags["C_DEFINES"], *probe_flags["C_INCLUDES"],
                 *probe_flags["C_FLAGS"], "-O2", "-c", str(root / "tools/riot-pthread-integrity-check.c"),
                 "-o", str(obj)], check=True)
-subprocess.run(["clang", "-target", "x86_64-apple-macosx11.0", "-fuse-ld=lld", "-L@DARLING_SDK@/usr/lib/swift", "-nostdlib",
+subprocess.run(["clang", "-target", "x86_64-apple-macosx11.0", "-fuse-ld=lld", "-nostdlib",
                 "-isysroot", "@DARLING_SDK@", str(obj), "-lSystem",
                 "-o", str(root / "build/riot-pthread-integrity-check")], check=True)

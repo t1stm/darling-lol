@@ -74,19 +74,19 @@ for line in (build/'src/frameworks/CoreVideo/CMakeFiles/CoreVideo.dir/flags.make
 obj=project/'build/riot-audio-device-check.o'
 subprocess.run(['clang',*flags['C_DEFINES'],*flags['C_INCLUDES'],*flags['C_FLAGS'],
     '-O2','-c',str(project/'tools/riot-audio-device-check.c'),'-o',str(obj)],check=True)
-subprocess.run(['clang','-target','x86_64-apple-macosx11.0','-fuse-ld=lld', '-L@DARLING_SDK@/usr/lib/swift','-nostdlib',
+subprocess.run(['clang','-target','x86_64-apple-macosx11.0','-fuse-ld=lld','-nostdlib',
     '-isysroot','@DARLING_SDK@',str(obj),'-lSystem','-framework','CoreAudio','-framework','CoreFoundation',
     '-o',str(project/'build/riot-audio-device-check')],check=True)
 obj=project/'build/riot-audio-unit-check.o'
 subprocess.run(['clang++',*cpp_flags['CXX_DEFINES'],*cpp_flags['CXX_INCLUDES'],
     *cpp_flags['CXX_FLAGS'],'-O2','-c',str(project/'tools/riot-audio-unit-check.cpp'),'-o',str(obj)],check=True)
-subprocess.run(['clang++','-target','x86_64-apple-macosx11.0','-fuse-ld=lld', '-L@DARLING_SDK@/usr/lib/swift','-nostdlib',
+subprocess.run(['clang++','-target','x86_64-apple-macosx11.0','-fuse-ld=lld','-nostdlib',
     '-isysroot','@DARLING_SDK@',str(obj),'-lSystem','-lc++','-framework','CoreAudio',
     '-framework','AudioToolbox','-o',str(project/'build/riot-audio-unit-check')],check=True)
 
 obj=project/'build/riot-audio-graph-check.o'
 subprocess.run(['clang++',*cpp_flags['CXX_DEFINES'],*cpp_flags['CXX_INCLUDES'],
     *cpp_flags['CXX_FLAGS'],'-O2','-c',str(project/'tools/riot-audio-graph-check.cpp'),'-o',str(obj)],check=True)
-subprocess.run(['clang++','-target','x86_64-apple-macosx11.0','-fuse-ld=lld', '-L@DARLING_SDK@/usr/lib/swift','-nostdlib',
+subprocess.run(['clang++','-target','x86_64-apple-macosx11.0','-fuse-ld=lld','-nostdlib',
     '-isysroot','@DARLING_SDK@',str(obj),'-lSystem','-lc++',
     str(project/'build/riot-AudioToolbox'),'-o',str(project/'build/riot-audio-graph-check')],check=True)

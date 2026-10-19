@@ -35,7 +35,7 @@ obj = root / 'build/riot-objc-allocator-check.o'
 subprocess.run(['clang++', *flags['CXX_DEFINES'], *flags['CXX_INCLUDES'],
                 *flags['CXX_FLAGS'], '-c', str(root / 'tools/riot-objc-allocator-check.cpp'),
                 '-o', str(obj)], check=True)
-subprocess.run(['clang++', '-target', 'x86_64-apple-macosx11.0', '-fuse-ld=lld', '-L@DARLING_SDK@/usr/lib/swift',
+subprocess.run(['clang++', '-target', 'x86_64-apple-macosx11.0', '-fuse-ld=lld',
                 '-nostdlib', '-isysroot', '@DARLING_SDK@', str(obj),
                 '-lSystem', '-lc++', '-lobjc', '-o',
                 str(root / 'build/riot-objc-allocator-check')], check=True)

@@ -28,7 +28,7 @@ obj = root / 'build/riot-coretext-font-list-check.o'
 subprocess.run(['clang', *flags['C_DEFINES'], *flags['C_INCLUDES'], *flags['C_FLAGS'],
                 '-O2', '-Wno-macro-redefined', '-c', str(root / 'tools/riot-coretext-font-list-check.m'),
                 '-o', str(obj)], check=True)
-subprocess.run(['clang', '-target', 'x86_64-apple-macosx11.0', '-fuse-ld=lld', '-L@DARLING_SDK@/usr/lib/swift', '-nostdlib',
+subprocess.run(['clang', '-target', 'x86_64-apple-macosx11.0', '-fuse-ld=lld', '-nostdlib',
                 '-isysroot', '@DARLING_SDK@', str(obj), str(root / 'build/riot-CoreText'),
                 '-lSystem', '-lobjc', '-framework', 'Foundation', '-framework', 'CoreFoundation',
                 '-o', str(root / 'build/riot-coretext-font-list-check')], check=True)

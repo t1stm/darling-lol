@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Verify a thin x86_64 Mach-O's code hashes and optional CMS/explicit local trust.
 
-This checks a file snapshot, not process pages, bundle resources, SIP or
+This checks a file snapshot, not process pages, bundle resources, SIP or Apple's
 platform authorization policy. It never grants runtime entitlements or CS flags.
 """
 import argparse
@@ -178,7 +178,7 @@ def verify(image, ca_file=None, external=None, trust_cache=None):
             verify_directory(image, offset, directory, blobs, external or {})
     result.update({'integrity_verified': True, 'cms_verified': False, 'anchor_verified': False,
                    'local_trust_match': False, 'image_sha256': hashlib.sha256(image).hexdigest(),
-                   'scope': 'file snapshot; no bundle, running-process, platform policy, or SIP enforcement'})
+                   'scope': 'file snapshot; no bundle, running-process, Apple policy, or SIP enforcement'})
     if 0x10000 in blobs:
         if result['ad_hoc']:
             raise ValueError('Ad-hoc CodeDirectory unexpectedly contains CMS')
@@ -201,8 +201,8 @@ def verify(image, ca_file=None, external=None, trust_cache=None):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('image', type=Path)
-    parser.add_argument('--ca-file', type=Path, help='Explicit trust anchors; checks CMS chain, not platform authorization policy')
-    parser.add_argument('--local-trust-cache', type=Path, help='Explicit schema-1 file of exact image SHA256 pins; not an authenticated Darwin trust cache')
+    parser.add_argument('--ca-file', type=Path, help='Explicit trust anchors; checks CMS chain, not Apple authorization policy')
+    parser.add_argument('--local-trust-cache', type=Path, help='Explicit schema-1 file of exact image SHA256 pins; not an Apple trust cache')
     parser.add_argument('--info-plist', type=Path)
     parser.add_argument('--resources-plist', type=Path, help='Seal only; does not verify files referenced by CodeResources')
     parser.add_argument('--allow-adhoc', action='store_true', help='Accept integrity-only ad-hoc checks without asserting trusted signer')

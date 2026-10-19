@@ -22,7 +22,7 @@ subprocess.run(["clang", "-x", "objective-c", *flags["C_DEFINES"], *flags["C_INC
                 *flags["C_FLAGS"], "-fblocks", "-c", str(source),
                 "-o", str(obj)], check=True)
 subprocess.run(["clang", "-target", "x86_64-apple-macosx11.0",
-                "-fuse-ld=lld", "-L@DARLING_SDK@/usr/lib/swift", "-nostdlib", "-isysroot",
+                "-fuse-ld=lld", "-nostdlib", "-isysroot",
                 sdk, str(obj), "-lSystem",
                 "-framework", "IOKit", "-framework", "CoreFoundation",
                 "-o", str(exe)],

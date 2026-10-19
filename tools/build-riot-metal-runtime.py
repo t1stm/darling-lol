@@ -38,7 +38,7 @@ batch = root / 'build/riot-metal-batch-check.o'
 subprocess.run(['clang++', *flags['CXX_DEFINES'], *flags['CXX_INCLUDES'],
                 *flags['CXX_FLAGS'], '-c', str(root / 'tools/riot-metal-batch-check.mm'),
                 '-o', str(batch)], check=True)
-subprocess.run(['clang++', '-target', 'x86_64-apple-macosx11.0', '-fuse-ld=lld', '-L@DARLING_SDK@/usr/lib/swift',
+subprocess.run(['clang++', '-target', 'x86_64-apple-macosx11.0', '-fuse-ld=lld',
                 '-nostdlib', '-isysroot', '@DARLING_SDK@', str(obj), str(batch),
                 '-lSystem', '-lc++', '-lobjc', '-framework', 'Foundation',
                 str(root / 'build/riot-Metal'), str(root / 'build/riot-libindium.dylib'), '-o',
