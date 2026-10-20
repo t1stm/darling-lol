@@ -1,8 +1,20 @@
 diff --git a/CMakeLists.txt b/CMakeLists.txt
-index 8077b7e94..055608065 100644
+index 8077b7e94..918cdd142 100644
 --- a/CMakeLists.txt
 +++ b/CMakeLists.txt
-@@ -236,7 +236,12 @@ InstallSymlink(/Volumes/SystemRoot/usr/share/zoneinfo ${CMAKE_INSTALL_PREFIX}/li
+@@ -204,8 +204,9 @@ install(DIRECTORY DESTINATION libexec/darling/private/tmp)
+ InstallSymlink(private/etc ${CMAKE_INSTALL_PREFIX}/libexec/darling/etc)
+ InstallSymlink(private/var ${CMAKE_INSTALL_PREFIX}/libexec/darling/var)
+ 
+-install(FILES etc/resolv.conf
+-	DESTINATION libexec/darling/private/etc)
++# Follow the host resolver, including local DNS proxies and network changes.
++# Prefix-local resolver overrides still take precedence over this base symlink.
++InstallSymlink(/Volumes/SystemRoot/etc/resolv.conf ${CMAKE_INSTALL_PREFIX}/libexec/darling/private/etc/resolv.conf)
+ InstallSymlink(/Volumes/SystemRoot/etc/machine-id ${CMAKE_INSTALL_PREFIX}/libexec/darling/private/etc/machine-id)
+ InstallSymlink(/Volumes/SystemRoot/etc/nsswitch.conf ${CMAKE_INSTALL_PREFIX}/libexec/darling/private/etc/nsswitch.conf)
+ 
+@@ -236,7 +237,12 @@ InstallSymlink(/Volumes/SystemRoot/usr/share/zoneinfo ${CMAKE_INSTALL_PREFIX}/li
  install(DIRECTORY DESTINATION libexec/darling/Library/Preferences)
  
  if(NOT DEBIAN_PACKAGING)
@@ -3437,7 +3449,7 @@ index 38584e263..a4cf87529 100644
  )
  
 diff --git a/src/CoreAudio/CoreAudioComponent/DefaultOutputAU.cpp b/src/CoreAudio/CoreAudioComponent/DefaultOutputAU.cpp
-index 8b92b6c50..18a57e359 100644
+index 8b92b6c50..c9ad1bec8 100644
 --- a/src/CoreAudio/CoreAudioComponent/DefaultOutputAU.cpp
 +++ b/src/CoreAudio/CoreAudioComponent/DefaultOutputAU.cpp
 @@ -18,6 +18,8 @@ along with Darling.  If not, see <http://www.gnu.org/licenses/>.
@@ -3457,8 +3469,8 @@ index 8b92b6c50..18a57e359 100644
 + * (kAudioUnitErr_InvalidProperty) made it throw its audio graph away and build a new one in a loop, so it never played
 + * anything. Accepting it harmless: the unit plays on the default device anyway.
 + *
-+ * Only the game process gets this. With the property accepted everywhere, the League client's Vanguard module went to its
-+ * error state (MvgState 5, status -101) on every launch (2 of 2, 2026-10-11) and the client could not start a match;
++ * Only the game process gets this. With the property accepted everywhere, the League client's integrity module went to its
++ * error state (state 5, status -101) on every launch (2 of 2, 2026-10-11) and the client could not start a match;
 + * with the old behaviour it connected again (state 0). */
 +static bool callerIsLeagueGame()
 +{

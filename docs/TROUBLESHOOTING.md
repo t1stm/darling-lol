@@ -192,6 +192,31 @@ observation, without waiting for a match:
 python3 tools/close-league-client-in-game.py --once --dry-run
 ```
 
+### Riot reports NO INTERNET FOUND while the host is online
+
+Older base runtimes ship Google DNS servers (`8.8.8.8` and `8.8.4.4`), which
+some mobile and managed networks block. The base resolver now links to the
+host's `/etc/resolv.conf` through `/Volumes/SystemRoot`, including when the host
+file is a symlink into `/run` for systemd-resolved or NetworkManager. File and
+symlink replacements remain visible without copying the resolver on launch.
+
+Exit Riot and League, then run `./scripts/update.sh` to rebuild and install both
+the base link and the host symlink handling correction. Existing prefix DNS
+overrides in `$DPREFIX/private/etc/resolv.conf` (normally
+`~/.darling/private/etc/resolv.conf`) remain in effect; remove a previous manual
+override with Darling stopped if you want to follow the host instead. A custom
+prefix `/etc` directory can also shadow the base `/etc -> private/etc` link.
+
+Check resolution inside the guest with:
+
+```sh
+darling shell curl --noproxy '*' https://clientconfig.rpg.riotgames.com/
+```
+
+An HTTP response establishes that resolution succeeded even if that endpoint
+rejects the request. This change follows the host resolver configuration;
+already-running clients may cache DNS settings until restarted.
+
 ### Downloads repeatedly fail with an IPv6 CONNECT_TO error
 
 The bundled downloader was observed retrying CDN chunks with:
@@ -225,6 +250,27 @@ and passes 100 cancellations with the fix, including releasing the caller's host
 reference before callback delivery. This establishes the cancellation fix; a long
 Riot session still needs confirmation. With both clients and the game closed,
 run `./scripts/update.sh` to install it, then `sh scripts/run.sh`.
+
+## League and Riot UIs crash after clicking Play
+
+The League UX processes and then the Riot Client renderer stop with `SIGTRAP`
+a few seconds after the lobby opens. The renderer prints
+`Check failed: kr == KERN_SUCCESS. mach_make_memory_entry_64: (os/kern) resource shortage (6)`
+from `platform_shared_memory_region_mac.cc`. darlingserver backs every named
+memory entry with a memfd, and its open descriptors peak at about 1100 when the
+lobby opens. Under the rootless NixOS launcher darlingserver cannot raise its
+hard `RLIMIT_NOFILE` to `nr_open`, so it used to keep the soft limit it
+inherited. When that limit was 1024 (several Electron apps and desktop launchers
+pass it on), `memfd_create` failed with `EMFILE`.
+
+darlingserver now raises its soft limit to the inherited hard limit when it
+cannot raise the hard one. A failed named-entry creation also logs
+`MEMDIAG … failed errno=… nofile=soft/hard` to `dserver.log`, and every 1024th
+memfd logs `MEMDIAG descriptors live=…` so a leak would show as a growing `live`
+count. With a 1024 soft limit the old server reproduced the crash and logged
+`errno=24 nofile=1024/524288`. With the fix, the server reports a 524288 soft
+limit under the same launch. To check a running server, read the `Max open files`
+line of `/proc/$(pgrep -x darlingserver)/limits`.
 
 ## UI crashes after a button opens an external link
 
@@ -330,7 +376,7 @@ It prints each thread-local access that calls its thunk without the descriptor i
 
 ## Base install refuses to continue while Darling is not running
 
-`sudo cmake --install` prints `Darling currently running for <user>, shutting it down...` several times and then `Darling launchd PID … remains alive after shutdown`. A guest launchd outlived its darlingserver, so `darling shutdown` sees no container to stop. `python3 build/runtime/tools/ensure-darling-runtime.py` stops such a launchd (your own, only when no darlingserver runs); `scripts/run.sh` and `scripts/install-runtime.sh` run it too.
+`sudo cmake --install` prints `Darling currently running for <user>, shutting it down...` several times and then `Darling launchd PID … remains alive after shutdown`. A guest launchd outlived its darlingserver, so `darling shutdown` sees no container to stop. Automatic cleanup by process name is disabled because guest names and UIDs do not prove prefix ownership (killing by name risks terminating an active launchd from an unrelated prefix or session). If setup is blocked, shut down the original Darling session from its own namespace (`darling shutdown`), or inspect the leftover PID under `/proc/<PID>` before terminating it manually.
 
 ## Lower fight FPS than Windows
 
@@ -349,11 +395,25 @@ On Hyprland, also check that direct scanout is off (`hyprctl getoption render:di
 On the NVIDIA proprietary driver, check the submit worker's kernel time: a thread of the game process spending most of its time in the kernel (`/proc/<pid>/task/<tid>/stat` system time, or `perf trace -s -p <pid>`) points at driver calls. Each `vkQueueSubmit2` and each CPU-side `vkSignalSemaphore` is an RM control ioctl (command `0xc020462a`) that queues on a driver-wide lock. Before 2026-10-18 every command buffer signalled the event loop's wake-up semaphore, ~25 times per frame; with lazy wake-ups (default) and a 5 ms batch window (`/tmp/metal-submit-batch-us` = `5000`, `/tmp/metal-submit-batch-max` = `64`) an RTX 4090 ran at 206–552 FPS against 91–147 FPS with `/tmp/metal-no-lazy-wakeup`, in alternating 20 s phases of one match (the later phases with wake-ups on were capped at 240 FPS) (see [setup](SETUP.md#metal-and-indium-overlays)).
 
 The NVIDIA performance figures above were reported on an earlier runtime base;
-they have not been remeasured after integration with current `main`.
+they have not been remeasured after integration with current `main`. On `bcb3245` an RTX 5060 Laptop reported ~200–215 FPS in Practice Tool ([#53](https://github.com/lucannez64/darling-lol/issues/53)).
+
+## NVIDIA
+
+With the window visual and compositor draw buffer fixes (#22) and the RPC socket fix (#25), the game renders and runs on these NVIDIA GPUs:
+
+| GPU | Driver | Report | Result |
+|---|---|---|---|
+| GTX 1060 6GB | 580.178.04 | [below](#nvidia-580-pascal-and-older-black-game-window) | client and tutorial |
+| RTX 2070 SUPER | 615.78, proprietary | [#55](https://github.com/lucannez64/darling-lol/issues/55) | tutorials, Co-op vs AI, Swiftplay and Draft games; no crashes |
+| RTX 3060 | 615.71 | [below](#nvidia-resize-signals-cpu-readback-and-completion-latency) | custom matches through CPU readback |
+| RTX 5060 Laptop | 615.71.09, open modules | [#53](https://github.com/lucannez64/darling-lol/issues/53) | Practice Tool at ~200–215 FPS on `bcb3245`; MUX set to discrete, PRIME variables set |
+| RTX 5070 | 615.78.08, open modules | [#69](https://github.com/lucannez64/darling-lol/issues/69) | tutorial |
+
+If the game window stays black on NVIDIA, check `metal-device.log` as described in [Check which GPU rendered](#check-which-gpu-rendered).
 
 ## Hybrid graphics laptops (AMD/Intel iGPU + NVIDIA)
 
-Metal renders with Vulkan, and each finished frame is handed to an OpenGL (EGL) context that presents it. The hand-off uses opaque file descriptors, which only work when Vulkan and OpenGL run on the same GPU. Indium takes the first Vulkan device the loader lists, and on a hybrid laptop both that device and the EGL context are normally the integrated GPU, so the discrete GPU stays idle. A report in [issue #3](https://github.com/lucannez64/darling-lol/issues/3) (Ryzen 9 5900HS, RTX 3060 Laptop) measured 60-70 FPS in ARAM on the integrated GPU; on the NVIDIA GPU the game showed a black screen. **Running on an NVIDIA GPU is not validated.**
+Metal renders with Vulkan, and each finished frame is handed to an OpenGL (EGL) context that presents it. The hand-off uses opaque file descriptors, which only work when Vulkan and OpenGL run on the same GPU. Indium takes the first Vulkan device the loader lists, and on a hybrid laptop both that device and the EGL context are normally the integrated GPU, so the discrete GPU stays idle. A report in [issue #3](https://github.com/lucannez64/darling-lol/issues/3) (Ryzen 9 5900HS, RTX 3060 Laptop) measured 60-70 FPS in ARAM on the integrated GPU; on the NVIDIA GPU the game showed a black screen, since fixed (see [NVIDIA](#nvidia)).
 
 ### Run on the discrete GPU
 
@@ -363,7 +423,12 @@ Start the launcher with PRIME render offload so that both Vulkan and OpenGL move
 prime-run sh scripts/run.sh
 ```
 
-`prime-run` sets `__NV_PRIME_RENDER_OFFLOAD=1`, `__VK_LAYER_NV_optimus=NVIDIA_only` and `__GLX_VENDOR_LIBRARY_NAME=nvidia`. `darling` copies the caller's environment into the guest, and guest processes inherit it; whether the Riot client passes all of it to the game has not been checked; the log below shows the result. Darling's OpenGL uses EGL, so if the log below still shows the integrated GPU as the presenting renderer, also set `__EGL_VENDOR_LIBRARY_FILENAMES=/usr/share/glvnd/egl_vendor.d/10_nvidia.json`. On two Mesa GPUs, `DRI_PRIME=1` does the same.
+`prime-run` sets `__NV_PRIME_RENDER_OFFLOAD=1`, `__VK_LAYER_NV_optimus=NVIDIA_only` and `__GLX_VENDOR_LIBRARY_NAME=nvidia`. `darling` copies the caller's environment into the guest, and guest processes inherit it; whether the Riot client passes all of it to the game has not been checked; the log below shows the result. Darling's OpenGL uses EGL, so if the log below still shows the integrated GPU as the presenting renderer, also set `__EGL_VENDOR_LIBRARY_FILENAMES=/usr/share/glvnd/egl_vendor.d/10_nvidia.json`. On two Mesa GPUs, `DRI_PRIME=1` does the same. The RTX 5060 Laptop in [#53](https://github.com/lucannez64/darling-lol/issues/53) rendered with all four variables set:
+
+```sh
+__NV_PRIME_RENDER_OFFLOAD=1 __VK_LAYER_NV_optimus=NVIDIA_only __GLX_VENDOR_LIBRARY_NAME=nvidia \
+__EGL_VENDOR_LIBRARY_FILENAMES=/usr/share/glvnd/egl_vendor.d/10_nvidia.json sh scripts/run.sh
+```
 
 The guest file `/tmp/metal-gpu` (a device index or part of its name, for example `nvidia`) moves only the Vulkan side. Use it for diagnosis: on its own it splits the two sides across GPUs, and frames cannot be presented.
 
@@ -397,9 +462,9 @@ The first import of a drawable into the presenting OpenGL context, and the first
 [MetalDevice] pid=… drawable GL semaphore (first) import_error=0x0 wait_error=0x0 ok (checked for the first 600 imports)
 ```
 
-A non-zero error or `FAILED` means the frames cannot reach the window. Before 2026-10-16 the import did not mark the memory as dedicated, which the extension requires; Mesa ignores it, and it is the suspected cause of the NVIDIA black screen (not yet confirmed). An NVIDIA log of 2026-10-16 showed `glTiling=optimal` with `setup_error=0x501 storage_error=0x501 FAILED`: NVIDIA's GL rejects `GL_LINEAR_TILING_EXT`, so the linear Vulkan image could not be imported. Since then the internal image and the GL texture use optimal tiling when `GL_VENDOR` contains NVIDIA (`vkTiling=optimal glTiling=optimal ok` is the expected line); everything else keeps linear. If the game shows a black screen on NVIDIA, report it with this file.
+A non-zero error or `FAILED` means the frames cannot reach the window. Before 2026-10-16 the import did not mark the memory as dedicated, which the extension requires; Mesa ignores it. It was suspected of causing the NVIDIA black screen; the causes found later were the window visual and the draw buffer (#22). An NVIDIA log of 2026-10-16 showed `glTiling=optimal` with `setup_error=0x501 storage_error=0x501 FAILED`: NVIDIA's GL rejects `GL_LINEAR_TILING_EXT`, so the linear Vulkan image could not be imported. Since then the internal image and the GL texture use optimal tiling when `GL_VENDOR` contains NVIDIA (`vkTiling=optimal glTiling=optimal ok` is the expected line); everything else keeps linear. If the game shows a black screen on NVIDIA, report it with this file.
 
-An additional NVIDIA report on `68f816d` showed successful optimal-tiling import but repeated `Metal Device timed out giving us a Drawable to present` messages. Its [presentation trace](https://github.com/lucannez64/darling-lol/issues/3#issuecomment-6214732591) shows all three drawables queued and all three main-thread presentation callbacks running, followed by timeouts with three frames still queued. The compositor only prepared a Metal layer when it was the root layer, skipping nested Metal layers. It now prepares Metal layers throughout the tree. A standalone nested-layer reproduction exhausts the pool before this correction and passes ten presentations with pixel readback after it; the root-layer probe also passes. Confirmation on the reporter's NVIDIA system is still needed.
+An additional NVIDIA report on `68f816d` showed successful optimal-tiling import but repeated `Metal Device timed out giving us a Drawable to present` messages. Its [presentation trace](https://github.com/lucannez64/darling-lol/issues/3#issuecomment-6214732591) shows all three drawables queued and all three main-thread presentation callbacks running, followed by timeouts with three frames still queued. The compositor only prepared a Metal layer when it was the root layer, skipping nested Metal layers. It now prepares Metal layers throughout the tree. A standalone nested-layer reproduction exhausts the pool before this correction and passes ten presentations with pixel readback after it; the root-layer probe also passes. Issue #3 has since been closed, and the game renders on NVIDIA (see [NVIDIA](#nvidia)).
 
 ### NVIDIA resize signals, CPU readback and completion latency
 

@@ -90,6 +90,19 @@ append-only output and tightening an existing public log to mode 0600. The
 runner test uses a fake `darling` executable to verify loopback fixtures and
 private-prefix-only shutdown/cleanup.
 
+With the pinned Darling sources available, run the host resolver regression:
+
+```sh
+python3 -m unittest discover -s tests -p 'test_host_dns.py' -v
+```
+
+It compiles the actual patched vchroot implementation in its Linux test mode
+and reads temporary resolver files through absolute and relative host symlinks.
+It checks atomic file replacement, symlink retargeting, guest DNS overrides and
+guest absolute-link scope. A CMake fixture verifies that both install modes
+replace an older Google resolver file with the host link. No Darling session or
+DNS traffic is started.
+
 ## CoreText font-list and AppKit resize regressions
 
 After preparing the source and configuring the runtime tools:
@@ -208,6 +221,31 @@ returned) and exits non-zero. `--interactive` shows the panel for manual clicks
 and prints `OPENPANEL_CHECK mode=interactive result=RETURNED code=... url=...`
 once it closes. As with the other probes, check the printed line rather than
 only the launcher exit status.
+
+### NSSavePanel Finder tags (`setTagNames:` / `tagNames`)
+
+`python3 tools/build-riot-save-panel-tag-check.py` builds
+`build/riot-save-panel-tag-check`. Install the patched AppKit first, with clients
+and the game closed. The probe checks selector availability, inheritance, and
+safe no-op semantics without launching any client or creating window fixtures:
+
+```sh
+P=/Volumes/SystemRoot/path/to/darling-lol/build/riot-save-panel-tag-check
+E="env DYLD_LIBRARY_PATH=/Users/me/RuntimeLibraries DYLD_FRAMEWORK_PATH=/Users/me/RuntimeFrameworks"
+darling shell $E $P
+```
+
+Expected output:
+
+```
+SAVE_PANEL_TAG class=NSSavePanel selectors=1 inherited=1 values=1 pass=1
+SAVE_PANEL_TAG class=NSOpenPanel selectors=1 inherited=1 values=1 pass=1
+SAVE_PANEL_TAG_CHECK pass=1
+```
+
+Cocotron does not persist Finder tag metadata or provide a tag UI. `setTagNames:`
+safely ignores input and `tagNames` returns an empty `NSArray` to prevent
+unrecognized-selector crashes from callers (such as Electron file dialogs).
 
 ### Presentation publisher handoff
 
