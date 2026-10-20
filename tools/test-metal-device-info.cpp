@@ -68,9 +68,13 @@ int main() {
 	// DARLING_METAL_MAC_GPU_NAME: MacBookPro16,1 GPUs for AMD and Intel hosts; NVIDIA keeps its name.
 	{
 		using MTLDeviceInfo::macGpuName;
+		using MTLDeviceInfo::macVramBytes;
 		bool ok = std::string(macGpuName(0x1002)) == "AMD Radeon Pro 5500M"
 		       && std::string(macGpuName(0x8086)) == "Intel UHD Graphics 630"
 		       && macGpuName(0x10de) == nullptr
+		       && macVramBytes(0x1002) == 4096ull * 1024ull * 1024ull
+		       && macVramBytes(0x8086) == 1536ull * 1024ull * 1024ull
+		       && macVramBytes(0x10de) == 0
 		       && MTLDeviceInfo::resolveName(nullptr, "AMD Radeon RX 6600 (RADV NAVI23)", macGpuName(0x1002)) == "AMD Radeon Pro 5500M"
 		       && MTLDeviceInfo::resolveName(nullptr, "NVIDIA GeForce GTX 1060 6GB", macGpuName(0x10de)) == "NVIDIA GeForce GTX 1060 6GB"
 		       && MTLDeviceInfo::resolveName("My GPU", "AMD Radeon RX 6600 (RADV NAVI23)", macGpuName(0x1002)) == "My GPU";

@@ -21,3 +21,11 @@ __pycache__/
 lockfile
 core
 core.*
+
+# Local multi-launcher and upstream files (kept on local machine only)
+scripts/launch-upstream.sh
+scripts/setup-launchers.sh
+tools/setup-launchers.py
+launchers/league-of-legends-*.desktop
+assets/icons/league-of-legends-*.png
+assets/icons/league-of-legends-*.svg

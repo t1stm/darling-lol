@@ -1,0 +1,71 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <defs>
+    <linearGradient id="bgGradFork" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#16082b"/>
+      <stop offset="50%" stop-color="#220b38"/>
+      <stop offset="100%" stop-color="#0a0214"/>
+    </linearGradient>
+    <linearGradient id="borderGradFork" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#f0abfc"/>
+      <stop offset="35%" stop-color="#c084fc"/>
+      <stop offset="70%" stop-color="#6366f1"/>
+      <stop offset="100%" stop-color="#06b6d4"/>
+    </linearGradient>
+    <linearGradient id="crestGradFork" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#fdf4ff"/>
+      <stop offset="25%" stop-color="#f0abfc"/>
+      <stop offset="50%" stop-color="#c084fc"/>
+      <stop offset="85%" stop-color="#818cf8"/>
+      <stop offset="100%" stop-color="#38bdf8"/>
+    </linearGradient>
+    <linearGradient id="highlightFork" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#ffffff" stop-opacity="0.75"/>
+      <stop offset="100%" stop-color="#38bdf8" stop-opacity="0"/>
+    </linearGradient>
+    <linearGradient id="badgeGradFork" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#581c87"/>
+      <stop offset="50%" stop-color="#3b0764"/>
+      <stop offset="100%" stop-color="#0e7490"/>
+    </linearGradient>
+    <filter id="glowFork" x="-20%" y="-20%" width="140%" height="140%">
+      <feGaussianBlur stdDeviation="7" result="blur"/>
+      <feComposite in="SourceGraphic" in2="blur" operator="over"/>
+    </filter>
+    <filter id="shadowFork" x="-20%" y="-20%" width="140%" height="140%">
+      <feDropShadow dx="0" dy="8" stdDeviation="14" flood-color="#000000" flood-opacity="0.85"/>
+    </filter>
+  </defs>
+
+  <!-- Background Shield / Squircle -->
+  <rect x="24" y="24" width="464" height="464" rx="104" fill="url(#bgGradFork)" stroke="url(#borderGradFork)" stroke-width="12" filter="url(#shadowFork)"/>
+  <rect x="40" y="40" width="432" height="432" rx="90" fill="none" stroke="#a855f7" stroke-width="2" stroke-opacity="0.4"/>
+
+  <!-- Corner Accents -->
+  <polygon points="60,60 74,60 60,74" fill="#06b6d4" opacity="0.6"/>
+  <polygon points="452,60 438,60 452,74" fill="#06b6d4" opacity="0.6"/>
+  <polygon points="60,452 74,452 60,438" fill="#f0abfc" opacity="0.6"/>
+  <polygon points="452,452 438,452 452,438" fill="#f0abfc" opacity="0.6"/>
+
+  <!-- Crest Emblem -->
+  <g filter="url(#glowFork)">
+    <path d="M172 88 L242 88 L242 288 L364 288 L352 356 L156 356 L156 104 Z"
+          fill="url(#crestGradFork)" stroke="#2e1065" stroke-width="3"/>
+    <path d="M 180 100 L 230 100 L 230 224 L 180 178 Z"
+          fill="url(#highlightFork)"/>
+    <path d="M 242 300 L 348 300 L 340 344 L 172 344 L 172 326 L 242 326 Z"
+          fill="#38bdf8" opacity="0.45"/>
+    <polygon points="256,58 264,76 284,76 268,88 274,106 256,96 238,106 244,88 228,76 248,76" fill="#f0abfc"/>
+  </g>
+
+  <!-- Fork Badge -->
+  <g filter="url(#shadowFork)">
+    <rect x="136" y="396" width="240" height="56" rx="28" fill="url(#badgeGradFork)" stroke="url(#borderGradFork)" stroke-width="4"/>
+    <rect x="142" y="402" width="228" height="44" rx="22" fill="none" stroke="#38bdf8" stroke-width="1.5" stroke-dasharray="4 2"/>
+    <!-- Git fork icon nodes -->
+    <circle cx="170" cy="424" r="6" fill="#38bdf8"/>
+    <circle cx="192" cy="416" r="5" fill="#f0abfc"/>
+    <circle cx="192" cy="432" r="5" fill="#38bdf8"/>
+    <path d="M170 424 L183 424 Q187 424 189 419 L192 416 M183 424 Q187 424 189 429 L192 432" stroke="#ffffff" stroke-width="2" fill="none"/>
+    <text x="266" y="434" font-family="DejaVu Sans, Arial, sans-serif" font-weight="900" font-size="22" fill="#ffffff" text-anchor="middle" letter-spacing="4">FORK</text>
+  </g>
+</svg>

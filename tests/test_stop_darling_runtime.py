@@ -182,6 +182,28 @@ class StopRuntimeTests(unittest.TestCase):
         self.assertEqual(self.signals, [])
         self.assert_finished()
 
+    def test_orphaned_shared_riot_helper_terminated(self):
+        folder = self.proc / '102'
+        folder.mkdir()
+        self.status(102, 'S')
+        (folder / 'stat').write_text('102 (helper) S 1 ' + ' '.join(['0'] * 17) + ' 12345')
+        (folder / 'comm').write_text('helper')
+        (folder / 'maps').write_text(str(self.prefix / 'Users/Shared/Riot Games/Riot Client.app/helper'))
+        task = folder / 'task' / '102'
+        task.mkdir(parents=True)
+        (task / 'children').write_text('')
+
+        self.on_signal = lambda pid, sig: self.status(pid, 'Z')
+        self.run_script()
+        self.assertEqual(self.signals, [(102, signal.SIGTERM)])
+        self.assert_finished()
+
+    def test_unlisted_live_server_discovered(self):
+        self.process(100, state='S')
+        with self.assertRaisesRegex(SystemExit, 'runtime remains untouched'):
+            self.run_script()
+        self.assertEqual(len(self.calls), 1)
+
 
 if __name__ == '__main__':
     unittest.main()

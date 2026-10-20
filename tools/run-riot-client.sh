@@ -44,6 +44,8 @@ done
 # VSync defaults to 0 (uncapped) unless explicitly requested
 eval 'vsync_val=${RCLOL_GPU_DIRECT_VSYNC-0}'
 case "$vsync_val" in 0|'') unset RCLOL_GPU_DIRECT_VSYNC;; *) export RCLOL_GPU_DIRECT_VSYNC="$vsync_val";; esac
+export DARLING_METAL_GPU_NAME="${DARLING_METAL_GPU_NAME:-AMD Radeon Pro 5500M}"
+export DARLING_METAL_VRAM_MB="${DARLING_METAL_VRAM_MB:-4096}"
 prefix=$prefix_dir
 # RIOT_GUEST_HOME is host-side; DYLD paths must be relative to the guest root.
 case "$guest_home" in

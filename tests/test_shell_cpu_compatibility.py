@@ -1,6 +1,9 @@
 """Exercise the real patched descriptor helper and frequency conversion on the host."""
 import unittest
-import test_runtime_compatibility as sources
+try:
+    from . import test_runtime_compatibility as sources
+except ImportError:
+    import test_runtime_compatibility as sources
 
 
 class ShellCPUChecks(unittest.TestCase):

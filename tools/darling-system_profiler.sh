@@ -5,8 +5,35 @@
 # match what other APIs report (including a configure-darling-platform.py override).
 # Installed as /usr/sbin/system_profiler by tools/install-darling-system-profiler.py.
 host=/Volumes/SystemRoot
+[ -n "${DARLING_SYSTEM_ROOT:-}" ] && host="$DARLING_SYSTEM_ROOT"
 xml=0
 types=
+
+load_smbios_conf() {
+ local file="$1"
+ [ -r "$file" ] || return 1
+ while IFS='=' read -r key val || [ -n "$key" ]; do
+  case "$key" in
+   \#*|'') continue;;
+   SMBIOS_*)
+    val="${val#\"}"
+    val="${val%\"}"
+    val="${val#\'}"
+    val="${val%\'}"
+    eval "$key=\"\$val\""
+    ;;
+  esac
+ done < "$file"
+}
+
+if [ -n "${DARLING_SMBIOS_CONF:-}" ]; then
+ load_smbios_conf "$DARLING_SMBIOS_CONF"
+elif [ -r "/private/etc/darling-smbios.conf" ]; then
+ load_smbios_conf "/private/etc/darling-smbios.conf"
+elif [ -r "/etc/darling-smbios.conf" ]; then
+ load_smbios_conf "/etc/darling-smbios.conf"
+fi
+
 while [ $# -gt 0 ]; do
  case "$1" in
   -xml) xml=1;;
@@ -36,16 +63,23 @@ pci_name() { # vendor device (hex without 0x) -> "Vendor Model"
 }
 
 displays() { # one line per GPU: vendor|device|vram MB or empty|name
- for card in "$host"/sys/class/drm/card[0-9] "$host"/sys/class/drm/card[0-9][0-9]; do
-  [ -r "$card/device/vendor" ] || continue
-  vendor=$(sed 's/^0x//' "$card/device/vendor"); device=$(sed 's/^0x//' "$card/device/device")
-  vram=
-  if [ -r "$card/device/mem_info_vram_total" ]; then
-   vram=$(awk '{ printf "%d", $1 / 1048576 }' "$card/device/mem_info_vram_total")
-  fi
-  name=$(pci_name "$vendor" "$device"); [ -n "$name" ] || name="Display"
-  echo "$vendor|$device|$vram|$name"
- done
+ if [ "${DARLING_METAL_USE_HOST_GPU:-0}" = "1" ]; then
+  for card in "$host"/sys/class/drm/card[0-9] "$host"/sys/class/drm/card[0-9][0-9]; do
+   [ -r "$card/device/vendor" ] || continue
+   vendor=$(sed 's/^0x//' "$card/device/vendor"); device=$(sed 's/^0x//' "$card/device/device")
+   vram=
+   if [ -r "$card/device/mem_info_vram_total" ]; then
+    vram=$(awk '{ printf "%d", $1 / 1048576 }' "$card/device/mem_info_vram_total")
+   fi
+   name=$(pci_name "$vendor" "$device"); [ -n "$name" ] || name="Display"
+   echo "$vendor|$device|$vram|$name"
+  done
+  return
+ fi
+
+ # Genuine Apple GPU profile matching MacBookPro16,1
+ echo "1002|7340|4096|AMD Radeon Pro 5500M"
+ echo "8086|3e9b|1536|Intel UHD Graphics 630"
 }
 
 load_platform() { # IOPlatformExpertDevice string properties, "key|value" per line
@@ -68,23 +102,46 @@ machine_name() { # model identifier -> marketing family, as in About This Mac
 hardware() { # label|xml key|xml type|value for each known field
  load_platform
  model=$(platform model)
+ [ -n "$model" ] || model="${SMBIOS_MODEL:-}"
  cores=$(sysctl -n hw.physicalcpu 2>/dev/null)
+ [ -n "$cores" ] || cores="${SMBIOS_CORES:-}"
  memory=$(sysctl -n hw.memsize 2>/dev/null | awk '$1 > 0 { printf "%d GB", $1 / 1073741824 + 0.5 }')
+ [ -n "$memory" ] || memory="${SMBIOS_MEMORY:-}"
  speed=$(sysctl -n hw.cpufrequency 2>/dev/null | awk '$1 > 0 { printf "%.1f GHz", $1 / 1e9 }')
+ [ -n "$speed" ] || speed="${SMBIOS_CPU_SPEED:-}"
  l2=$(sysctl -n hw.l2cachesize 2>/dev/null | awk '$1 > 0 { printf "%d KB", $1 / 1024 }')
+ [ -n "$l2" ] || [ -z "$model" ] || l2="256 KB"
  l3=$(sysctl -n hw.l3cachesize 2>/dev/null | awk '$1 > 0 { printf "%d MB", $1 / 1048576 }')
+ [ -n "$l3" ] || [ -z "$model" ] || l3="16 MB"
+ cpu_name=$(sysctl -n machdep.cpu.brand_string 2>/dev/null)
+ [ -n "$cpu_name" ] || cpu_name="${SMBIOS_CPU_BRAND:-${SMBIOS_CPU_TYPE:-}}"
+ serial=$(platform IOPlatformSerialNumber)
+ [ -n "$serial" ] || serial="${SMBIOS_SERIAL_NUMBER:-}"
+ uuid=$(platform IOPlatformUUID)
+ [ -n "$uuid" ] || uuid="${SMBIOS_PLATFORM_UUID:-}"
+ udid=$(platform provisioning_UDID)
+ [ -n "$udid" ] || udid="${SMBIOS_PROVISIONING_UDID:-}"
+ packages=$(sysctl -n hw.packages 2>/dev/null)
+ [ -n "$packages" ] || packages="${SMBIOS_PACKAGES:-}"
+
  echo "Model Name|machine_name|string|${model:+$(machine_name "$model")}"
  echo "Model Identifier|machine_model|string|$model"
- echo "Processor Name|cpu_type|string|$(sysctl -n machdep.cpu.brand_string 2>/dev/null)"
+ echo "Processor Name|cpu_type|string|$cpu_name"
  echo "Processor Speed|current_processor_speed|string|$speed"
- echo "Number of Processors|packages|integer|$(sysctl -n hw.packages 2>/dev/null)"
+ echo "Number of Processors|packages|integer|$packages"
  echo "Total Number of Cores|number_processors|integer|$cores"
  echo "L2 Cache (per Core)|l2_cache_core|string|$l2"
  echo "L3 Cache|l3_cache|string|$l3"
  echo "Memory|physical_memory|string|$memory"
- echo "Serial Number (system)|serial_number|string|$(platform IOPlatformSerialNumber)"
- echo "Hardware UUID|platform_UUID|string|$(platform IOPlatformUUID)"
- echo "Provisioning UDID|provisioning_UDID|string|$(platform provisioning_UDID)"
+ if [ -n "${SMBIOS_BOOT_ROM_VERSION:-}" ]; then
+  echo "Boot ROM Version|boot_rom_version|string|$SMBIOS_BOOT_ROM_VERSION"
+ fi
+ if [ -n "${SMBIOS_SMC_VERSION:-}" ]; then
+  echo "SMC Version (system)|SMC_version_system|string|$SMBIOS_SMC_VERSION"
+ fi
+ echo "Serial Number (system)|serial_number|string|$serial"
+ echo "Hardware UUID|platform_UUID|string|$uuid"
+ echo "Provisioning UDID|provisioning_UDID|string|$udid"
 }
 
 software() {
@@ -96,6 +153,10 @@ software() {
  echo "Boot Mode|boot_mode|string|normal_boot"
  echo "Computer Name|local_host_name|string|$(hostname -s 2>/dev/null)"
  echo "User Name|user_name|string|${USER:-$(id -un 2>/dev/null)}"
+ if [ -n "${SMBIOS_MODEL:-}" ]; then
+  echo "Secure Virtual Memory|secure_vm|string|secure_vm_enabled"
+  echo "System Integrity Protection|system_integrity|string|integrity_enabled"
+ fi
 }
 
 overview_xml() { # $1 = _name; fields on stdin; empty values are omitted
@@ -117,6 +178,8 @@ overview_text() { # $1 = section title, $2 = overview title; fields on stdin
  printf '%s:\n\n    %s:\n\n' "$1" "$2"
  while IFS='|' read -r label key kind value; do
   [ "$key" != boot_mode ] || value=Normal
+  [ "$key" != system_integrity ] || value=Enabled
+  [ "$key" != secure_vm ] || value=Enabled
   [ -z "$value" ] || printf '      %s: %s\n' "$label" "$value"
  done
  echo

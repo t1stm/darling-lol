@@ -139,16 +139,19 @@ def main():
             if png_target.exists():
                 shutil.copyfile(png_target, icons_base / "league-of-legends.png")
 
-    # 3. Create .desktop file
-    run_script = PROJECT_ROOT / "scripts/desktop-run.sh"
+    run_script = PROJECT_ROOT / "scripts/launch-fork.sh"
+    if not run_script.exists():
+        run_script = PROJECT_ROOT / "scripts/desktop-run.sh"
+    if not run_script.exists():
+        run_script = PROJECT_ROOT / "scripts/run.sh"
     exec_path = str(run_script).replace("%", "%%")
     exec_cmd = f'"{exec_path}"' if " " in exec_path else exec_path
     desktop_content = f"""[Desktop Entry]
 Version=1.0
 Type=Application
-Name=League of Legends
-GenericName=MOBA Game
-Comment=Play League of Legends on Linux with darling-lol
+Name=League
+GenericName=League of Legends
+Comment=Play League of Legends on Linux with darling-lol (with Spoofing & Stealth)
 Exec={exec_cmd}
 Path={PROJECT_ROOT}
 Icon=league-of-legends
@@ -157,9 +160,14 @@ Categories=Game;ActionGame;StrategyGame;
 Keywords=riot;league;lol;darling;games;
 StartupWMClass=Riot Client
 StartupNotify=false
+Actions=Gamescope;
+
+[Desktop Action Gamescope]
+Name=Launch in Gamescope
+Exec={exec_cmd} --gamescope
 """
 
-    desktop_file = apps_base / "league-of-legends.desktop"
+    desktop_file = apps_base / "league.desktop"
     desktop_file.write_text(desktop_content)
     os.chmod(desktop_file, 0o755)
     print(f"Created application launcher: {desktop_file}")
@@ -178,7 +186,7 @@ StartupNotify=false
             target_desktop_dirs.append(cand)
 
     for ddir in target_desktop_dirs:
-        desktop_shortcut = ddir / "league-of-legends.desktop"
+        desktop_shortcut = ddir / "league.desktop"
         desktop_shortcut.write_text(desktop_content)
         os.chmod(desktop_shortcut, 0o755)
         gio = shutil.which("gio")
@@ -195,7 +203,7 @@ StartupNotify=false
     if update_icons:
         subprocess.run([update_icons, "-f", "-t", str(icons_base / "hicolor")], check=False)
 
-    print("GNOME application launcher and icon installed successfully.")
+    print("GNOME application launcher 'League' and icon installed successfully.")
 
 
 if __name__ == "__main__":

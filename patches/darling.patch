@@ -11499,10 +11499,36 @@ index fee1bde87..bee86604b 100644
  #endif
 -
 diff --git a/src/startup/mldr/elfcalls/threads.c b/src/startup/mldr/elfcalls/threads.c
-index e789986ea..0d56b4eb7 100644
+index e789986ea..8258909a6 100644
 --- a/src/startup/mldr/elfcalls/threads.c
 +++ b/src/startup/mldr/elfcalls/threads.c
-@@ -387,8 +387,9 @@ int __darling_thread_rpc_socket(void) {
+@@ -37,6 +37,13 @@ along with Darling.  If not, see <http://www.gnu.org/licenses/>.
+ 
+ #include <darlingserver/rpc.h>
+ 
++#ifndef __NR_arch_prctl
++#define __NR_arch_prctl 158
++#endif
++#ifndef ARCH_SET_CPUID
++#define ARCH_SET_CPUID 0x1012
++#endif
++
+ extern int __mldr_create_rpc_socket(void);
+ extern void __mldr_close_rpc_socket(int socket);
+ 
+@@ -209,6 +216,11 @@ static void* darling_thread_entry(void* p)
+ 
+ 	memcpy(&args, in_args, sizeof(args));
+ 
++#if defined(__x86_64__)
++	/* darling-lol: ensure CPUID fault trapping is active on newly spawned threads */
++	syscall(__NR_arch_prctl, ARCH_SET_CPUID, 0);
++#endif
++
+ 	dthread_t dthread = args.pth;
+ 	uintptr_t* flags = args.is_workqueue ? &args.arg2 : &args.arg3;
+ 
+@@ -387,8 +399,9 @@ int __darling_thread_rpc_socket(void) {
  			// this is the main thread
  			t_server_socket = __dserver_main_thread_socket_fd;
  		} else {
