@@ -25,7 +25,7 @@ LINUX_ENV_EXACT = {
     'XCURSOR_THEME', 'XCURSOR_SIZE', 'CHROME_DESKTOP',
     'FC_FONTATIONS', 'NO_AT_BRIDGE', 'MOTD_SHOWN', 'LD_PRELOAD',
     'LD_LIBRARY_PATH', 'ELECTRON_RUN_AS_NODE', 'DYLD_INSERT_LIBRARIES',
-    'XAUTHORITY', 'mesa_glthread', 'SNAP', 'APPIMAGE', 'APPDIR', 'OWD',
+    'mesa_glthread', 'SNAP', 'APPIMAGE', 'APPDIR', 'OWD',
     'USERNAME', 'MAIL', 'LS_COLORS', 'COLORFGBG',
     'VSSCRIPT_PATH', 'CHROME_DEVTOOLS_MCP_JS',
     'LC_ADDRESS', 'LC_IDENTIFICATION', 'LC_MEASUREMENT', 'LC_NAME', 'LC_PAPER', 'LC_TELEPHONE',
@@ -36,6 +36,8 @@ def is_linux_host_var(key: str) -> bool:
     """Return True if an environment variable is Linux/host specific and should be stripped."""
     if key in LINUX_ENV_EXACT:
         return True
+    if key == 'DBUS_SESSION_BUS_ADDRESS':  # GameMode reaches its daemon over the session bus.
+        return False
     return any(key.startswith(p) for p in LINUX_ENV_PREFIXES)
 
 def close_inherited_fds():

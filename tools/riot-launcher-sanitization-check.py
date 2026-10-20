@@ -41,7 +41,7 @@ def test_ensure_darling_runtime_unit():
     assert mod.is_linux_host_var("ROCM_PATH")
     assert mod.is_linux_host_var("__GL_MaxFramesAllowed")
     assert mod.is_linux_host_var("__GL_THREADED_OPTIMIZATIONS")
-    assert mod.is_linux_host_var("DBUS_SESSION_BUS_ADDRESS")
+    assert not mod.is_linux_host_var("DBUS_SESSION_BUS_ADDRESS")
     assert mod.is_linux_host_var("DBUS_SYSTEM_BUS_ADDRESS")
     assert mod.is_linux_host_var("DESKTOP_SESSION")
     assert mod.is_linux_host_var("GDMSESSION")
@@ -66,7 +66,8 @@ def test_ensure_darling_runtime_unit():
     assert mod.is_linux_host_var("LD_LIBRARY_PATH")
     assert mod.is_linux_host_var("ELECTRON_RUN_AS_NODE")
     assert mod.is_linux_host_var("DYLD_INSERT_LIBRARIES")
-    assert mod.is_linux_host_var("XAUTHORITY")
+    # The X server rejects the guest without the session cookie (KDE/GNOME keep it in /run/user).
+    assert not mod.is_linux_host_var("XAUTHORITY")
     assert mod.is_linux_host_var("VK_ICD_FILENAMES")
     assert mod.is_linux_host_var("VK_LAYER_PATH")
     assert mod.is_linux_host_var("VULKAN_SDK")
@@ -150,8 +151,9 @@ def test_ensure_darling_runtime_unit():
     removed = mod.sanitize_host_environment(dirty_env)
     assert set(removed) == {
         "WAYLAND_DISPLAY", "XDG_CURRENT_DESKTOP", "MESA_NO_ERROR",
-        "DRI_PRIME", "ROCM_PATH", "DBUS_SESSION_BUS_ADDRESS",
+        "DRI_PRIME", "ROCM_PATH",
     }
+    assert "DBUS_SESSION_BUS_ADDRESS" in dirty_env
     assert "HOME" in dirty_env
     assert "USER" in dirty_env
     assert "DISPLAY" in dirty_env
@@ -360,7 +362,7 @@ sys.exit(0)
             "XDG_DATA_DIRS", "XDG_CONFIG_DIRS", "XDG_SESSION_ID", "MESA_NO_ERROR", "MESA_DEBUG",
             "MESA_LOADER_DRIVER_OVERRIDE", "mesa_glthread", "DRI_PRIME", "LIBGL_ALWAYS_SOFTWARE",
             "LIBGL_DRI3_DISABLE", "ROCM_PATH", "__GL_MaxFramesAllowed", "__GL_THREADED_OPTIMIZATIONS",
-            "__GL_YIELD", "DBUS_SESSION_BUS_ADDRESS", "DBUS_SYSTEM_BUS_ADDRESS", "DESKTOP_SESSION",
+            "__GL_YIELD", "DBUS_SYSTEM_BUS_ADDRESS", "DESKTOP_SESSION",
             "GDMSESSION", "GDM_LANG", "SESSION_MANAGER", "SSH_AUTH_SOCK", "SSH_AGENT_PID",
             "SYSTEMD_EXEC_PID", "INVOCATION_ID", "JOURNAL_STREAM", "MANAGERPID", "MANAGERPIDFDID",
             "GNOME_DESKTOP_SESSION_ID", "KDE_FULL_SESSION", "PULSE_SERVER", "PIPEWIRE_LATENCY",
@@ -369,7 +371,7 @@ sys.exit(0)
             "COLORTERM", "VTE_VERSION", "WINDOWID", "CHROME_DESKTOP", "FC_FONTATIONS",
             "MEMORY_PRESSURE_WATCH", "NO_AT_BRIDGE", "MOTD_SHOWN", "VIRTUAL_ENV", "ZSH_TMUX_AUTOSTARTED",
             "GAMEMODERUN", "LD_PRELOAD", "LD_LIBRARY_PATH", "ELECTRON_RUN_AS_NODE",
-            "DYLD_INSERT_LIBRARIES", "XAUTHORITY",
+            "DYLD_INSERT_LIBRARIES",
             "VK_ICD_FILENAMES", "VK_LAYER_PATH", "LIBVA_DRIVER_NAME", "VDPAU_DRIVER", "GBM_BACKEND",
             "FLATPAK_ID", "SNAP", "SNAP_NAME", "APPIMAGE", "APPDIR", "OWD", "DEBUGINFOD_URLS",
             "PAM_KWALLET5_LOGIN", "SELINUX_ROLE_REQUESTED", "NOTIFY_SOCKET", "LISTEN_FDS",
@@ -401,6 +403,8 @@ sys.exit(0)
         assert guest_env.get("RCLOL_FORWARD_MOUSE_MOVED") == "1"
         assert guest_env.get("RCLOL_MOUSE_CONFINEMENT") == "1"
         assert guest_env.get("RCLOL_REFRESH_HZ") == "144"
+        assert guest_env.get("XAUTHORITY") == "/run/user/1000/.mutter-Xwaylandauth.AMCRX3"
+        assert guest_env.get("DBUS_SESSION_BUS_ADDRESS") == "unix:path=/run/user/1000/bus"
 
         # 4. Verify leaked file descriptors were closed
         assert fds_dump_file.is_file()
