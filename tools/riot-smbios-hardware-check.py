@@ -34,6 +34,7 @@ def test_gensmbios_offline(mod):
         assert len(cfg["SMBIOS_MLB"]) == 17
         assert len(cfg["SMBIOS_SYSTEM_ID"]) == 32
         assert len(cfg["SMBIOS_ROM"]) == 12
+        assert cfg["SMBIOS_PROVISIONING_UDID"] == cfg["SMBIOS_PLATFORM_UUID"]
 
     # 2. Test --ensure replaces banned hardcoded identity and preserves valid custom identity
     with tempfile.TemporaryDirectory(prefix="smbios-test-") as tmp:
@@ -58,6 +59,13 @@ def test_gensmbios_offline(mod):
         assert not created2, "ensure_smbios must preserve valid identity"
         assert cfg2["SMBIOS_SERIAL_NUMBER"] == cfg1["SMBIOS_SERIAL_NUMBER"]
         assert cfg2["SMBIOS_PLATFORM_UUID"] == cfg1["SMBIOS_PLATFORM_UUID"]
+
+        # An older non-UUID provisioning UDID is repaired in place without a new identity
+        stale = dict(cfg2, SMBIOS_PROVISIONING_UDID="00008006-00" + cfg2["SMBIOS_SYSTEM_ID"][:14])
+        (prefix / "private/etc/darling-smbios.conf").write_text(mod.format_config(stale))
+        repaired, created = mod.ensure_smbios(prefix)
+        assert not created and repaired["SMBIOS_SERIAL_NUMBER"] == cfg2["SMBIOS_SERIAL_NUMBER"]
+        assert mod.read_config(prefix / "private/etc/darling-smbios.conf")["SMBIOS_PROVISIONING_UDID"] == cfg2["SMBIOS_PLATFORM_UUID"]
 
         # Calling with regenerate=True must produce a new identity
         cfg3, created3 = mod.ensure_smbios(prefix, regenerate=True)

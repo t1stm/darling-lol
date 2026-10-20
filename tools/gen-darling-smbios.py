@@ -217,7 +217,6 @@ def generate_identity(model_name: str = "MacBookPro16,1") -> dict[str, str]:
         raise RuntimeError("Failed to generate unbanned UUID")
 
     system_id = u.bytes_le.hex().upper()
-    provisioning_udid = f"00008006-00{system_id[:14]}"
     rom = secrets.choice(APPLE_ROM_OUIS) + secrets.token_bytes(3).hex().upper()
 
     return {
@@ -232,7 +231,8 @@ def generate_identity(model_name: str = "MacBookPro16,1") -> dict[str, str]:
         "SMBIOS_MLB": mlb,
         "SMBIOS_PLATFORM_UUID": platform_uuid,
         "SMBIOS_SYSTEM_ID": system_id,
-        "SMBIOS_PROVISIONING_UDID": provisioning_udid,
+        # docs/PLATFORM_IDENTITY.md: the UDID is the platform UUID; iokitd rejects any other value.
+        "SMBIOS_PROVISIONING_UDID": platform_uuid,
         "SMBIOS_ROM": rom,
         "SMBIOS_BOOT_ROM_VERSION": spec["boot_rom_version"],
         "SMBIOS_SMC_VERSION": spec["smc_version"],
@@ -438,7 +438,7 @@ def import_gensmbios_file(source_path: Path, default_model: str = "MacBookPro16,
         u = uuid.UUID(str(smuuid).strip())
         cfg["SMBIOS_PLATFORM_UUID"] = str(u).upper()
         cfg["SMBIOS_SYSTEM_ID"] = u.bytes_le.hex().upper()
-        cfg["SMBIOS_PROVISIONING_UDID"] = f"00008006-00{cfg['SMBIOS_SYSTEM_ID'][:14]}"
+        cfg["SMBIOS_PROVISIONING_UDID"] = cfg["SMBIOS_PLATFORM_UUID"]
     if isinstance(rom, (bytes, bytearray)):
         cfg["SMBIOS_ROM"] = bytes(rom[:6]).hex().upper()
     elif isinstance(rom, str) and rom.strip():
@@ -455,12 +455,15 @@ def ensure_smbios(prefix: Path, model_name: str = "MacBookPro16,1", regenerate: 
     if not regenerate:
         existing = read_config(conf_path)
         if is_valid_config(existing):
+            # Older generated files carry a non-UUID provisioning UDID; repair it and keep the identity.
+            repair = existing["SMBIOS_PROVISIONING_UDID"] != existing["SMBIOS_PLATFORM_UUID"]
+            existing["SMBIOS_PROVISIONING_UDID"] = existing["SMBIOS_PLATFORM_UUID"]
             sync_system_version_plists(prefix)
             etc_dir = prefix / "etc"
             need_sync = (
                 etc_dir.is_dir() and not etc_dir.is_symlink() and not (etc_dir / "darling-smbios.conf").is_file()
             )
-            if need_sync:
+            if need_sync or repair:
                 write_config_to_prefix(prefix, existing)
             return existing, False
     cfg = generate_identity(model_name)
