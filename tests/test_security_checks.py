@@ -1,4 +1,4 @@
-"""Real cryptographic fixtures and compiled syscall contracts; no live policy changes."""
+"""Real cryptographic fixtures for the code-signature verifier; no live policy changes."""
 import hashlib
 import importlib.util
 from pathlib import Path
@@ -7,9 +7,6 @@ import struct
 import subprocess
 import tempfile
 import unittest
-
-import test_runtime_compatibility as compatibility
-from test_runtime_compatibility import function
 
 ROOT = Path(__file__).resolve().parents[1]
 spec = importlib.util.spec_from_file_location('code_verifier', ROOT/'tools/verify-darling-code-signature.py')
@@ -156,80 +153,3 @@ class CMSSignatureChecks(unittest.TestCase):
         start = image.index(cms)
         changed = bytearray(image); changed[start+len(cms)-1] ^= 1
         with self.assertRaises(ValueError): verifier.verify(bytes(changed), self.root/'ca.pem')
-
-
-class SecuritySyscallChecks(compatibility.CompatibilityChecks):
-    # Avoid repeating the base class's compatibility tests in discovery.
-    test_unsupported_mach_calls_return_errors_and_initialize_outputs = None
-    test_ptrace_unknown_request_and_existing_requests = None
-
-    def test_security_syscalls_do_not_invent_enforcement_or_identity(self):
-        base = 'darling/src/libsystem_kernel/emulation/src/xnu_syscall/bsd/impl/misc/'
-        helper = self.patched('xnu', base+'security_user_access.h')
-        cs = self.patched('xnu', base+'csops.c')
-        csr = self.patched('xnu', base+'csrctl.c')
-        mac = self.patched('xnu', base+'mac_syscall.c')
-        ops = ['STATUS','MARKINVALID','MARKHARD','MARKKILL','PIDPATH','CDHASH','PIDOFFSET',
-               'ENTITLEMENTS_BLOB','MARKRESTRICT','SET_STATUS','BLOB','IDENTITY','CLEARINSTALLER',
-               'CLEARPLATFORM','TEAMID','CLEAR_LV']
-        flags_def = '\n'.join([
-            '#define CS_VALID 0x00000001',
-            '#define CS_HARD 0x00000100',
-            '#define CS_KILL 0x00000200',
-            '#define CS_RESTRICT 0x00000800',
-            '#define CS_RUNTIME 0x00010000',
-        ])
-        constants = '\n'.join(f'#define CS_OPS_{name} {i}' for i,name in enumerate(ops)) + '\n' + flags_def
-        self.run_c('''
-#include <assert.h>
-#include <errno.h>
-#include <stdint.h>
-#include <stddef.h>
-#include <string.h>
-#include <sys/syscall.h>
-extern long syscall(long, ...);
-#define LINUX_SYSCALL(...) syscall(__VA_ARGS__)
-#define LINUX_SYSCALL0(nr) syscall(nr)
-typedef struct { unsigned val[8]; } audit_token_t;
-#define CSR_SYSCALL_CHECK 0
-#define CSR_SYSCALL_GET_ACTIVE_CONFIG 1
-#define CSR_VALID_FLAGS 0xffu
-#define __simple_printf(...) ((void)0)
-static int sys_getpid(void) { return 123; }
-static int sys_kill(int pid, int sig, int posix) { return pid == 999999 ? -ESRCH : 0; }
-''' + constants + '\n' + '\n'.join([function(helper,'darling_security_copy'),function(helper,'darling_security_read'),function(helper,'darling_security_write'),function(cs,'sys_csops'),function(cs,'sys_csops_audittoken'),
-                                     function(csr,'sys_csrctl'),function(mac,'sys___mac_syscall')]) + '''
-int main(void) {
-    unsigned char flags[6]; memset(flags,0xa5,sizeof(flags));
-    assert(sys_csops(0,CS_OPS_STATUS,flags+1,4)==0);
-    uint32_t expected = CS_VALID | CS_HARD | CS_KILL | CS_RESTRICT | CS_RUNTIME;
-    assert(flags[0]==0xa5 && flags[5]==0xa5 && *(uint32_t*)(flags+1)==expected);
-    assert(sys_csops(0,CS_OPS_STATUS,NULL,4)==-EFAULT);
-    assert(sys_csops(0,CS_OPS_STATUS,(void*)1,4)==-EFAULT);
-    flags[1]=0xa5; assert(sys_csops(0,CS_OPS_STATUS,flags+1,3)==-ERANGE && flags[1]==0xa5);
-    assert(sys_csops(123,CS_OPS_STATUS,flags+1,4)==0);
-    assert(sys_csops(999999,CS_OPS_STATUS,flags,4)==-ESRCH);
-    assert(sys_csops(124,CS_OPS_STATUS,flags,4)==-ENOTSUP);
-    assert(sys_csops(-1,CS_OPS_STATUS,flags,4)==-EINVAL);
-    for(int op=1;op<=15;++op) assert(sys_csops(0,op,flags,4)<0);
-    audit_token_t token = {{0}};
-    assert(sys_csops_audittoken(0,0,flags,4,&token)==-ENOTSUP);
-    assert(sys_csops_audittoken(0,0,flags,4,NULL)==-EFAULT);
-    uint32_t value=0;
-    assert(sys_csrctl(1,&value,4)==0 && value==CSR_VALID_FLAGS);
-    assert(sys_csrctl(1,&value,8)==-EINVAL);
-    assert(sys_csrctl(1,NULL,4)==-EFAULT);
-    assert(sys_csrctl(0,(void*)1,4)==-EFAULT);
-    value=1; assert(sys_csrctl(0,&value,4)==0);
-    value=0x100; assert(sys_csrctl(0,&value,4)==-EPERM);
-    assert(sys_csrctl(99,&value,4)==-ENOSYS);
-    struct { unsigned char hash[20]; uint64_t result; } query={{0},123};
-    assert(sys___mac_syscall("AMFI",95,&query)==-ENOTSUP && query.result==0);
-    assert(sys___mac_syscall("AMFI",95,NULL)==-EFAULT);
-    assert(sys___mac_syscall("AMFI",95,(void*)1)==-EFAULT);
-    assert(sys___mac_syscall((void*)1,1,NULL)==-EFAULT);
-    assert(sys___mac_syscall("AMFI",1,NULL)==-ENOTSUP);
-    assert(sys___mac_syscall("unknown",1,NULL)==-ENOSYS);
-    assert(sys___mac_syscall("Seatbelt",1,NULL)==0); // legacy compatibility, not enforcement
-}
-''')

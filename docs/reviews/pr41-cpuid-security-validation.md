@@ -102,6 +102,10 @@ See Apple's [code signature description](https://developer.apple.com/library/arc
 
 ## Runtime security responses
 
+> Superseded in this fork: the `csops`, `csrctl` and AMFI changes below were
+> replaced by upstream's M0–M8 implementation (#169), and the guest probe and
+> builder that checked them were removed.
+
 The isolated kernel candidate now:
 
 - Returns self CS_OPS_STATUS with zero validation/enforcement flags instead of

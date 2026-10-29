@@ -8,7 +8,7 @@
       "revision": "60ba801decee7a00782f74f6be4c8ffb013f79ff",
       "repository": "https://github.com/darlinghq/darling.git",
       "patch": "patches/darling.patch",
-      "modified_files": 89,
+      "modified_files": 104,
       "new_files": [
         "src/CoreAudio/CoreAudio/AudioConverterShim.c",
         "src/CoreAudio/AudioTrace.h",
@@ -25,7 +25,14 @@
         "src/frameworks/OpenGL/CGLAsyncPresent.inc",
         "src/frameworks/OpenGL/include/OpenGL/DarlingNativePresent.h",
         "src/startup/mldr/commpage-cpu-caps.h",
-        "src/shellspawn/shellspawn-fds.h"
+        "src/shellspawn/shellspawn-fds.h",
+        "src/startup/mldr/dc_codesign.c",
+        "src/startup/mldr/dc_codesign.h",
+        "src/frameworks/Accelerate/vecLib/vDSP/src/arith.c",
+        "src/frameworks/Accelerate/vecLib/vDSP/src/fft.c",
+        "src/startup/mldr/include/dc_entitlements.h",
+        "src/startup/mldr/include/dc_mseal.h",
+        "src/startup/mldr/include/dc_image_snapshot.h"
       ]
     },
     {
@@ -57,10 +64,24 @@
       "revision": "c8d38d16a9f613d300157bebbab2b9501bc0c274",
       "repository": "https://github.com/darlinghq/darling-cocotron.git",
       "patch": "patches/cocotron.patch",
-      "modified_files": 108,
+      "modified_files": 141,
       "new_files": [
         "QuartzCore/include/QuartzCore/CATransformLayer.h",
-        "AppKit/NSGeometryTrace.h"
+        "AppKit/NSGeometryTrace.h",
+        "AppKit/NSAccessibilityCustomAction.m",
+        "AppKit/NSColorSampler.m",
+        "AppKit/NSImageSymbolConfiguration.m",
+        "AppKit/NSMenuItemBadge.m",
+        "AppKit/NSNextStepFrame.m",
+        "AppKit/NSPreviewRepresentingActivityItem.m",
+        "AppKit/X11.backend/X11RelativeMouse.h",
+        "AppKit/include/AppKit/NSAccessibilityCustomAction.h",
+        "AppKit/include/AppKit/NSColorSampler.h",
+        "AppKit/include/AppKit/NSImageSymbolConfiguration.h",
+        "AppKit/include/AppKit/NSMenuItemBadge.h",
+        "AppKit/include/AppKit/NSPreviewRepresentingActivityItem.h",
+        "QuartzCore/CAEDRMetadata.m",
+        "QuartzCore/include/QuartzCore/CAEDRMetadata.h"
       ]
     },
     {
@@ -110,7 +131,25 @@
       "patch": "patches/darlingserver.patch",
       "modified_files": 36,
       "new_files": [
-        "duct-tape/src/fileport.c"
+        "duct-tape/src/fileport.c",
+        "include/darlingserver/cs_state.h",
+        "internal-include/darlingserver/cs_verify.hpp",
+        "src/cs_verify.cpp",
+        "src/dc_codesign.c",
+        "src/dc_codesign.h",
+        "internal-include/darlingserver/trustcache.hpp",
+        "src/trustcache.cpp",
+        "include/darlingserver/dc_entitlements.h"
+      ]
+    },
+    {
+      "path": "src/external/dyld",
+      "revision": "63f667cf06d7ed59553adebb0c8d70a117135ac9",
+      "repository": "https://github.com/darlinghq/darling-dyld.git",
+      "patch": "patches/dyld.patch",
+      "modified_files": 3,
+      "new_files": [
+        "src/dc_image_snapshot.h"
       ]
     },
     {
@@ -274,7 +313,7 @@
       "revision": "fa29287aa2f0115271e091f1031f53c9e024005d",
       "repository": "https://github.com/darlinghq/darling-xnu.git",
       "patch": "patches/xnu.patch",
-      "modified_files": 67,
+      "modified_files": 90,
       "new_files": [
         "darling/src/libsystem_kernel/emulation/include/common/cpu_topology.h",
         "darling/src/libsystem_kernel/emulation/include/common/private_mutex.h",
@@ -286,7 +325,10 @@
         "darling/src/libsystem_kernel/emulation/src/xnu_syscall/bsd/impl/misc/mac_syscall.c",
         "libsyscall/wrappers/__sysctlbyname.S",
         "darling/src/libsystem_kernel/emulation/include/common/cpu_frequency.h",
-        "darling/src/libsystem_kernel/emulation/src/xnu_syscall/bsd/impl/misc/security_user_access.h"
+        "darling/src/libsystem_kernel/emulation/include/xnu_syscall/bsd/impl/misc/sip.h",
+        "darling/src/libsystem_kernel/emulation/src/xnu_syscall/bsd/impl/misc/sip.c",
+        "darling/src/libsystem_kernel/emulation/include/common/dc_mseal.h",
+        "darling/src/libsystem_kernel/emulation/include/common/dc_image_snapshot.h"
       ]
     },
     {
